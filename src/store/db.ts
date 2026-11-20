@@ -72,12 +72,16 @@ export function openStore(path: string, create: boolean): DatabaseSync | null {
   const db = new DatabaseSync(path);
   chmodSync(path, 0o600);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;');
-  const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-  for (let v = version; v < MIGRATIONS.length; v++) {
-    db.exec('BEGIN');
+  const version = (): number => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  if (version() < MIGRATIONS.length) {
+    // Read the version again under the write lock: another session may have
+    // migrated between the first read and the lock.
+    db.exec('BEGIN IMMEDIATE');
     try {
-      db.exec(MIGRATIONS[v]!);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
+      for (let v = version(); v < MIGRATIONS.length; v++) {
+        db.exec(MIGRATIONS[v]!);
+        db.exec(`PRAGMA user_version = ${v + 1}`);
+      }
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');

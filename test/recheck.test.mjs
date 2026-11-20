@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { setup, remember, sessionStart, run, commit } from './helpers.mjs';
 
 const HAZARD = 'The ledger consumes one unit per call';
 const NOTE = 'Ledger changes need a migration note';
 /** Thirty distinct lines; the anchor cites lines 10 to 12. */
-const file = (lines = Array.from({ length: 30 }, (_, i) => `const line${i + 1} = ${i + 1};`)) => `${lines.join('\n')}\n`;
 const base = Array.from({ length: 30 }, (_, i) => `const line${i + 1} = ${i + 1};`);
+const file = (lines = base) => `${lines.join('\n')}\n`;
 
 function anchored() {
   const s = setup();
@@ -60,14 +61,20 @@ test('cited lines that moved stay active and the anchor follows them', () => {
   const it = item(s);
   assert.equal(it.status, 'active');
   assert.deepEqual([it.anchor.start, it.anchor.end], [15, 17]);
+  const db = new DatabaseSync(join(s.data, 'tenants', 'acme.sqlite'), { readOnly: true });
+  const moved = db.prepare("SELECT metadata_json FROM audit_events WHERE action = 'anchor_moved' AND subject_id = ?").all(s.id);
+  db.close();
+  assert.deepEqual(moved.map((r) => JSON.parse(r.metadata_json)), [{ from: ['src/ledger.ts:10-12'], to: ['src/ledger.ts:15-17'] }]);
 });
 
 test('the nearest copy of the cited lines wins', () => {
   const s = anchored();
   const block = base.slice(9, 12);
-  commit(s.acmeApi, { 'src/ledger.ts': file(['// a', '// b', ...base, ...block]) });
+  // Copies 9 lines before and 21 after the original's new place, so neither a
+  // first-in-file nor a last-in-file scan passes.
+  commit(s.acmeApi, { 'src/ledger.ts': file([...block, '// a', '// b', ...base, ...block]) });
   sessionStart(s.acmeApi, s.data, s.configA);
-  assert.deepEqual([item(s).anchor.start, item(s).anchor.end], [12, 14]);
+  assert.deepEqual([item(s).anchor.start, item(s).anchor.end], [15, 17]);
 });
 
 test('cited lines that moved more than 50 lines are stale', () => {
@@ -75,6 +82,15 @@ test('cited lines that moved more than 50 lines are stale', () => {
   commit(s.acmeApi, { 'src/ledger.ts': file([...Array.from({ length: 60 }, (_, i) => `// pad ${i}`), ...base]) });
   sessionStart(s.acmeApi, s.data, s.configA);
   assert.equal(item(s).status, 'stale');
+});
+
+test('memory recheck searches the whole file, so lines moved far can be restored by asking', () => {
+  const s = anchored();
+  commit(s.acmeApi, { 'src/ledger.ts': file([...Array.from({ length: 60 }, (_, i) => `// pad ${i}`), ...base]) });
+  sessionStart(s.acmeApi, s.data, s.configA);
+  assert.equal(item(s).status, 'stale');
+  assert.match(recheck(s, s.id).stdout, /"restored": 1/);
+  assert.deepEqual([item(s).status, item(s).anchor.start], ['active', 70]);
 });
 
 test('an uncommitted change does not make an item stale', () => {
@@ -104,6 +120,7 @@ test('memory recheck with no id checks every anchored item here', () => {
   const r = recheck(s);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /"stale": 1/);
+  assert.deepEqual(JSON.parse(r.stdout).staleItems, [{ id: s.id, reason: 'path gone' }]);
   assert.equal(item(s).status, 'stale');
 });
 
@@ -120,4 +137,24 @@ test('recheck needs a tenant and an existing id', () => {
   const s = anchored();
   assert.equal(run(['recheck'], { cwd: s.loose, data: s.data, config: s.configA }).status, 1);
   assert.equal(recheck(s, 'm-0000000000').status, 1);
+});
+
+test('a stale item returns at the next session start once its citation holds again', () => {
+  const s = anchored();
+  commit(s.acmeApi, { 'src/ledger.ts': null });
+  assert.doesNotMatch(sessionStart(s.acmeApi, s.data, s.configA).stdout, new RegExp(HAZARD));
+  commit(s.acmeApi, { 'src/ledger.ts': file() });
+  assert.match(sessionStart(s.acmeApi, s.data, s.configA).stdout, new RegExp(HAZARD));
+  assert.deepEqual(item(s).audits, ['item_stale', 'item_restored']);
+});
+
+test('a bare clone is checked against its own HEAD', () => {
+  const s = anchored();
+  commit(s.acmeApi, { 'src/ledger.ts': null });
+  const bare = join(s.base, 'repos', 'acme-api.git');
+  execFileSync('git', ['clone', '-q', '--bare', s.acmeApi, bare]);
+  execFileSync('git', ['remote', 'set-url', 'origin', 'https://github.com/acme/api.git'], { cwd: bare });
+  const out = sessionStart(bare, s.data, s.configA).stdout;
+  assert.match(out, new RegExp(NOTE));
+  assert.doesNotMatch(out, new RegExp(HAZARD));
 });

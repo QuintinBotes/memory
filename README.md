@@ -85,8 +85,12 @@ not look like one (see [SECURITY.md](SECURITY.md)).
 An item anchored with `--anchor path:start-end` is re-checked against the
 file at HEAD before it is shown. If the file is gone, or the cited lines are
 no longer within 50 lines of where they were, the item goes stale and is not
-shown; if they moved, the anchor follows them. An uncommitted edit changes
-nothing. `memory recheck` restores a stale item whose citation holds again.
+shown; if they moved, the anchor follows them, and the move is audited. An
+uncommitted edit changes nothing. A stale item comes back by itself at the
+next session start once its citation holds again, for example when you
+switch back to a branch where it holds. `memory recheck` lists the stale
+items with the reason, searches the whole file rather than 50 lines, and
+restores what holds.
 
 At session start, the items this repository and config may see are printed
 in one line each, within `sessionBudget` estimated tokens (300 by default, 0

@@ -13,12 +13,17 @@ export interface Context {
 
 /**
  * git, asked about the working directory only. A repository named in the
- * environment is not the one the session is in.
+ * environment is not the one the session is in. Null when git answered no;
+ * throws when git could not answer (not installed, output over 64 MiB), so a
+ * caller never reads "could not run" as "not there".
  */
 export function git(cwd: string, ...args: string[]): string | null {
   const env = { ...process.env };
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE']) delete env[k];
-  const r = spawnSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024 });
+  // A partial clone may fetch a missing object; it must never wait on a credential prompt in a hook.
+  env['GIT_TERMINAL_PROMPT'] = '0';
+  const r = spawnSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+  if (r.error !== undefined && (r.error as NodeJS.ErrnoException).code !== 'ENOENT') throw r.error;
   return r.status === 0 ? r.stdout : null;
 }
 

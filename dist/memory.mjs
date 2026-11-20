@@ -104,7 +104,9 @@ import { spawnSync } from "node:child_process";
 function git(cwd, ...args) {
   const env = { ...process.env };
   for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE"]) delete env[k];
-  const r = spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
+  env["GIT_TERMINAL_PROMPT"] = "0";
+  const r = spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+  if (r.error !== void 0 && r.error.code !== "ENOENT") throw r.error;
   return r.status === 0 ? r.stdout : null;
 }
 function parseGitHubRemote(url) {
@@ -576,57 +578,99 @@ function recordAudit(db, action, subject, metadata = {}) {
 
 // src/anchors.ts
 var WINDOW = 50;
-function checkAnchor(anchor, text) {
+function fileLines(text) {
+  const lines = text === "" ? [] : text.split("\n");
+  if (text.endsWith("\n")) lines.pop();
+  return lines;
+}
+var rangeHash = (lines, start, end) => sha256(lines.slice(start - 1, end).join("\n"));
+function checkAnchor(anchor, text, window = WINDOW) {
   if (text === null) return { ok: false, reason: "path gone" };
   if (anchor.start === void 0) {
     return sha256(text) === anchor.citedHash ? { ok: true, anchor } : { ok: false, reason: "cited text gone" };
   }
-  const lines = text === "" ? [] : text.split("\n");
-  if (text.endsWith("\n")) lines.pop();
+  const lines = fileLines(text);
   const length = (anchor.end ?? anchor.start) - anchor.start + 1;
-  for (let d = 0; d <= WINDOW; d++) {
+  for (let d = 0; d <= window && (anchor.start - d >= 1 || anchor.start + d + length - 1 <= lines.length); d++) {
     for (const start of d === 0 ? [anchor.start] : [anchor.start - d, anchor.start + d]) {
       if (start < 1 || start + length - 1 > lines.length) continue;
-      if (sha256(lines.slice(start - 1, start - 1 + length).join("\n")) === anchor.citedHash) {
+      if (rangeHash(lines, start, start + length - 1) === anchor.citedHash) {
         return { ok: true, anchor: { ...anchor, start, end: start + length - 1 } };
       }
     }
   }
   return { ok: false, reason: "cited text gone" };
 }
-function recheck(db, tenant, repository, root, statuses, id) {
+var at = (a) => a.start === void 0 ? a.path : `${a.path}:${a.start}-${a.end ?? a.start}`;
+function transition(db, apply, audit) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const changed = apply();
+    if (changed) audit();
+    db.exec("COMMIT");
+    return changed;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
+  const result = { checked: 0, current: 0, stale: 0, restored: 0, staleItems: [] };
   const rows = db.prepare(
     `SELECT id, status, anchors_json FROM items
        WHERE tenant = ? AND scope = 'repository' AND scope_key = ? AND anchors_json != '[]'
-         AND status IN (${statuses.map(() => "?").join(", ")}) ${id === void 0 ? "" : "AND id = ?"}
+         AND status IN ('active', 'stale') ${id === void 0 ? "" : "AND id = ?"}
        ORDER BY id`
-  ).all(tenant, repository, ...statuses, ...id === void 0 ? [] : [id]);
+  ).all(tenant, repository, ...id === void 0 ? [] : [id]);
+  if (rows.length === 0 || git(cwd, "rev-parse", "--verify", "-q", "HEAD") === null) return result;
   const files = /* @__PURE__ */ new Map();
   const read = (path) => {
-    if (!files.has(path)) files.set(path, git(root, "cat-file", "blob", `HEAD:${path}`));
+    if (!files.has(path)) {
+      let text;
+      try {
+        text = git(cwd, "cat-file", "blob", `HEAD:${path}`);
+      } catch {
+        text = void 0;
+      }
+      files.set(path, text);
+    }
     return files.get(path);
   };
-  const result = { checked: rows.length, current: 0, stale: 0, restored: 0 };
+  const toStale = db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ? AND status = 'active'");
+  const toActive = db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'");
   for (const row2 of rows) {
     const anchors = JSON.parse(row2.anchors_json);
-    const checks = anchors.map((a) => checkAnchor(a, read(a.path)));
+    const texts = anchors.map((a) => read(a.path));
+    if (texts.includes(void 0)) continue;
+    result.checked++;
+    const checks = anchors.map((a, i) => checkAnchor(a, texts[i], window));
     const failed = checks.find((c) => !c.ok);
     if (failed !== void 0 && !failed.ok) {
       result.stale++;
-      if (row2.status === "active") {
-        db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ?").run(failed.reason, row2.id);
-        recordAudit(db, "item_stale", { type: "item", id: row2.id }, { reason: failed.reason });
-      }
+      result.staleItems.push({ id: row2.id, reason: failed.reason });
+      transition(
+        db,
+        () => toStale.run(failed.reason, row2.id).changes === 1,
+        () => recordAudit(db, "item_stale", { type: "item", id: row2.id }, { reason: failed.reason })
+      );
       continue;
     }
     result.current++;
-    const moved = JSON.stringify(checks.map((c) => c.ok ? c.anchor : null));
-    if (moved !== row2.anchors_json) db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(moved, row2.id);
-    if (row2.status === "stale") {
-      result.restored++;
-      db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ?").run(row2.id);
-      recordAudit(db, "item_restored", { type: "item", id: row2.id });
+    const now = checks.map((c) => c.ok ? c.anchor : anchors[0]);
+    const moved = JSON.stringify(now);
+    if (moved !== row2.anchors_json) {
+      transition(
+        db,
+        () => db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(moved, row2.id).changes === 1,
+        () => recordAudit(db, "anchor_moved", { type: "item", id: row2.id }, { from: anchors.map(at), to: now.map(at) })
+      );
     }
+    const restored = transition(
+      db,
+      () => toActive.run(row2.id).changes === 1,
+      () => recordAudit(db, "item_restored", { type: "item", id: row2.id })
+    );
+    if (restored) result.restored++;
   }
   return result;
 }
@@ -759,12 +803,14 @@ function openStore(path, create) {
   const db = new DatabaseSync(path);
   chmodSync(path, 384);
   db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;");
-  const { user_version: version } = db.prepare("PRAGMA user_version").get();
-  for (let v = version; v < MIGRATIONS.length; v++) {
-    db.exec("BEGIN");
+  const version = () => db.prepare("PRAGMA user_version").get().user_version;
+  if (version() < MIGRATIONS.length) {
+    db.exec("BEGIN IMMEDIATE");
     try {
-      db.exec(MIGRATIONS[v]);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
+      for (let v = version(); v < MIGRATIONS.length; v++) {
+        db.exec(MIGRATIONS[v]);
+        db.exec(`PRAGMA user_version = ${v + 1}`);
+      }
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -809,7 +855,8 @@ var USAGE = `usage: memory <command>
   list
       every item visible here
   recheck [<id>]
-      check anchored items against HEAD: a gone citation makes an item stale, one that holds again restores it
+      check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
+      one that holds again restores it
   session-start
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
@@ -842,8 +889,7 @@ function visibleItems(data, context, cwd) {
     const db = openStore(tenantFile(data, context.tenant), false);
     if (db !== null) {
       try {
-        const root = git(cwd, "rev-parse", "--show-toplevel")?.trim();
-        if (root !== void 0) recheck(db, context.tenant, context.repository, root, ["active"]);
+        recheck(db, context.tenant, context.repository, cwd);
         out.push(...tenantItems(db, context.tenant, context.repository, context.owner));
       } finally {
         db.close();
@@ -906,10 +952,9 @@ function anchorAt(cwd, spec) {
   if (m[2] === void 0) return { path: clean, commit, citedHash: sha256(text) };
   const start = Number(m[2]);
   const end = m[3] === void 0 ? start : Number(m[3]);
-  const lines = text === "" ? [] : text.split("\n");
-  if (text.endsWith("\n")) lines.pop();
+  const lines = fileLines(text);
   if (start < 1 || end < start || end > lines.length) throw new Refusal(`${clean} has ${lines.length} lines; ${start}-${end} is outside it`);
-  return { path: clean, start, end, commit, citedHash: sha256(lines.slice(start - 1, end).join("\n")) };
+  return { path: clean, start, end, commit, citedHash: rangeHash(lines, start, end) };
 }
 function remember(args, data, cwd) {
   const { values, positionals } = parseArgs({
@@ -978,11 +1023,10 @@ function recheckCommand(args, data, cwd) {
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
-  const root = git(cwd, "rev-parse", "--show-toplevel")?.trim();
   const db = openStore(tenantFile(data, context.tenant), false);
-  if (root === void 0 || db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
+  if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = recheck(db, context.tenant, context.repository, root, ["active", "stale"], id);
+    const result = recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity });
     if (id !== void 0 && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
   } finally {

@@ -20,7 +20,7 @@ import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
 import { SCOPES, TYPES, insertItem, personItems, sha256, tenantItems, type Anchor, type Scope, type Visible } from './items.ts';
 import { renderAll, renderSlice } from './slice.ts';
-import { recheck } from './anchors.ts';
+import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { buildConsentPlan } from './consent/plan.ts';
 import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
 import { openStore } from './store/db.ts';
@@ -39,7 +39,8 @@ const USAGE = `usage: memory <command>
   list
       every item visible here
   recheck [<id>]
-      check anchored items against HEAD: a gone citation makes an item stale, one that holds again restores it
+      check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
+      one that holds again restores it
   session-start
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
@@ -85,8 +86,7 @@ function visibleItems(data: string, context: Context, cwd: string): Visible[] {
     const db = openStore(tenantFile(data, context.tenant), false);
     if (db !== null) {
       try {
-        const root = git(cwd, 'rev-parse', '--show-toplevel')?.trim();
-        if (root !== undefined) recheck(db, context.tenant, context.repository, root, ['active']);
+        recheck(db, context.tenant, context.repository, cwd);
         out.push(...tenantItems(db, context.tenant, context.repository, context.owner));
       } finally {
         db.close();
@@ -152,10 +152,9 @@ function anchorAt(cwd: string, spec: string): Anchor {
   if (m[2] === undefined) return { path: clean, commit, citedHash: sha256(text) };
   const start = Number(m[2]);
   const end = m[3] === undefined ? start : Number(m[3]);
-  const lines = text === '' ? [] : text.split('\n');
-  if (text.endsWith('\n')) lines.pop();
+  const lines = fileLines(text);
   if (start < 1 || end < start || end > lines.length) throw new Refusal(`${clean} has ${lines.length} lines; ${start}-${end} is outside it`);
-  return { path: clean, start, end, commit, citedHash: sha256(lines.slice(start - 1, end).join('\n')) };
+  return { path: clean, start, end, commit, citedHash: rangeHash(lines, start, end) };
 }
 
 function remember(args: string[], data: string, cwd: string): void {
@@ -231,11 +230,10 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
-  const root = git(cwd, 'rev-parse', '--show-toplevel')?.trim();
   const db = openStore(tenantFile(data, context.tenant), false);
-  if (root === undefined || db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
+  if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = recheck(db, context.tenant, context.repository, root, ['active', 'stale'], id);
+    const result = recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity });
     if (id !== undefined && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
   } finally {
