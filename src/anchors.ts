@@ -27,6 +27,8 @@ export type Citation = { ok: true; anchor: Anchor } | { ok: false; reason: 'path
  */
 export function checkAnchor(anchor: Anchor, text: string | null, window = WINDOW): Citation {
   if (text === null) return { ok: false, reason: 'path gone' };
+  // shortcut: a symbol anchor from a notes import is checked by its path only, until a code anchor provider checks the symbol (slice 9).
+  if (anchor.citedHash === undefined) return { ok: true, anchor };
   if (anchor.start === undefined) {
     return sha256(text) === anchor.citedHash ? { ok: true, anchor } : { ok: false, reason: 'cited text gone' };
   }

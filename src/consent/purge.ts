@@ -42,7 +42,7 @@ export function previewPurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
     evidence = count(db, 'SELECT COUNT(*) AS n FROM evidence WHERE captured_at < ?', before);
     returnedToProposed = count(
       db,
-      `SELECT COUNT(*) AS n FROM items i WHERE status != 'proposed'
+      `SELECT COUNT(*) AS n FROM items i WHERE status IN ('active', 'stale')
          AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = i.id AND e.captured_at >= ?)`,
       before,
     );
@@ -64,7 +64,8 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
     if (scope.before !== undefined) {
       db.prepare('DELETE FROM evidence WHERE captured_at < ?').run(scope.before);
       db.prepare(
-        "UPDATE items SET status = 'proposed' WHERE NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)",
+        // Only an item that was shown goes back: a tombstone stays one.
+        "UPDATE items SET status = 'proposed' WHERE status IN ('active', 'stale') AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)",
       ).run();
     }
     // In the same transaction: a purge that cannot be audited does not happen.

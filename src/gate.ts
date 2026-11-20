@@ -3,6 +3,14 @@ import { codeFreeViolations, visibleText } from './codefree.ts';
 
 export const MAX_STATEMENT = 300;
 
+/** Whether `text` names one of `terms` of two or more characters, as a whole word. */
+export function namesOrganisation(text: string, terms: readonly string[]): boolean {
+  const visible = visibleText(text);
+  return terms.some(
+    (t) => t.length >= 2 && new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'iu').test(visible),
+  );
+}
+
 /**
  * Why `text` must not be stored, or null when it may be. Reasons name the kind
  * of data only, never the matched text, so a refusal can be printed and logged
@@ -38,11 +46,11 @@ export function refusal(text: string, organisationTerms?: readonly string[]): st
     // shorter than three characters; a repository named "ui" is still a name.
     // shortcut: one-character names are not matched, as they would refuse most text.
     const reasons = codeFreeViolations(text);
-    const visible = visibleText(text);
-    const named = organisationTerms.some(
-      (t) => t.length >= 2 && new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'iu').test(visible),
-    );
-    if (named) reasons.push('an organisation or repository name');
+    if (namesOrganisation(text, organisationTerms)) reasons.push('an organisation or repository name');
+    // An owner/repo of an organisation memory has no tenant for is still a name. Refusing "and/or" is the safe direction.
+    if (/(?<![\p{L}\p{N}_./-])[\p{L}\p{N}][\p{L}\p{N}-]*\/[\p{L}\p{N}._-]*[\p{L}\p{N}_-]/u.test(visibleText(text))) {
+      reasons.push('a name shaped like owner/repo');
+    }
     if (reasons.length > 0) return `a person or global item must be organisation-free, and this has: ${reasons.join(', ')}`;
   }
   return null;

@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { reduceTombstones, statementKey } from '../items.ts';
 
 /**
  * One schema for every file, tenant and person alike. Migrations follow
@@ -10,7 +11,7 @@ import { dirname } from 'node:path';
  * so an export is a mapping, not a rewrite. There is no column for raw text:
  * the statement is stored only after the gate refused anything sensitive.
  */
-const MIGRATIONS: string[] = [
+const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   `
   CREATE TABLE items (
     id TEXT PRIMARY KEY,
@@ -58,6 +59,15 @@ const MIGRATIONS: string[] = [
 
   // v2 - why an item went stale (slice 2), so the owner can see it before a recheck.
   `ALTER TABLE items ADD COLUMN status_reason TEXT;`,
+
+  // v3 - the normalised statement's hash (slice 3): what a duplicate and a tombstone are matched by.
+  (db) => {
+    db.exec('ALTER TABLE items ADD COLUMN statement_key TEXT; CREATE INDEX idx_items_key ON items (tenant, statement_key);');
+    const set = db.prepare('UPDATE items SET statement_key = ? WHERE id = ?');
+    for (const r of db.prepare('SELECT id, statement FROM items').all() as { id: string; statement: string }[]) {
+      set.run(statementKey(r.statement), r.id);
+    }
+  },
 ];
 
 /**
@@ -79,7 +89,9 @@ export function openStore(path: string, create: boolean): DatabaseSync | null {
     db.exec('BEGIN IMMEDIATE');
     try {
       for (let v = version(); v < MIGRATIONS.length; v++) {
-        db.exec(MIGRATIONS[v]!);
+        const migration = MIGRATIONS[v]!;
+        if (typeof migration === 'string') db.exec(migration);
+        else migration(db);
         db.exec(`PRAGMA user_version = ${v + 1}`);
       }
       db.exec('COMMIT');
@@ -88,5 +100,6 @@ export function openStore(path: string, create: boolean): DatabaseSync | null {
       throw error;
     }
   }
+  reduceTombstones(db);
   return db;
 }

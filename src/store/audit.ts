@@ -8,7 +8,17 @@ import type { DatabaseSync } from 'node:sqlite';
  * answer "what did this do with my data" from their own machine. Metadata
  * never holds an item's text.
  */
-export type AuditAction = 'consent_granted' | 'item_remembered' | 'item_stale' | 'item_restored' | 'anchor_moved' | 'purge';
+export type AuditAction =
+  | 'consent_granted'
+  | 'item_remembered'
+  | 'item_stale'
+  | 'item_restored'
+  | 'anchor_moved'
+  | 'purge'
+  | 'import'
+  | 'proposal_approved'
+  | 'proposal_rejected'
+  | 'tombstones_reduced';
 
 export function recordAudit(
   db: DatabaseSync,

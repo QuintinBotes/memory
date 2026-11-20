@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory import [--dry-run]` reads the silos and stores each statement as a
+  proposal, never active: the auto memory of every bound Claude Code config,
+  and per repository checkout the review-standards file, the record of
+  rejected retro proposals, a Review Voice policy file and a notes file, at
+  paths set under `imports` in `config.json`. An auto memory statement goes to
+  the tenant of the repository it names, if its own config is bound to that
+  tenant, or to person scope when it is organisation-free; it carries agent
+  trust, because a model wrote it with no approval step, and is stored with
+  its file name and line, not the folder. The other silos carry
+  owner trust. A rejected retro proposal arrives as a tombstone. Notes of kind
+  `gotcha`, `invariant` and `decision` arrive with their symbol anchor; other
+  kinds are counted and skipped. The report lists every file with its
+  statement count, dangling index links, skipped files (such as a symbolic
+  link out of its folder) and refused statements by source and reason, never
+  by their text. A statement already known, or rejected before, is not
+  proposed again. (#4)
+- `memory review` lists the proposals of this repository's tenant and the
+  person file, with their evidence, scope, trust and what the shadow gate
+  would have decided. `memory approve <id> [--scope]` makes one active;
+  `memory reject <id> [--reason]` keeps it as a tombstone. Both record the
+  owner's decision beside the shadow gate's.
+- Rejected and expired items are reduced to a hash of their statement, their
+  type and their scope 30 days after rejection; the hash still blocks the
+  statement.
+- A person statement shaped like `owner/repo` is refused as not
+  organisation-free, even when no tenant names that owner.
+
+### Fixed
+
+- `memory purge --older-than` no longer turns a rejected item back into a
+  proposal.
+
 ## [0.2.0] - 2026-11-20
 
 ### Added
