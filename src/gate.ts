@@ -47,6 +47,10 @@ export function refusal(text: string, organisationTerms?: readonly string[]): st
     // shortcut: one-character names are not matched, as they would refuse most text.
     const reasons = codeFreeViolations(text);
     if (namesOrganisation(text, organisationTerms)) reasons.push('an organisation or repository name');
+    // An owner/repo of an organisation memory has no tenant for is still a name. Refusing "and/or" is the safe direction.
+    if (/(?<![\p{L}\p{N}_./-])[\p{L}\p{N}][\p{L}\p{N}-]*\/[\p{L}\p{N}._-]*[\p{L}\p{N}_-]/u.test(visibleText(text))) {
+      reasons.push('a name shaped like owner/repo');
+    }
     if (reasons.length > 0) return `a person or global item must be organisation-free, and this has: ${reasons.join(', ')}`;
   }
   return null;

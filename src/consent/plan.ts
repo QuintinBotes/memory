@@ -33,7 +33,7 @@ export function buildConsentPlan(config: Config, storageLocation: string): Conse
       'Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored',
       'Person and global statements are refused unless they name no code, path, tenant or repository',
       'Items are kept until you purge them with memory purge --tenant, --repo or --all',
-      'A rejected item is kept as a tombstone, reduced to a hash of its statement and its type 30 days after rejection, so the statement is never proposed again',
+      'A rejected item is kept as a tombstone, reduced to a hash of its statement, its type and its scope 30 days after rejection, so the statement is never proposed again',
       'memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown',
       'Each tenant has its own file; a session opens only the tenant its repository and config allow',
       'Nothing is uploaded; the store never leaves this machine',

@@ -28,12 +28,18 @@ export function shadow(p: Proposal): { decision: 'approve' | 'hold'; signals: nu
   return { decision: signals >= 3 && owner >= 1 && p.contradictions === 0 ? 'approve' : 'hold', signals, owner };
 }
 
-/** Proposals in one store, of `tenant` ('' for the person file), oldest first; or one by id. */
+/**
+ * Proposals in one store, of `tenant` ('' for the person file), oldest first;
+ * or one by id. An item a purge left without evidence is not one: it must not
+ * be recalled, so it cannot be approved.
+ */
 export function proposals(db: DatabaseSync, tenant: string, id?: string): Proposal[] {
   const rows = db
     .prepare(
       `SELECT id, scope, scope_key, type, statement, origin_trust, contradictions, anchors_json FROM items
-       WHERE status = 'proposed' AND tenant = ? ${id === undefined ? '' : 'AND id = ?'} ORDER BY created_at, id`,
+       WHERE status = 'proposed' AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
+         AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
+       ORDER BY created_at, id`,
     )
     .all(tenant, ...(id === undefined ? [] : [id])) as unknown as Proposal[];
   const evidence = db.prepare('SELECT source_ref, author_role FROM evidence WHERE item_id = ? ORDER BY captured_at, id');

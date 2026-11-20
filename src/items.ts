@@ -129,7 +129,7 @@ const TOMBSTONE_DAYS = 30;
 /**
  * Reduces rejected and expired items older than 30 days to their statement's
  * hash and their type: the hash still blocks the statement from being
- * proposed again. Run on every open, and checked first, so a reader takes no
+ * proposed again. The scope stays, so a purge by repository still finds it. Run on every open, and checked first, so a reader takes no
  * write lock when there is nothing to reduce.
  */
 export function reduceTombstones(db: DatabaseSync): void {
@@ -140,7 +140,7 @@ export function reduceTombstones(db: DatabaseSync): void {
   try {
     db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff);
     const { changes } = db
-      .prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, scope_key = '', anchors_json = '[]' WHERE ${due}`)
+      .prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE ${due}`)
       .run(cutoff);
     recordAudit(db, 'tombstones_reduced', null, { count: Number(changes) });
     db.exec('COMMIT');

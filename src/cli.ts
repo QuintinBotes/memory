@@ -232,14 +232,13 @@ function importCommand(args: string[], data: string): void {
 }
 
 /** The stores whose proposals may be reviewed here: this repository's tenant, then the person file. */
-function proposalStores(data: string, cwd: string): { file: string; tenant: string }[] {
-  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+function proposalStores(data: string, context: Context): { file: string; tenant: string }[] {
   return [...(context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }]), { file: personFile(data), tenant: '' }];
 }
 
 function review(data: string, cwd: string): void {
   let out = '';
-  for (const { file, tenant } of proposalStores(data, cwd)) {
+  for (const { file, tenant } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
@@ -264,16 +263,19 @@ function decideCommand(args: string[], data: string, cwd: string, decision: 'app
   const scope = values.scope as Scope | undefined;
   if (scope !== undefined && !SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(', ')}`, 2);
   const reason = typeof values.reason === 'string' ? values.reason.trim() : '';
-  const why = reason === '' ? null : refusal(reason);
-  if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
 
-  for (const { file, tenant } of proposalStores(data, cwd)) {
+  for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
       const [p] = proposals(db, tenant, id);
       if (p === undefined) continue;
       if (decision === 'reject') {
+        // A reason kept in the person file follows the owner into every organisation, as the statement does.
+        const why = reason === '' ? null : refusal(reason, tenant === '' ? organisationTerms(config, context.repository) : undefined);
+        if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
         decide(db, p, 'reject', { reason: reason === '' ? null : reason });
         console.log(`rejected ${id}; the same statement will not be proposed again`);
         return;

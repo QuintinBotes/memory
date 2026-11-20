@@ -142,7 +142,7 @@ memory reject m-1a2b3c4d5e --reason 'too broad'
 ```
 
 A rejected statement is kept as a tombstone and never proposed again; after
-30 days only its hash and type remain. Approve and reject are terminal
+30 days only its hash, type and scope remain. Approve and reject are terminal
 commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)` and `Bash(*memory.mjs*reject*)`.
 

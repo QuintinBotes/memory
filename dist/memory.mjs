@@ -496,6 +496,9 @@ function refusal(text, organisationTerms2) {
   if (organisationTerms2 !== void 0) {
     const reasons = codeFreeViolations(text);
     if (namesOrganisation(text, organisationTerms2)) reasons.push("an organisation or repository name");
+    if (/(?<![\p{L}\p{N}_./-])[\p{L}\p{N}][\p{L}\p{N}-]*\/[\p{L}\p{N}._-]*[\p{L}\p{N}_-]/u.test(visibleText(text))) {
+      reasons.push("a name shaped like owner/repo");
+    }
     if (reasons.length > 0) return `a person or global item must be organisation-free, and this has: ${reasons.join(", ")}`;
   }
   return null;
@@ -588,7 +591,7 @@ function reduceTombstones(db) {
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff);
-    const { changes } = db.prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, scope_key = '', anchors_json = '[]' WHERE ${due}`).run(cutoff);
+    const { changes } = db.prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE ${due}`).run(cutoff);
     recordAudit(db, "tombstones_reduced", null, { count: Number(changes) });
     db.exec("COMMIT");
   } catch (error) {
@@ -747,7 +750,7 @@ function buildConsentPlan(config, storageLocation) {
       "Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored",
       "Person and global statements are refused unless they name no code, path, tenant or repository",
       "Items are kept until you purge them with memory purge --tenant, --repo or --all",
-      "A rejected item is kept as a tombstone, reduced to a hash of its statement and its type 30 days after rejection, so the statement is never proposed again",
+      "A rejected item is kept as a tombstone, reduced to a hash of its statement, its type and its scope 30 days after rejection, so the statement is never proposed again",
       "memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown",
       "Each tenant has its own file; a session opens only the tenant its repository and config allow",
       "Nothing is uploaded; the store never leaves this machine"
@@ -772,7 +775,7 @@ function previewPurge(db, scope) {
     evidence = count(db, "SELECT COUNT(*) AS n FROM evidence WHERE captured_at < ?", before);
     returnedToProposed = count(
       db,
-      `SELECT COUNT(*) AS n FROM items i WHERE status NOT IN ('proposed', 'rejected')
+      `SELECT COUNT(*) AS n FROM items i WHERE status IN ('active', 'stale')
          AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = i.id AND e.captured_at >= ?)`,
       before
     );
@@ -788,7 +791,8 @@ function executePurge(db, scope) {
     if (scope.before !== void 0) {
       db.prepare("DELETE FROM evidence WHERE captured_at < ?").run(scope.before);
       db.prepare(
-        "UPDATE items SET status = 'proposed' WHERE status != 'rejected' AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)"
+        // Only an item that was shown goes back: a tombstone stays one.
+        "UPDATE items SET status = 'proposed' WHERE status IN ('active', 'stale') AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)"
       ).run();
     }
     recordAudit(db, "purge", null, { scope, removed: preview });
@@ -918,7 +922,15 @@ var personFile = (data) => join3(data, "person.sqlite");
 // src/import/silos.ts
 import { isAbsolute, normalize } from "node:path";
 var parsed = (statements, rest = {}) => ({ statements, links: [], unreadable: [], skippedNotes: 0, ...rest });
-var unquote = (v) => /^"(.*)"$/.test(v) ? v.slice(1, -1) : /^'(.*)'$/.test(v) ? v.slice(1, -1).replace(/''/g, "'") : v;
+function unquote(v) {
+  if (/^'.*'$/.test(v)) return v.slice(1, -1).replace(/''/g, "'");
+  if (!/^".*"$/.test(v)) return v;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v.slice(1, -1);
+  }
+}
 var lines = (text) => text.split(/\r?\n/);
 function markdown(text) {
   const all = lines(text);
@@ -950,7 +962,7 @@ function policy(text) {
   lines(text).forEach((line, i) => {
     const top = /^([A-Za-z_][\w-]*):/.exec(line);
     if (top) key = top[1];
-    const item = /^\s+-\s+(.*\S)\s*$/.exec(line);
+    const item = /^\s*-\s+(.*\S)\s*$/.exec(line);
     if (!top && item && POLICY_KEYS.has(key)) statements.push({ line: i + 1, text: unquote(item[1]) });
   });
   return parsed(statements);
@@ -1019,7 +1031,7 @@ function namedRepositories(config, text) {
   const named = /* @__PURE__ */ new Map();
   const plain = text.replace(/https?:\/\/github\.com\//gi, " ");
   for (const m of plain.matchAll(/(?<![\w./-])([a-z0-9][a-z0-9-]*)\/([a-z0-9._-]*[a-z0-9_-])/gi)) {
-    const [owner, repo] = [m[1].toLowerCase(), m[2].toLowerCase()];
+    const [owner, repo] = [m[1].toLowerCase(), m[2].toLowerCase().replace(/\.git$/, "")];
     const tenants = matchingTenants(config, owner, repo);
     if (tenants.length === 1) named.set(`${owner}/${repo}`, tenants[0]);
   }
@@ -1058,6 +1070,7 @@ function importSilos(config, data, configDir, dryRun) {
         for (const link of parsed2.links) if (!existsSync3(join4(folder, link))) report.danglingLinks.push({ file: path, link });
         for (const { line, text } of parsed2.statements) {
           const source = `${path}:${line}`;
+          const stored = `auto memory ${name}:${line}`;
           if (refused(source, refusal(text))) continue;
           const named = namedRepositories(config, text);
           const base = { statement: text, rationale: null, anchors: [], status: "proposed", trust: "agent" };
@@ -1066,11 +1079,14 @@ function importSilos(config, data, configDir, dryRun) {
           } else if (named.size === 1) {
             const [repository, tenant] = [...named][0];
             if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
-            candidates.push({ ...base, tenant, scope: "repository", scopeKey: repository, type: "convention", source });
+            const own = new Set((config.tenants[tenant] ?? []).map((p) => p.split("/")[0].toLowerCase()));
+            const others = Object.entries(config.tenants).filter(([t]) => t !== tenant).flatMap(([, patterns]) => patterns.map((p) => p.split("/")[0].toLowerCase())).filter((o) => !own.has(o));
+            if (refused(source, namesOrganisation(text, others) ? "it also names an owner of another tenant" : null)) continue;
+            candidates.push({ ...base, tenant, scope: "repository", scopeKey: repository, type: "convention", source: stored });
           } else {
             if (refused(source, refusal(text, terms))) continue;
             if (refused(source, namesOrganisation(name, terms) ? "its file name names an organisation" : null)) continue;
-            candidates.push({ ...base, tenant: "", scope: "person", scopeKey: "", type: "preference", source: `auto memory ${name}:${line}` });
+            candidates.push({ ...base, tenant: "", scope: "person", scopeKey: "", type: "preference", source: stored });
           }
         }
       }
@@ -1122,11 +1138,15 @@ function importSilos(config, data, configDir, dryRun) {
   for (const [file, list2] of byFile) {
     const db = openStore(file, true);
     try {
-      const known = db.prepare("SELECT status FROM items WHERE tenant = ? AND statement_key = ? ORDER BY status = 'rejected' DESC LIMIT 1");
+      const known = db.prepare("SELECT id, status FROM items WHERE tenant = ? AND statement_key = ? ORDER BY status = 'rejected' DESC LIMIT 1");
+      const reject = db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'");
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list2) {
         const was = known.get(c.tenant, statementKey(c.statement));
-        if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
+        if (was !== void 0 && c.status === "rejected" && was.status === "proposed") {
+          reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
+          added.tombstones++;
+        } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
         else {
           insertItem(db, c);
           added[c.status === "rejected" ? "tombstones" : "proposed"]++;
@@ -1135,6 +1155,7 @@ function importSilos(config, data, configDir, dryRun) {
       counts.proposed += added.proposed;
       counts.tombstones += added.tombstones;
       recordAudit(db, "import", null, added);
+      reduceTombstones(db);
     } finally {
       db.close();
     }
@@ -1152,7 +1173,9 @@ function shadow(p) {
 function proposals(db, tenant, id) {
   const rows = db.prepare(
     `SELECT id, scope, scope_key, type, statement, origin_trust, contradictions, anchors_json FROM items
-       WHERE status = 'proposed' AND tenant = ? ${id === void 0 ? "" : "AND id = ?"} ORDER BY created_at, id`
+       WHERE status = 'proposed' AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
+         AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
+       ORDER BY created_at, id`
   ).all(tenant, ...id === void 0 ? [] : [id]);
   const evidence = db.prepare("SELECT source_ref, author_role FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
   for (const r of rows) r.evidence = evidence.all(r.id);
@@ -1368,13 +1391,12 @@ function importCommand(args, data) {
   console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun), null, 2));
   if (dryRun) console.error("Nothing was written. Run memory import without --dry-run to store these as proposals.");
 }
-function proposalStores(data, cwd) {
-  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+function proposalStores(data, context) {
   return [...context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }], { file: personFile(data), tenant: "" }];
 }
 function review(data, cwd) {
   let out = "";
-  for (const { file, tenant } of proposalStores(data, cwd)) {
+  for (const { file, tenant } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
@@ -1398,15 +1420,17 @@ function decideCommand(args, data, cwd, decision) {
   const scope = values.scope;
   if (scope !== void 0 && !SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(", ")}`, 2);
   const reason = typeof values.reason === "string" ? values.reason.trim() : "";
-  const why = reason === "" ? null : refusal(reason);
-  if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
-  for (const { file, tenant } of proposalStores(data, cwd)) {
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
       const [p] = proposals(db, tenant, id);
       if (p === void 0) continue;
       if (decision === "reject") {
+        const why = reason === "" ? null : refusal(reason, tenant === "" ? organisationTerms(config, context.repository) : void 0);
+        if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
         decide(db, p, "reject", { reason: reason === "" ? null : reason });
         console.log(`rejected ${id}; the same statement will not be proposed again`);
         return;

@@ -29,8 +29,15 @@ export interface Parsed {
 const parsed = (statements: Statement[], rest: Partial<Parsed> = {}): Parsed => ({ statements, links: [], unreadable: [], skippedNotes: 0, ...rest });
 
 /** A YAML scalar as written on one line, without its quotes. */
-const unquote = (v: string): string =>
-  /^"(.*)"$/.test(v) ? v.slice(1, -1) : /^'(.*)'$/.test(v) ? v.slice(1, -1).replace(/''/g, "'") : v;
+function unquote(v: string): string {
+  if (/^'.*'$/.test(v)) return v.slice(1, -1).replace(/''/g, "'");
+  if (!/^".*"$/.test(v)) return v;
+  try {
+    return JSON.parse(v) as string; // Review Voice writes each rule with JSON.stringify
+  } catch {
+    return v.slice(1, -1);
+  }
+}
 
 const lines = (text: string): string[] => text.split(/\r?\n/);
 
@@ -74,7 +81,7 @@ export function policy(text: string): Parsed {
   lines(text).forEach((line, i) => {
     const top = /^([A-Za-z_][\w-]*):/.exec(line);
     if (top) key = top[1]!;
-    const item = /^\s+-\s+(.*\S)\s*$/.exec(line);
+    const item = /^\s*-\s+(.*\S)\s*$/.exec(line);
     if (!top && item && POLICY_KEYS.has(key)) statements.push({ line: i + 1, text: unquote(item[1]!) });
   });
   return parsed(statements);

@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths set under `imports` in `config.json`. An auto memory statement goes to
   the tenant of the repository it names, if its own config is bound to that
   tenant, or to person scope when it is organisation-free; it carries agent
-  trust, because a model wrote it with no approval step. The other silos carry
+  trust, because a model wrote it with no approval step, and is stored with
+  its file name and line, not the folder. The other silos carry
   owner trust. A rejected retro proposal arrives as a tombstone. Notes of kind
   `gotcha`, `invariant` and `decision` arrive with their symbol anchor; other
   kinds are counted and skipped. The report lists every file with its
@@ -29,8 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would have decided. `memory approve <id> [--scope]` makes one active;
   `memory reject <id> [--reason]` keeps it as a tombstone. Both record the
   owner's decision beside the shadow gate's.
-- Rejected and expired items are reduced to a hash of their statement and
-  their type 30 days after rejection; the hash still blocks the statement.
+- Rejected and expired items are reduced to a hash of their statement, their
+  type and their scope 30 days after rejection; the hash still blocks the
+  statement.
+- A person statement shaped like `owner/repo` is refused as not
+  organisation-free, even when no tenant names that owner.
 
 ### Fixed
 

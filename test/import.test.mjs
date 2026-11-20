@@ -141,7 +141,7 @@ test('each statement becomes a proposal with its source file and line, in the te
   assert.equal(release.scope_key, 'acme/api');
   assert.equal(release.origin_trust, 'agent', 'auto memory is written by a model, so it never gets owner trust');
   assert.equal(release.evidence.length, 1);
-  assert.equal(release.evidence[0].source_ref, `${join(s.memA, 'release.md')}:3`);
+  assert.equal(release.evidence[0].source_ref, 'auto memory release.md:3', 'the folder, another checkout\'s path, is not stored');
   assert.equal(release.evidence[0].author_role, 'agent');
 
   const standard = byStatement(acme, 'Every public handler validates its input');
@@ -305,7 +305,7 @@ test('review lists proposals with evidence, scope and the shadow gate, only for 
   assert.equal(out.status, 0, out.stderr);
   assert.match(out.stdout, /Releases of acme\/api are cut from the main branch only/);
   assert.match(out.stdout, /repository acme\/api/);
-  assert.match(out.stdout, new RegExp(`${join(s.memA, 'release.md').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:3 \\(agent\\)`));
+  assert.match(out.stdout, /evidence: auto memory release\.md:3 \(agent\)/);
   assert.match(out.stdout, /shadow gate: hold/);
   assert.match(out.stdout, /Prefer short pull request descriptions/);
   assert.doesNotMatch(out.stdout, /Deploys of beta\/web/, 'another tenant is never listed');
@@ -348,4 +348,121 @@ test('a purge by age never turns a tombstone back into a proposal', () => {
   assert.equal(run(['purge', '--older-than', '0', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
   const rows = items(s.data, 'tenants/acme.sqlite', "status != 'proposed'");
   assert.deepEqual(rows.map((r) => r.status), ['rejected']);
+});
+
+/** One more auto memory topic file in config A's folder. */
+const addTopic = (s, name, description) => write(join(s.memA, name), topic(name.replace(/\.md$/, ''), description));
+
+test('an auto memory statement naming its repository and another tenant\'s owner is refused', () => {
+  const s = silos();
+  addTopic(s, 'mixed.md', 'acme/api deploys pause during the Beta launch');
+  const report = importSilos(s);
+  assert.ok(report.refused.some((r) => r.source === `${join(s.memA, 'mixed.md')}:3` && /another tenant/.test(r.reason)), JSON.stringify(report.refused));
+  assert.equal(storeBytes(s.data).includes('Beta launch'), false);
+});
+
+test('a repository named with its .git suffix is the same repository', () => {
+  const s = silos();
+  addTopic(s, 'clone.md', 'Clone https://github.com/acme/api.git shallowly in CI');
+  importSilos(s);
+  assert.equal(byStatement(items(s.data, 'tenants/acme.sqlite'), 'Clone https://github.com/acme/api.git shallowly in CI').scope_key, 'acme/api');
+});
+
+test('a person statement that names a tenant, an unknown owner/repo, or sits in a file named after a tenant is refused', () => {
+  const s = silos();
+  addTopic(s, 'word.md', 'Acme deploys need two approvals');
+  addTopic(s, 'other.md', 'globex/api deploys need the VPN');
+  addTopic(s, 'beta-notes.md', 'Prefer squash merges');
+  const report = importSilos(s);
+  for (const [file, reason] of [['word.md', /organisation-free/], ['other.md', /owner\/repo/], ['beta-notes.md', /file name/]]) {
+    assert.ok(report.refused.some((r) => r.source === `${join(s.memA, file)}:3` && reason.test(r.reason)), `${file}: ${JSON.stringify(report.refused)}`);
+  }
+  const person = items(s.data, 'person.sqlite').map((r) => r.statement);
+  assert.deepEqual(person, ['Prefer short pull request descriptions']);
+});
+
+test('a later rejection in the retro record turns an open proposal into a tombstone', () => {
+  const s = silos();
+  importSilos(s);
+  const file = join(s.acmeApi, '.git', 'stack', 'retro-rejected.jsonl');
+  write(file, `${readFileSync(file, 'utf8')}${JSON.stringify({ kind: 'standard', text: 'Every public handler validates its input', at: REJECTED_AT })}\n`);
+  const again = importSilos(s);
+  assert.equal(again.tombstones, 1);
+  const [row] = items(s.data, 'tenants/acme.sqlite', "statement = 'Every public handler validates its input'");
+  assert.equal(row.status, 'rejected');
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.doesNotMatch(review.stdout, /validates its input/);
+});
+
+test('an imported rejection older than 30 days is reduced at once', () => {
+  const s = silos();
+  const old = new Date(Date.now() - 45 * 86_400_000).toISOString().slice(0, 10);
+  write(join(s.acmeApi, '.git', 'stack', 'retro-rejected.jsonl'), `${JSON.stringify({ kind: 'standard', text: 'Every handler logs its request id', at: old })}\n`);
+  importSilos(s);
+  const [tomb] = items(s.data, 'tenants/acme.sqlite', "status = 'rejected'");
+  assert.equal(tomb.statement, '');
+  assert.equal(tomb.evidence.length, 0);
+});
+
+test('a reduced tombstone keeps its repository, so a purge of that repository removes it', () => {
+  const s = silos();
+  importSilos(s);
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.prepare("UPDATE items SET valid_to = ? WHERE status = 'rejected'").run(new Date(Date.now() - 31 * 86_400_000).toISOString());
+  db.close();
+  assert.equal(run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  const [tomb] = items(s.data, 'tenants/acme.sqlite', "status = 'rejected'");
+  assert.equal(tomb.statement, '');
+  assert.equal(run(['purge', '--repo', 'acme/api', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
+  assert.equal(items(s.data, 'tenants/acme.sqlite', "status = 'rejected'").length, 0);
+});
+
+test('a purge by age leaves an expired item alone, and an item it leaves without evidence cannot be approved', () => {
+  const s = silos();
+  importSilos(s);
+  const id = proposalId(s, 'tenants/acme.sqlite', 'Every public handler validates its input');
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.prepare("UPDATE items SET status = 'expired', valid_to = ? WHERE id = ?").run(new Date().toISOString(), id);
+  db.close();
+  assert.equal(run(['purge', '--older-than', '0', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
+  assert.equal(items(s.data, 'tenants/acme.sqlite', `id = '${id}'`)[0].status, 'expired');
+
+  const release = proposalId(s, 'tenants/acme.sqlite', 'Releases of acme/api are cut from the main branch only');
+  assert.equal(items(s.data, 'tenants/acme.sqlite', `id = '${release}'`)[0].evidence.length, 0);
+  assert.equal(run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stdout, '');
+  assert.equal(run(['approve', release], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 1);
+});
+
+test('a reject reason kept in the person file must be organisation-free', () => {
+  const s = silos();
+  importSilos(s);
+  const id = proposalId(s, 'person.sqlite', 'Prefer short pull request descriptions');
+  const r = run(['reject', id, '--reason', 'acme reviewers asked for this'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /organisation-free/);
+  assert.equal(items(s.data, 'person.sqlite')[0].status, 'proposed');
+});
+
+test('a Review Voice policy written as an indentless list, with escaped quotes, is read', () => {
+  const s = silos();
+  write(join(s.acmeApi, '.review-voice', 'policy.yaml'), [
+    'suppressed_patterns:',
+    `- ${JSON.stringify('Suppress "nit" comments on generated files')}`,
+    'required_checks:',
+    '- Releases keep the version consistent',
+    '',
+  ].join('\n'));
+  importSilos(s);
+  const acme = items(s.data, 'tenants/acme.sqlite');
+  assert.ok(byStatement(acme, 'Suppress "nit" comments on generated files'));
+  assert.ok(byStatement(acme, 'Releases keep the version consistent'));
+});
+
+test('an approved note keeps its symbol anchor through the session-start re-check', () => {
+  const s = silos();
+  importSilos(s);
+  const id = proposalId(s, 'tenants/acme.sqlite', 'consume is called with the ledger lock held');
+  assert.equal(run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.match(sessionStart(s.acmeApi, s.data, s.configA).stdout, /consume is called with the ledger lock held \(src\/ledger\.ts#consume#function\)/);
+  assert.equal(items(s.data, 'tenants/acme.sqlite', `id = '${id}'`)[0].status, 'active');
 });
