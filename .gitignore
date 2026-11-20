@@ -1,0 +1,22 @@
+node_modules/
+*.tsbuildinfo
+dist/*
+!dist/memory.mjs
+
+# Memory's own data lives outside the repository (see README). Guard anyway.
+*.sqlite
+*.sqlite-*
+.memory/
+
+.env
+.env.*
+*.pem
+*.key
+
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local identity guard wordlist (never committed). One term per line.
+.identity-guard.local

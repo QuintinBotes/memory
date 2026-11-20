@@ -1,0 +1,18 @@
+{
+  "name": "memory",
+  "description": "Local memory for Claude Code that never crosses organisations: a few cited items you approved, recalled within a fixed token budget.",
+  "version": "0.0.0",
+  "author": {
+    "name": "Quintin Botes",
+    "url": "https://github.com/QuintinBotes"
+  },
+  "homepage": "https://github.com/QuintinBotes/memory",
+  "repository": "https://github.com/QuintinBotes/memory",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "context",
+    "privacy",
+    "local-first"
+  ]
+}

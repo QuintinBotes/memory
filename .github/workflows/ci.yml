@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default. Jobs opt into more.
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Memory runs on developer machines, most of them macOS, and node:sqlite is
+  # the component most likely to behave differently per platform.
+  verify:
+    name: verify (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is the floor; 24 is where node:sqlite is no longer experimental.
+        node: ['22', '24']
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Committed bundle matches source
+        run: npm run check:dist
+
+      - name: Identity guard
+        run: npm run guard:identity
+
+      - name: Actions are pinned to commit SHAs
+        run: npm run check:pins
+
+  manifests:
+    name: manifests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code
+        # Pinned: an unpinned global install is a mutable dependency running
+        # in CI. Bump it consciously.
+        run: npm install -g @anthropic-ai/claude-code@2.1.273
+
+      - name: Validate plugin and marketplace manifests
+        run: claude plugin validate . --strict
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Fixtures assemble credential-shaped strings at runtime, so no literal
+      # reaches the tree. This is the backstop, not the rule.
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_ENABLE_COMMENTS: false
+
+  # One stable gate for branch protection; matrix job names change with the
+  # matrix.
+  ci-green:
+    name: ci-green
+    runs-on: ubuntu-latest
+    needs: [verify, manifests, secrets]
+    if: always()
+    permissions: {}
+    steps:
+      - name: All required jobs succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Upstream results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success) ;;
+              *) echo "::error::A required job did not succeed ($result)."; exit 1 ;;
+            esac
+          done

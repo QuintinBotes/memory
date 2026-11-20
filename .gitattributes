@@ -1,0 +1,8 @@
+# Normalise line endings so the bundle-drift check compares like with like.
+* text=auto eol=lf
+
+# The CLI bundle is a build artifact that must be committed, because plugins
+# install by git clone with no install step. Reviewers read src/ and trust the
+# drift check.
+dist/memory.mjs linguist-generated=true
+package-lock.json linguist-generated=true
