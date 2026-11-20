@@ -1,0 +1,13 @@
+{
+  "description": "Prints memory's session slice: the active items this repository and config may see, within the session budget.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" session-start", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
