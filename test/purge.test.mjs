@@ -39,6 +39,16 @@ test('purge previews first, and deletes only with --confirm', () => {
   assert.equal(audit(join(s.data, 'tenants', 'acme.sqlite')), 1);
 });
 
+test('purge by repository finds items stored under an earlier allowlist', () => {
+  const s = seeded();
+  const narrowed = run(['init', '--tenant', 'acme=acme/web', '--bind', 'acme,beta', '--confirm'], { cwd: s.base, data: s.data, config: s.configA });
+  assert.equal(narrowed.status, 0, narrowed.stderr);
+  assert.equal(purge(s, '--repo', 'acme/api', '--confirm').status, 0);
+  const db = new DatabaseSync(join(s.data, 'tenants', 'acme.sqlite'), { readOnly: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM items WHERE scope_key = 'acme/api'").get().n, 0);
+  db.close();
+});
+
 test('purge by tenant touches only that tenant', () => {
   const s = seeded();
   assert.equal(purge(s, '--tenant', 'beta', '--confirm').status, 0);

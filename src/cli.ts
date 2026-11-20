@@ -16,7 +16,7 @@ import {
   saveConfig,
   type Config,
 } from './config.ts';
-import { git, matchingTenants, resolveContext, type Context } from './context.ts';
+import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
 import { SCOPES, TYPES, insertItem, personItems, sha256, tenantItems, type Anchor, type Scope, type Visible } from './items.ts';
 import { renderAll, renderSlice } from './slice.ts';
@@ -72,7 +72,7 @@ function organisationTerms(config: Config, context: Context): string[] {
 }
 
 /** Active items this process may show here: the bound tenant's, then the person file's. */
-function visibleItems(data: string, config: Config, context: Context): Visible[] {
+function visibleItems(data: string, context: Context): Visible[] {
   const out: Visible[] = [];
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const db = openStore(tenantFile(data, context.tenant), false);
@@ -140,7 +140,7 @@ function anchorAt(cwd: string, spec: string): Anchor {
   if (m[2] === undefined) return { path: clean, commit, citedHash: sha256(text) };
   const start = Number(m[2]);
   const end = m[3] === undefined ? start : Number(m[3]);
-  const lines = text.split('\n');
+  const lines = text === '' ? [] : text.split('\n');
   if (text.endsWith('\n')) lines.pop();
   if (start < 1 || end < start || end > lines.length) throw new Refusal(`${clean} has ${lines.length} lines; ${start}-${end} is outside it`);
   return { path: clean, start, end, commit, citedHash: sha256(lines.slice(start - 1, end).join('\n')) };
@@ -177,9 +177,10 @@ function remember(args: string[], data: string, cwd: string): void {
     ['the statement', statement],
     ['the rationale', values.rationale],
     ['the source', values.source],
+    ['the anchor', values.anchor],
   ] as const) {
     if (text === undefined) continue;
-    const why = refusal(text, what === 'the source' ? undefined : terms);
+    const why = refusal(text, terms);
     if (why !== null) throw new Refusal(`not remembered: ${what} is refused because ${why}`);
   }
 
@@ -207,7 +208,7 @@ function remember(args: string[], data: string, cwd: string): void {
 
 function list(data: string, cwd: string): void {
   const config = setUp(data);
-  process.stdout.write(renderAll(visibleItems(data, config, resolveContext(cwd, config, currentConfigDir()))));
+  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()))));
 }
 
 /**
@@ -225,7 +226,7 @@ function sessionStart(data: string): void {
     }
     const config = loadConfig(data);
     if (!consented(config)) return;
-    const items = visibleItems(data, config, resolveContext(cwd, config, currentConfigDir()));
+    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()));
     process.stdout.write(renderSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET));
   } catch {
     // Silent by design; see above.
@@ -255,21 +256,19 @@ function purge(args: string[], data: string): void {
   const scope: PurgeScope = {
     tenant: values.tenant,
     repository,
-    olderThanDays: days === undefined ? undefined : Number(days),
+    before: days === undefined ? undefined : new Date(Date.now() - Number(days) * 86_400_000).toISOString(),
     all: values.all,
   };
 
-  const config = loadConfig(data) ?? emptyConfig();
+  // Every tenant file, not only those the allowlist matches now: an item stored
+  // under an earlier allowlist must still be purgeable.
   const tenantsDir = join(data, 'tenants');
-  const allTenants = existsSync(tenantsDir)
-    ? readdirSync(tenantsDir).filter((f) => f.endsWith('.sqlite')).map((f) => f.slice(0, -'.sqlite'.length))
-    : [];
-  let tenants: string[];
-  if (values.tenant !== undefined) tenants = [values.tenant];
-  else if (repository !== undefined) {
-    const [owner = '', repo = ''] = repository.split('/');
-    tenants = matchingTenants(config, owner, repo);
-  } else tenants = allTenants;
+  const tenants =
+    values.tenant !== undefined
+      ? [values.tenant]
+      : existsSync(tenantsDir)
+        ? readdirSync(tenantsDir).filter((f) => f.endsWith('.sqlite')).map((f) => f.slice(0, -'.sqlite'.length))
+        : [];
   const files = tenants.filter((t) => TENANT_NAME.test(t)).map((t) => tenantFile(data, t));
   if (values.all === true || days !== undefined) files.push(personFile(data));
 

@@ -37,7 +37,6 @@ import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, write
 import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
 var DEFAULT_SESSION_BUDGET = 300;
-var MAX_BUDGET = 2e3;
 var TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
 var ConfigError = class extends Error {
@@ -70,8 +69,8 @@ function loadConfig(data) {
   }
   const optIns = c.optIns ?? { transcripts: false, failingCommands: false };
   const budget = c.sessionBudget;
-  if (budget !== void 0 && !(Number.isInteger(budget) && budget >= 0 && budget <= MAX_BUDGET)) {
-    throw new ConfigError(`sessionBudget must be a whole number from 0 to ${MAX_BUDGET}`);
+  if (budget !== void 0 && !(Number.isInteger(budget) && budget >= 0)) {
+    throw new ConfigError("sessionBudget must be a whole number, 0 or more");
   }
   return {
     tenants: c.tenants,
@@ -124,7 +123,7 @@ function matchingTenants(config, owner, repo) {
   ).sort();
 }
 function resolveContext(cwd, config, configDir) {
-  const url = git(cwd, "remote", "get-url", "origin");
+  const url = git(cwd, "config", "--get", "remote.origin.url");
   const parsed = url === null ? null : parseGitHubRemote(url);
   if (parsed === null) return { repository: null, owner: null, tenant: null, reason: "no github.com origin remote here" };
   const repository = `${parsed.owner}/${parsed.repo}`;
@@ -467,11 +466,16 @@ function refusal(text, organisationTerms2) {
     return "it carries a webhook URL, which is a credential";
   }
   if (/[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/.test(text)) return "it carries an email address";
-  if (/(?<![\w@/.])@[a-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/.test(text.replace(/`[^`]*`/g, ""))) {
+  if (/(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/.test(text)) {
     return "it carries a person's handle";
   }
   if (organisationTerms2 !== void 0) {
-    const reasons = codeFreeViolations(text, organisationTerms2);
+    const reasons = codeFreeViolations(text);
+    const visible2 = visibleText(text);
+    const named = organisationTerms2.some(
+      (t) => t.length >= 2 && new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu").test(visible2)
+    );
+    if (named) reasons.push("an organisation or repository name");
     if (reasons.length > 0) return `a person or global item must be organisation-free, and this has: ${reasons.join(", ")}`;
   }
   return null;
@@ -572,13 +576,13 @@ function buildConsentPlan(config, storageLocation) {
     optIns: { ...config.optIns },
     storageLocation,
     retention: [
-      "Statements carrying a secret, an email address, a handle or a webhook URL are refused and never stored",
+      "Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored",
       "Person and global statements are refused unless they name no code, path, tenant or repository",
-      "Items are kept until you purge them: memory purge --tenant, --repo, --older-than or --all",
+      "Items are kept until you purge them with memory purge --tenant, --repo or --all",
+      "memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown",
       "Each tenant has its own file; a session opens only the tenant its repository and config allow",
       "Nothing is uploaded; the store never leaves this machine"
-    ],
-    writeOperations: "none"
+    ]
   };
 }
 
@@ -594,7 +598,6 @@ function recordAudit(db, action, subject, metadata = {}) {
 }
 
 // src/consent/purge.ts
-var cutoff = (scope) => new Date(Date.now() - (scope.olderThanDays ?? 0) * 864e5).toISOString();
 var count = (db, sql, ...params) => db.prepare(sql).get(...params).n;
 function itemClause(scope) {
   if (scope.all === true || scope.tenant !== void 0) return { where: "1=1", params: [] };
@@ -606,8 +609,8 @@ function previewPurge(db, scope) {
   const items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${where}`, ...params);
   let evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where})`, ...params);
   let returnedToProposed = 0;
-  if (scope.olderThanDays !== void 0) {
-    const before = cutoff(scope);
+  const before = scope.before;
+  if (before !== void 0) {
     evidence = count(db, "SELECT COUNT(*) AS n FROM evidence WHERE captured_at < ?", before);
     returnedToProposed = count(
       db,
@@ -624,18 +627,18 @@ function executePurge(db, scope) {
   db.exec("BEGIN");
   try {
     db.prepare(`DELETE FROM items WHERE ${where}`).run(...params);
-    if (scope.olderThanDays !== void 0) {
-      db.prepare("DELETE FROM evidence WHERE captured_at < ?").run(cutoff(scope));
+    if (scope.before !== void 0) {
+      db.prepare("DELETE FROM evidence WHERE captured_at < ?").run(scope.before);
       db.prepare(
         "UPDATE items SET status = 'proposed' WHERE NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)"
       ).run();
     }
+    recordAudit(db, "purge", null, { scope, removed: preview });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  recordAudit(db, "purge", null, { scope, removed: preview });
   return preview;
 }
 
@@ -772,7 +775,7 @@ function organisationTerms(config, context) {
   if (context.repository !== null) for (const part of context.repository.split("/")) terms.add(part);
   return [...terms];
 }
-function visibleItems(data, config, context) {
+function visibleItems(data, context) {
   const out = [];
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const db = openStore(tenantFile(data, context.tenant), false);
@@ -837,7 +840,7 @@ function anchorAt(cwd, spec) {
   if (m[2] === void 0) return { path: clean, commit, citedHash: sha256(text) };
   const start = Number(m[2]);
   const end = m[3] === void 0 ? start : Number(m[3]);
-  const lines = text.split("\n");
+  const lines = text === "" ? [] : text.split("\n");
   if (text.endsWith("\n")) lines.pop();
   if (start < 1 || end < start || end > lines.length) throw new Refusal(`${clean} has ${lines.length} lines; ${start}-${end} is outside it`);
   return { path: clean, start, end, commit, citedHash: sha256(lines.slice(start - 1, end).join("\n")) };
@@ -870,10 +873,11 @@ function remember(args, data, cwd) {
   for (const [what, text] of [
     ["the statement", statement],
     ["the rationale", values.rationale],
-    ["the source", values.source]
+    ["the source", values.source],
+    ["the anchor", values.anchor]
   ]) {
     if (text === void 0) continue;
-    const why = refusal(text, what === "the source" ? void 0 : terms);
+    const why = refusal(text, terms);
     if (why !== null) throw new Refusal(`not remembered: ${what} is refused because ${why}`);
   }
   const anchors = values.anchor === void 0 ? [] : [anchorAt(cwd, values.anchor)];
@@ -899,7 +903,7 @@ function remember(args, data, cwd) {
 }
 function list(data, cwd) {
   const config = setUp(data);
-  process.stdout.write(renderAll(visibleItems(data, config, resolveContext(cwd, config, currentConfigDir()))));
+  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()))));
 }
 function sessionStart(data) {
   try {
@@ -911,7 +915,7 @@ function sessionStart(data) {
     }
     const config = loadConfig(data);
     if (!consented(config)) return;
-    const items = visibleItems(data, config, resolveContext(cwd, config, currentConfigDir()));
+    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()));
     process.stdout.write(renderSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET));
   } catch {
   }
@@ -939,18 +943,11 @@ function purge(args, data) {
   const scope = {
     tenant: values.tenant,
     repository,
-    olderThanDays: days === void 0 ? void 0 : Number(days),
+    before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const config = loadConfig(data) ?? emptyConfig();
   const tenantsDir = join4(data, "tenants");
-  const allTenants = existsSync3(tenantsDir) ? readdirSync(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
-  let tenants;
-  if (values.tenant !== void 0) tenants = [values.tenant];
-  else if (repository !== void 0) {
-    const [owner = "", repo = ""] = repository.split("/");
-    tenants = matchingTenants(config, owner, repo);
-  } else tenants = allTenants;
+  const tenants = values.tenant !== void 0 ? [values.tenant] : existsSync3(tenantsDir) ? readdirSync(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
   const files = tenants.filter((t) => TENANT_NAME.test(t)).map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0) files.push(personFile(data));
   const report = {};

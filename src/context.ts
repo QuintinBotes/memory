@@ -50,7 +50,9 @@ export function matchingTenants(config: Config, owner: string, repo: string): st
  * mean no tenant.
  */
 export function resolveContext(cwd: string, config: Config, configDir: string): Context {
-  const url = git(cwd, 'remote', 'get-url', 'origin');
+  // The configured value, not `remote get-url`, which applies url.*.insteadOf
+  // rewrites and could make another host's checkout read as a github.com one.
+  const url = git(cwd, 'config', '--get', 'remote.origin.url');
   const parsed = url === null ? null : parseGitHubRemote(url);
   if (parsed === null) return { repository: null, owner: null, tenant: null, reason: 'no github.com origin remote here' };
   const repository = `${parsed.owner}/${parsed.repo}`;

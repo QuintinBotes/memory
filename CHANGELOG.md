@@ -22,10 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opt-ins makes memory inert until the new plan is confirmed.
 - `memory remember` stores one active item with scope, type, optional anchor
   (path, lines, commit, cited-text hash) and source, with provenance evidence.
-  It refuses secrets (Review Voice's redaction patterns), private key headers,
-  email addresses, handles, webhook URLs and multi-line text, and refuses
-  person and global items that are not organisation-free (Orbit's code-free
-  check, with every tenant, owner and repository name as a forbidden term).
+  It refuses credentials that match Review Voice's redaction patterns,
+  private key headers, email addresses, handles in any case, webhook URLs and
+  multi-line text, and refuses person and global items, their source
+  included, that are not organisation-free (Orbit's code-free check, plus
+  every tenant, owner and repository name of two or more characters).
 - The `SessionStart` hook prints the visible items, one line each, ranked by
   scope, support and id, whole items only, within `sessionBudget` (300
   estimated tokens by default, 0 turns it off). The output is byte-identical
@@ -34,5 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which previews first, deletes only with `--confirm`, returns items left
   without evidence to proposed, and keeps its audit entry.
 - `/memory:remember`, which only the person can invoke.
+- SECURITY.md: how to report a vulnerability, and what the isolation and the
+  refusal do and do not protect. Node 22.13 or newer is required, where
+  `node:sqlite` needs no flag.
 - The repository: build, tests, CI on Ubuntu and macOS with Node 22 and 24,
   and the plugin and marketplace manifests.

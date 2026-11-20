@@ -11,7 +11,6 @@ export interface ConsentPlan {
   optIns: { transcripts: boolean; failingCommands: boolean };
   storageLocation: string;
   retention: string[];
-  writeOperations: 'none';
 }
 
 /**
@@ -30,12 +29,12 @@ export function buildConsentPlan(config: Config, storageLocation: string): Conse
     optIns: { ...config.optIns },
     storageLocation,
     retention: [
-      'Statements carrying a secret, an email address, a handle or a webhook URL are refused and never stored',
+      'Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored',
       'Person and global statements are refused unless they name no code, path, tenant or repository',
-      'Items are kept until you purge them: memory purge --tenant, --repo, --older-than or --all',
+      'Items are kept until you purge them with memory purge --tenant, --repo or --all',
+      'memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown',
       'Each tenant has its own file; a session opens only the tenant its repository and config allow',
       'Nothing is uploaded; the store never leaves this machine',
     ],
-    writeOperations: 'none',
   };
 }

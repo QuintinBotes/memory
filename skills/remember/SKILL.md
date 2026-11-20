@@ -25,8 +25,11 @@ The person asked memory to remember: `$ARGUMENTS`
 5. Run, from the repository the statement is about:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs" remember --scope <scope> --type <type> -- "<statement>"
+   node "${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs" remember --scope <scope> --type <type> -- '<statement>'
    ```
+
+   Put the statement in single quotes, and write each `'` inside it as
+   `'\''`, so the shell expands nothing in it.
 
 6. Report the output line. If memory refused the statement, say why in one
    sentence and offer a rewording without what it refused. Never retry with a

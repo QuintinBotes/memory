@@ -6,7 +6,8 @@ import { recordAudit } from '../store/audit.ts';
 export interface PurgeScope {
   tenant?: string | undefined;
   repository?: string | undefined;
-  olderThanDays?: number | undefined;
+  /** Evidence captured before this ISO time is deleted; computed once, so preview and delete agree. */
+  before?: string | undefined;
   all?: boolean | undefined;
 }
 
@@ -16,9 +17,6 @@ export interface PurgePreview {
   /** Items left with no evidence, which return to proposed instead of being deleted. */
   returnedToProposed: number;
 }
-
-const cutoff = (scope: PurgeScope): string =>
-  new Date(Date.now() - (scope.olderThanDays ?? 0) * 86_400_000).toISOString();
 
 const count = (db: DatabaseSync, sql: string, ...params: string[]): number =>
   (db.prepare(sql).get(...params) as { n: number }).n;
@@ -39,8 +37,8 @@ export function previewPurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
   const items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${where}`, ...params);
   let evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where})`, ...params);
   let returnedToProposed = 0;
-  if (scope.olderThanDays !== undefined) {
-    const before = cutoff(scope);
+  const before = scope.before;
+  if (before !== undefined) {
     evidence = count(db, 'SELECT COUNT(*) AS n FROM evidence WHERE captured_at < ?', before);
     returnedToProposed = count(
       db,
@@ -63,18 +61,19 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
   db.exec('BEGIN');
   try {
     db.prepare(`DELETE FROM items WHERE ${where}`).run(...params);
-    if (scope.olderThanDays !== undefined) {
-      db.prepare('DELETE FROM evidence WHERE captured_at < ?').run(cutoff(scope));
+    if (scope.before !== undefined) {
+      db.prepare('DELETE FROM evidence WHERE captured_at < ?').run(scope.before);
       db.prepare(
         "UPDATE items SET status = 'proposed' WHERE NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)",
       ).run();
     }
+    // In the same transaction: a purge that cannot be audited does not happen.
+    // The entry survives the purge it records.
+    recordAudit(db, 'purge', null, { scope, removed: preview });
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
-  // The audit entry survives the purge it records.
-  recordAudit(db, 'purge', null, { scope, removed: preview });
   return preview;
 }

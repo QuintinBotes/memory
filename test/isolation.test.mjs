@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { setup, repo, run, remember, sessionStart } from './helpers.mjs';
 
 const REPO_ITEM = 'Releases are cut from the main branch only';
@@ -96,4 +97,13 @@ test('a configuration edited by hand, after consent, makes memory inert until co
   const r = remember(s.acmeApi, s.data, s.configA, 'Another statement', '--scope', 'person');
   assert.equal(r.status, 1);
   assert.match(r.stderr, /memory init/);
+});
+
+test('a git URL rewrite cannot turn another host into a tenant', () => {
+  const s = seeded();
+  const other = repo(s.base, 'elsewhere/web', 'https://gitlab.example.com/team/web.git');
+  execFileSync('git', ['config', 'url.https://github.com/acme/.insteadOf', 'https://gitlab.example.com/team/'], { cwd: other });
+  const out = sessionStart(other, s.data, s.configA).stdout;
+  assert.doesNotMatch(out, new RegExp(ORG_ITEM));
+  assert.match(out, new RegExp(PERSON_ITEM));
 });

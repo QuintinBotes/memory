@@ -37,7 +37,7 @@ one client's repositories never reaches another organisation's work.
 - **Off until measured.** Each capability ships off and is turned on only when
   its on/off measurement shows it is no worse.
 - **Local.** No network calls at read time, no model at read time, no runtime
-  dependencies. Node 22 or newer.
+  dependencies. Node 22.13 or newer, where `node:sqlite` needs no flag.
 
 ## Using it
 
@@ -53,9 +53,9 @@ tenants and bind the current Claude Code config (`CLAUDE_CONFIG_DIR`, or the
 default config) to the tenants it may open:
 
 ```bash
-M="node ~/.claude/plugins/marketplaces/memory/dist/memory.mjs"   # or your config's plugin path
-$M init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme
-$M init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme --confirm
+memory() { node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/memory/dist/memory.mjs" "$@"; }
+memory init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme
+memory init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme --confirm
 ```
 
 The first command prints the plan: tenants, bindings, what is stored, where,
@@ -66,24 +66,26 @@ Then, in a session, `/memory:remember Releases are cut from the main branch
 only`, or from a terminal:
 
 ```bash
-$M remember --scope repository --type convention -- "Releases are cut from the main branch only"
-$M remember --scope person --type preference -- "Explain changes in plain English"
-$M list
-$M purge --repo acme/api            # preview; add --confirm to delete
+memory remember --scope repository --type convention -- 'Releases are cut from the main branch only'
+memory remember --scope person --type preference -- 'Explain changes in plain English'
+memory list
+memory purge --repo acme/api            # preview; add --confirm to delete
 ```
 
 Scopes: `repository` (this repository), `organisation` (every repository of
 this GitHub owner), `person` (you, everywhere) and `global` (facts about the
 tools). Person and global items must name no code, path, tenant or
-repository. Anything carrying a secret, an email address, a handle or a
-webhook URL is refused and never stored.
+repository. Anything carrying a credential that matches a known pattern, a
+private key header, an email address, a handle or a webhook URL is refused
+and never stored. Pattern matching cannot recognise a credential that does
+not look like one (see [SECURITY.md](SECURITY.md)).
 
 At session start, the items this repository and config may see are printed
 in one line each, within `sessionBudget` estimated tokens (300 by default, 0
 turns it off, set in `config.json` in the data directory).
 
 An agent can run the command line itself. To be asked before it remembers
-anything, add an ask rule such as `Bash(*memory.mjs remember*)` to your
+anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your
 Claude Code permissions.
 
 Data lives in `~/Library/Application Support/claude-code-memory` on macOS,
@@ -101,8 +103,9 @@ on Linux, or wherever `MEMORY_DATA_DIR` points: `config.json`, one
 | A failing command that matches a known failure | 120 tokens |
 | A diff, at review or commit | 600 tokens |
 
-A hook with nothing to say prints nothing. Only the session-start slice
-exists so far; the other moments arrive with later slices.
+A hook with nothing to say prints nothing. Only the slice at session start
+exists so far, not yet after a compaction; the other moments arrive with
+later slices.
 
 ## Code anchor providers
 

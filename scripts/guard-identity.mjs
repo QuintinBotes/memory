@@ -58,6 +58,7 @@ const ALLOWLIST = new Set([
   'README.md',
   'CHANGELOG.md',
   'CONTRIBUTING.md',
+  'SECURITY.md',
   '.claude-plugin/marketplace.json',
   '.claude-plugin/plugin.json',
   'scripts/guard-identity.mjs',

@@ -21,7 +21,6 @@ export interface Config {
 }
 
 export const DEFAULT_SESSION_BUDGET = 300;
-export const MAX_BUDGET = 2000;
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
 
@@ -62,8 +61,8 @@ export function loadConfig(data: string): Config | null {
   }
   const optIns = c.optIns ?? { transcripts: false, failingCommands: false };
   const budget = c.sessionBudget;
-  if (budget !== undefined && !(Number.isInteger(budget) && budget >= 0 && budget <= MAX_BUDGET)) {
-    throw new ConfigError(`sessionBudget must be a whole number from 0 to ${MAX_BUDGET}`);
+  if (budget !== undefined && !(Number.isInteger(budget) && budget >= 0)) {
+    throw new ConfigError('sessionBudget must be a whole number, 0 or more');
   }
   return {
     tenants: c.tenants,

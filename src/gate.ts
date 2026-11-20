@@ -1,5 +1,5 @@
 import { redact } from './redact/redact.ts';
-import { codeFreeViolations } from './codefree.ts';
+import { codeFreeViolations, visibleText } from './codefree.ts';
 
 export const MAX_STATEMENT = 300;
 
@@ -26,13 +26,23 @@ export function refusal(text: string, organisationTerms?: readonly string[]): st
     return 'it carries a webhook URL, which is a credential';
   }
   if (/[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/.test(text)) return 'it carries an email address';
-  // An @handle, but not a package scope (@types/node), a decorator call or a dotted name.
-  if (/(?<![\w@/.])@[a-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/.test(text.replace(/`[^`]*`/g, ''))) {
+  // An @handle in any case, in code spans too, but not a package scope
+  // (@types/node), a decorator call or a dotted name. An annotation such as
+  // @Override is refused as well: refusing is the safe direction.
+  if (/(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/.test(text)) {
     return "it carries a person's handle";
   }
 
   if (organisationTerms !== undefined) {
-    const reasons = codeFreeViolations(text, organisationTerms);
+    // Terms are matched here rather than by the copied check, which skips names
+    // shorter than three characters; a repository named "ui" is still a name.
+    // shortcut: one-character names are not matched, as they would refuse most text.
+    const reasons = codeFreeViolations(text);
+    const visible = visibleText(text);
+    const named = organisationTerms.some(
+      (t) => t.length >= 2 && new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'iu').test(visible),
+    );
+    if (named) reasons.push('an organisation or repository name');
     if (reasons.length > 0) return `a person or global item must be organisation-free, and this has: ${reasons.join(', ')}`;
   }
   return null;
