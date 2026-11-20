@@ -168,11 +168,18 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   for (const [file, list] of byFile) {
     const db = openStore(file, true)!;
     try {
-      const known = db.prepare("SELECT id, status FROM items WHERE tenant = ? AND statement_key = ? ORDER BY status = 'rejected' DESC LIMIT 1");
+      // A tombstone blocks the statement tenant-wide; any other item only where its scope covers the candidate's.
+      const known = db.prepare(
+        `SELECT id, status FROM items WHERE tenant = ? AND statement_key = ?
+           AND (status IN ('rejected', 'expired') OR tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
+         ORDER BY status = 'rejected' DESC LIMIT 1`,
+      );
       const reject = db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'");
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list) {
-        const was = known.get(c.tenant, statementKey(c.statement)) as { id: string; status: string } | undefined;
+        const was = known.get(c.tenant, statementKey(c.statement), c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as
+          | { id: string; status: string }
+          | undefined;
         if (was !== undefined && c.status === 'rejected' && was.status === 'proposed') {
           // Rejected in the retro after it was proposed here: the owner's no stands.
           reject.run(c.validTo ?? new Date().toISOString(), c.statusReason ?? null, was.id);

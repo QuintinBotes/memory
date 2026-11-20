@@ -466,3 +466,16 @@ test('an approved note keeps its symbol anchor through the session-start re-chec
   assert.match(sessionStart(s.acmeApi, s.data, s.configA).stdout, /consume is called with the ledger lock held \(src\/ledger\.ts#consume#function\)/);
   assert.equal(items(s.data, 'tenants/acme.sqlite', `id = '${id}'`)[0].status, 'active');
 });
+
+test('the same statement in two repositories of one tenant is proposed for each', () => {
+  const s = silos();
+  write(join(s.acmeWeb, '.stack', 'review-standards.md'), '- Every public handler validates its input\n');
+  const path = join(s.data, 'config.json');
+  const config = JSON.parse(readFileSync(path, 'utf8'));
+  config.imports[s.acmeWeb] = { standards: '.stack/review-standards.md' };
+  writeFileSync(path, JSON.stringify(config));
+  importSilos(s);
+  const rows = items(s.data, 'tenants/acme.sqlite', "statement = 'Every public handler validates its input'");
+  assert.deepEqual(rows.map((r) => r.scope_key).sort(), ['acme/api', 'acme/web']);
+  assert.equal(importSilos(s).proposed, 0);
+});

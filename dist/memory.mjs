@@ -1138,11 +1138,15 @@ function importSilos(config, data, configDir, dryRun) {
   for (const [file, list2] of byFile) {
     const db = openStore(file, true);
     try {
-      const known = db.prepare("SELECT id, status FROM items WHERE tenant = ? AND statement_key = ? ORDER BY status = 'rejected' DESC LIMIT 1");
+      const known = db.prepare(
+        `SELECT id, status FROM items WHERE tenant = ? AND statement_key = ?
+           AND (status IN ('rejected', 'expired') OR tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
+         ORDER BY status = 'rejected' DESC LIMIT 1`
+      );
       const reject = db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'");
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list2) {
-        const was = known.get(c.tenant, statementKey(c.statement));
+        const was = known.get(c.tenant, statementKey(c.statement), c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
         if (was !== void 0 && c.status === "rejected" && was.status === "proposed") {
           reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
           added.tombstones++;
