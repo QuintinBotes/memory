@@ -55,6 +55,9 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   `,
+
+  // v2 - why an item went stale (slice 2), so the owner can see it before a recheck.
+  `ALTER TABLE items ADD COLUMN status_reason TEXT;`,
 ];
 
 /**

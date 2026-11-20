@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-20
+
+### Added
+
+- Anchored items are re-checked against the file at HEAD before they are
+  shown, at session start and in `memory list`. A deleted file (`path gone`)
+  or cited lines no longer found within 50 lines of their place (`cited text
+  gone`) make the item stale, out of recall, with the reason stored and an
+  audit entry. Lines that moved keep the item active and move its anchor; the
+  nearest copy wins. An uncommitted edit changes nothing. (#3)
+- `memory recheck [<id>]` checks this repository's anchored items, stale ones
+  included, and restores those whose citation holds again.
+
 ## [0.1.0] - 2026-11-20
 
 ### Added

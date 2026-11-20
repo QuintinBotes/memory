@@ -8,8 +8,9 @@ a few of them when they matter, inside a fixed token budget. Items are kept
 per organisation (a "tenant"), one SQLite file each, so what you learned in
 one client's repositories never reaches another organisation's work.
 
-**Status: early.** Slice 1 of eighteen is in: the tenant-isolated store,
-`remember`, and the slice printed at session start. The plan is tracked in
+**Status: early.** Slices 1 and 2 of eighteen are in: the tenant-isolated
+store, `remember`, the slice printed at session start, and the re-check of
+every cited file and line before an item is shown. The plan is tracked in
 [#1](https://github.com/QuintinBotes/memory/issues/1), one issue per slice.
 
 ## Principles
@@ -69,6 +70,7 @@ only`, or from a terminal:
 memory remember --scope repository --type convention -- 'Releases are cut from the main branch only'
 memory remember --scope person --type preference -- 'Explain changes in plain English'
 memory list
+memory recheck                          # re-check anchored items, stale ones included
 memory purge --repo acme/api            # preview; add --confirm to delete
 ```
 
@@ -79,6 +81,12 @@ repository. Anything carrying a credential that matches a known pattern, a
 private key header, an email address, a handle or a webhook URL is refused
 and never stored. Pattern matching cannot recognise a credential that does
 not look like one (see [SECURITY.md](SECURITY.md)).
+
+An item anchored with `--anchor path:start-end` is re-checked against the
+file at HEAD before it is shown. If the file is gone, or the cited lines are
+no longer within 50 lines of where they were, the item goes stale and is not
+shown; if they moved, the anchor follows them. An uncommitted edit changes
+nothing. `memory recheck` restores a stale item whose citation holds again.
 
 At session start, the items this repository and config may see are printed
 in one line each, within `sessionBudget` estimated tokens (300 by default, 0

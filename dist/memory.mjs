@@ -563,6 +563,74 @@ function renderAll(items) {
   return items.length === 0 ? "" : compose(rank(items).map(row), 0);
 }
 
+// src/store/audit.ts
+import { randomUUID } from "node:crypto";
+function recordAudit(db, action, subject, metadata = {}) {
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO audit_events (audit_id, action, subject_type, subject_id, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, action, subject?.type ?? null, subject?.id ?? null, JSON.stringify(metadata), (/* @__PURE__ */ new Date()).toISOString());
+  return id;
+}
+
+// src/anchors.ts
+var WINDOW = 50;
+function checkAnchor(anchor, text) {
+  if (text === null) return { ok: false, reason: "path gone" };
+  if (anchor.start === void 0) {
+    return sha256(text) === anchor.citedHash ? { ok: true, anchor } : { ok: false, reason: "cited text gone" };
+  }
+  const lines = text === "" ? [] : text.split("\n");
+  if (text.endsWith("\n")) lines.pop();
+  const length = (anchor.end ?? anchor.start) - anchor.start + 1;
+  for (let d = 0; d <= WINDOW; d++) {
+    for (const start of d === 0 ? [anchor.start] : [anchor.start - d, anchor.start + d]) {
+      if (start < 1 || start + length - 1 > lines.length) continue;
+      if (sha256(lines.slice(start - 1, start - 1 + length).join("\n")) === anchor.citedHash) {
+        return { ok: true, anchor: { ...anchor, start, end: start + length - 1 } };
+      }
+    }
+  }
+  return { ok: false, reason: "cited text gone" };
+}
+function recheck(db, tenant, repository, root, statuses, id) {
+  const rows = db.prepare(
+    `SELECT id, status, anchors_json FROM items
+       WHERE tenant = ? AND scope = 'repository' AND scope_key = ? AND anchors_json != '[]'
+         AND status IN (${statuses.map(() => "?").join(", ")}) ${id === void 0 ? "" : "AND id = ?"}
+       ORDER BY id`
+  ).all(tenant, repository, ...statuses, ...id === void 0 ? [] : [id]);
+  const files = /* @__PURE__ */ new Map();
+  const read = (path) => {
+    if (!files.has(path)) files.set(path, git(root, "cat-file", "blob", `HEAD:${path}`));
+    return files.get(path);
+  };
+  const result = { checked: rows.length, current: 0, stale: 0, restored: 0 };
+  for (const row2 of rows) {
+    const anchors = JSON.parse(row2.anchors_json);
+    const checks = anchors.map((a) => checkAnchor(a, read(a.path)));
+    const failed = checks.find((c) => !c.ok);
+    if (failed !== void 0 && !failed.ok) {
+      result.stale++;
+      if (row2.status === "active") {
+        db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ?").run(failed.reason, row2.id);
+        recordAudit(db, "item_stale", { type: "item", id: row2.id }, { reason: failed.reason });
+      }
+      continue;
+    }
+    result.current++;
+    const moved = JSON.stringify(checks.map((c) => c.ok ? c.anchor : null));
+    if (moved !== row2.anchors_json) db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(moved, row2.id);
+    if (row2.status === "stale") {
+      result.restored++;
+      db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ?").run(row2.id);
+      recordAudit(db, "item_restored", { type: "item", id: row2.id });
+    }
+  }
+  return result;
+}
+
 // src/consent/plan.ts
 function buildConsentPlan(config, storageLocation) {
   return {
@@ -584,17 +652,6 @@ function buildConsentPlan(config, storageLocation) {
       "Nothing is uploaded; the store never leaves this machine"
     ]
   };
-}
-
-// src/store/audit.ts
-import { randomUUID } from "node:crypto";
-function recordAudit(db, action, subject, metadata = {}) {
-  const id = randomUUID();
-  db.prepare(
-    `INSERT INTO audit_events (audit_id, action, subject_type, subject_id, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, action, subject?.type ?? null, subject?.id ?? null, JSON.stringify(metadata), (/* @__PURE__ */ new Date()).toISOString());
-  return id;
 }
 
 // src/consent/purge.ts
@@ -690,7 +747,9 @@ var MIGRATIONS = [
     metadata_json TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
-  `
+  `,
+  // v2 - why an item went stale (slice 2), so the owner can see it before a recheck.
+  `ALTER TABLE items ADD COLUMN status_reason TEXT;`
 ];
 function openStore(path, create) {
   if (!existsSync2(path)) {
@@ -749,6 +808,8 @@ var USAGE = `usage: memory <command>
       remember one statement, active at once
   list
       every item visible here
+  recheck [<id>]
+      check anchored items against HEAD: a gone citation makes an item stale, one that holds again restores it
   session-start
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
@@ -775,13 +836,18 @@ function organisationTerms(config, context) {
   if (context.repository !== null) for (const part of context.repository.split("/")) terms.add(part);
   return [...terms];
 }
-function visibleItems(data, context) {
+function visibleItems(data, context, cwd) {
   const out = [];
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const db = openStore(tenantFile(data, context.tenant), false);
     if (db !== null) {
-      out.push(...tenantItems(db, context.tenant, context.repository, context.owner));
-      db.close();
+      try {
+        const root = git(cwd, "rev-parse", "--show-toplevel")?.trim();
+        if (root !== void 0) recheck(db, context.tenant, context.repository, root, ["active"]);
+        out.push(...tenantItems(db, context.tenant, context.repository, context.owner));
+      } finally {
+        db.close();
+      }
     }
   }
   const person = openStore(personFile(data), false);
@@ -903,7 +969,25 @@ function remember(args, data, cwd) {
 }
 function list(data, cwd) {
   const config = setUp(data);
-  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()))));
+  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd)));
+}
+function recheckCommand(args, data, cwd) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length > 1) throw new Refusal("give at most one item id", 2);
+  const id = positionals[0];
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
+  const root = git(cwd, "rev-parse", "--show-toplevel")?.trim();
+  const db = openStore(tenantFile(data, context.tenant), false);
+  if (root === void 0 || db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
+  try {
+    const result = recheck(db, context.tenant, context.repository, root, ["active", "stale"], id);
+    if (id !== void 0 && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
+    console.log(JSON.stringify(result, null, 2));
+  } finally {
+    db.close();
+  }
 }
 function sessionStart(data) {
   try {
@@ -915,7 +999,7 @@ function sessionStart(data) {
     }
     const config = loadConfig(data);
     if (!consented(config)) return;
-    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()));
+    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd);
     process.stdout.write(renderSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET));
   } catch {
   }
@@ -981,6 +1065,8 @@ function main(argv) {
       return remember(rest, data, process.cwd());
     case "list":
       return list(data, process.cwd());
+    case "recheck":
+      return recheckCommand(rest, data, process.cwd());
     case "session-start":
       return sessionStart(data);
     case "purge":
