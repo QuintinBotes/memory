@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-20
+
+### Added
+
+- Anchored items are re-checked against the file at HEAD before they are
+  shown, at session start and in `memory list`. A deleted file (`path gone`)
+  or cited lines no longer found within 50 lines of their place (`cited text
+  gone`) make the item stale, out of recall, with the reason stored and an
+  audit entry. Lines that moved keep the item active and move its anchor; the
+  nearest copy wins, and each move is audited with the old and new lines. An
+  uncommitted edit changes nothing. A stale item comes back at the next
+  session start once its citation holds again, so switching branches does
+  not lose it. A bare clone is checked against its own HEAD; a repository
+  with no HEAD, or a file git cannot read, changes nothing. (#3)
+- `memory recheck [<id>]` checks this repository's anchored items, searching
+  the whole file, restores those whose citation holds again, and lists the
+  stale ones with their reason.
+
+### Fixed
+
+- Opening a store whose schema is behind migrates under a write lock, so two
+  sessions upgrading at once no longer fail. git run by memory never waits on
+  a credential prompt.
+
 ## [0.1.0] - 2026-11-20
 
 ### Added

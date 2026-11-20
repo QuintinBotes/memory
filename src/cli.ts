@@ -20,6 +20,7 @@ import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
 import { SCOPES, TYPES, insertItem, personItems, sha256, tenantItems, type Anchor, type Scope, type Visible } from './items.ts';
 import { renderAll, renderSlice } from './slice.ts';
+import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { buildConsentPlan } from './consent/plan.ts';
 import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
 import { openStore } from './store/db.ts';
@@ -37,6 +38,9 @@ const USAGE = `usage: memory <command>
       remember one statement, active at once
   list
       every item visible here
+  recheck [<id>]
+      check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
+      one that holds again restores it
   session-start
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
@@ -71,14 +75,22 @@ function organisationTerms(config: Config, context: Context): string[] {
   return [...terms];
 }
 
-/** Active items this process may show here: the bound tenant's, then the person file's. */
-function visibleItems(data: string, context: Context): Visible[] {
+/**
+ * Active items this process may show here: the bound tenant's, then the person
+ * file's. Anchored items are re-checked against HEAD first, so an item whose
+ * citation is gone is never shown.
+ */
+function visibleItems(data: string, context: Context, cwd: string): Visible[] {
   const out: Visible[] = [];
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const db = openStore(tenantFile(data, context.tenant), false);
     if (db !== null) {
-      out.push(...tenantItems(db, context.tenant, context.repository, context.owner));
-      db.close();
+      try {
+        recheck(db, context.tenant, context.repository, cwd);
+        out.push(...tenantItems(db, context.tenant, context.repository, context.owner));
+      } finally {
+        db.close();
+      }
     }
   }
   const person = openStore(personFile(data), false);
@@ -140,10 +152,9 @@ function anchorAt(cwd: string, spec: string): Anchor {
   if (m[2] === undefined) return { path: clean, commit, citedHash: sha256(text) };
   const start = Number(m[2]);
   const end = m[3] === undefined ? start : Number(m[3]);
-  const lines = text === '' ? [] : text.split('\n');
-  if (text.endsWith('\n')) lines.pop();
+  const lines = fileLines(text);
   if (start < 1 || end < start || end > lines.length) throw new Refusal(`${clean} has ${lines.length} lines; ${start}-${end} is outside it`);
-  return { path: clean, start, end, commit, citedHash: sha256(lines.slice(start - 1, end).join('\n')) };
+  return { path: clean, start, end, commit, citedHash: rangeHash(lines, start, end) };
 }
 
 function remember(args: string[], data: string, cwd: string): void {
@@ -208,7 +219,26 @@ function remember(args: string[], data: string, cwd: string): void {
 
 function list(data: string, cwd: string): void {
   const config = setUp(data);
-  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()))));
+  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd)));
+}
+
+/** `memory recheck [<id>]`: check this repository's anchored items, stale ones included, and restore what holds. */
+function recheckCommand(args: string[], data: string, cwd: string): void {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length > 1) throw new Refusal('give at most one item id', 2);
+  const id = positionals[0];
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
+  const db = openStore(tenantFile(data, context.tenant), false);
+  if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
+  try {
+    const result = recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity });
+    if (id !== undefined && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
+    console.log(JSON.stringify(result, null, 2));
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -226,7 +256,7 @@ function sessionStart(data: string): void {
     }
     const config = loadConfig(data);
     if (!consented(config)) return;
-    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()));
+    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd);
     process.stdout.write(renderSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET));
   } catch {
     // Silent by design; see above.
@@ -304,6 +334,8 @@ function main(argv: string[]): void {
       return remember(rest, data, process.cwd());
     case 'list':
       return list(data, process.cwd());
+    case 'recheck':
+      return recheckCommand(rest, data, process.cwd());
     case 'session-start':
       return sessionStart(data);
     case 'purge':

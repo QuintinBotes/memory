@@ -46,6 +46,20 @@ export function repo(base, name, remote) {
   return dir;
 }
 
+/** Writes (or, for null, deletes) files in `dir` and commits them. */
+export function commit(dir, files, message = 'change') {
+  const git = (...args) => execFileSync('git', args, { cwd: dir, env: { ...process.env, ...gitEnv }, stdio: 'pipe' });
+  for (const [path, text] of Object.entries(files)) {
+    if (text === null) git('rm', '-q', path);
+    else {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), text);
+      git('add', path);
+    }
+  }
+  git('commit', '-q', '-m', message);
+}
+
 /** Runs the bundle with a clean environment: only what the test names reaches it. */
 export function run(args, { cwd, data, config, input } = {}) {
   const env = { PATH: process.env.PATH, HOME: process.env.HOME, ...gitEnv };
