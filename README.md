@@ -8,10 +8,9 @@ a few of them when they matter, inside a fixed token budget. Items are kept
 per organisation (a "tenant"), one SQLite file each, so what you learned in
 one client's repositories never reaches another organisation's work.
 
-**Status: under construction.** Nothing is usable yet. The plan is eighteen
-slices, each one issue with testable acceptance scenarios, tracked in
-[#1](https://github.com/QuintinBotes/memory/issues/1). Slice 1 is the
-tenant-isolated store, `remember`, and the slice printed at session start.
+**Status: early.** Slice 1 of eighteen is in: the tenant-isolated store,
+`remember`, and the slice printed at session start. The plan is tracked in
+[#1](https://github.com/QuintinBotes/memory/issues/1), one issue per slice.
 
 ## Principles
 
@@ -40,6 +39,58 @@ tenant-isolated store, `remember`, and the slice printed at session start.
 - **Local.** No network calls at read time, no model at read time, no runtime
   dependencies. Node 22 or newer.
 
+## Using it
+
+Install it in Claude Code:
+
+```
+/plugin marketplace add QuintinBotes/memory
+/plugin install memory@memory
+```
+
+Memory does nothing until you agree to a plan. In a terminal, name your
+tenants and bind the current Claude Code config (`CLAUDE_CONFIG_DIR`, or the
+default config) to the tenants it may open:
+
+```bash
+M="node ~/.claude/plugins/marketplaces/memory/dist/memory.mjs"   # or your config's plugin path
+$M init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme
+$M init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme --confirm
+```
+
+The first command prints the plan: tenants, bindings, what is stored, where,
+and for how long. The second saves it. Changing tenants, bindings or opt-ins
+later makes memory inert until you confirm the new plan.
+
+Then, in a session, `/memory:remember Releases are cut from the main branch
+only`, or from a terminal:
+
+```bash
+$M remember --scope repository --type convention -- "Releases are cut from the main branch only"
+$M remember --scope person --type preference -- "Explain changes in plain English"
+$M list
+$M purge --repo acme/api            # preview; add --confirm to delete
+```
+
+Scopes: `repository` (this repository), `organisation` (every repository of
+this GitHub owner), `person` (you, everywhere) and `global` (facts about the
+tools). Person and global items must name no code, path, tenant or
+repository. Anything carrying a secret, an email address, a handle or a
+webhook URL is refused and never stored.
+
+At session start, the items this repository and config may see are printed
+in one line each, within `sessionBudget` estimated tokens (300 by default, 0
+turns it off, set in `config.json` in the data directory).
+
+An agent can run the command line itself. To be asked before it remembers
+anything, add an ask rule such as `Bash(*memory.mjs remember*)` to your
+Claude Code permissions.
+
+Data lives in `~/Library/Application Support/claude-code-memory` on macOS,
+`$XDG_DATA_HOME/claude-code-memory` (or `~/.local/share/claude-code-memory`)
+on Linux, or wherever `MEMORY_DATA_DIR` points: `config.json`, one
+`tenants/<name>.sqlite` per tenant, and `person.sqlite`.
+
 ## Recall budgets
 
 | Moment | Budget |
@@ -50,7 +101,8 @@ tenant-isolated store, `remember`, and the slice printed at session start.
 | A failing command that matches a known failure | 120 tokens |
 | A diff, at review or commit | 600 tokens |
 
-A hook with nothing to say prints nothing.
+A hook with nothing to say prints nothing. Only the session-start slice
+exists so far; the other moments arrive with later slices.
 
 ## Code anchor providers
 
