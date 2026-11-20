@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { existsSync as existsSync3, readFileSync as readFileSync3, readdirSync } from "node:fs";
-import { isAbsolute, join as join4, normalize } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync as readdirSync2 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join5, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -27,8 +27,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 function pluginVersion() {
   const manifest = join(dirname(fileURLToPath(import.meta.url)), "..", ".claude-plugin", "plugin.json");
-  const parsed = JSON.parse(readFileSync(manifest, "utf8"));
-  return typeof parsed.version === "string" ? parsed.version : "0.0.0-unknown";
+  const parsed2 = JSON.parse(readFileSync(manifest, "utf8"));
+  return typeof parsed2.version === "string" ? parsed2.version : "0.0.0-unknown";
 }
 
 // src/config.ts
@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
+var SILOS = ["rejections", "standards", "policy", "notes"];
 var DEFAULT_SESSION_BUDGET = 300;
 var TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
@@ -72,11 +73,18 @@ function loadConfig(data) {
   if (budget !== void 0 && !(Number.isInteger(budget) && budget >= 0)) {
     throw new ConfigError("sessionBudget must be a whole number, 0 or more");
   }
+  const imports = c.imports;
+  if (imports !== void 0 && !(typeof imports === "object" && imports !== null && !Array.isArray(imports) && Object.values(imports).every(
+    (silos) => typeof silos === "object" && silos !== null && Object.entries(silos).every(([k, v]) => SILOS.includes(k) && typeof v === "string")
+  ))) {
+    throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(", ")}`);
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
     optIns: { transcripts: optIns.transcripts === true, failingCommands: optIns.failingCommands === true },
     ...budget !== void 0 ? { sessionBudget: budget } : {},
+    ...imports !== void 0 ? { imports } : {},
     ...c.consent !== void 0 ? { consent: c.consent } : {}
   };
 }
@@ -98,6 +106,14 @@ function planHash(config) {
   return createHash("sha256").update(canonical).digest("hex");
 }
 var consented = (config) => config !== null && config.consent?.planHash === planHash(config);
+function organisationTerms(config, repository) {
+  const terms = new Set(Object.keys(config.tenants));
+  for (const patterns of Object.values(config.tenants)) {
+    for (const p of patterns) for (const part of p.split("/")) if (part !== "*") terms.add(part);
+  }
+  if (repository !== null) for (const part of repository.split("/")) terms.add(part);
+  return [...terms];
+}
 
 // src/context.ts
 import { spawnSync } from "node:child_process";
@@ -126,11 +142,11 @@ function matchingTenants(config, owner, repo) {
 }
 function resolveContext(cwd, config, configDir) {
   const url = git(cwd, "config", "--get", "remote.origin.url");
-  const parsed = url === null ? null : parseGitHubRemote(url);
-  if (parsed === null) return { repository: null, owner: null, tenant: null, reason: "no github.com origin remote here" };
-  const repository = `${parsed.owner}/${parsed.repo}`;
-  const base = { repository, owner: parsed.owner };
-  const tenants = matchingTenants(config, parsed.owner, parsed.repo);
+  const parsed2 = url === null ? null : parseGitHubRemote(url);
+  if (parsed2 === null) return { repository: null, owner: null, tenant: null, reason: "no github.com origin remote here" };
+  const repository = `${parsed2.owner}/${parsed2.repo}`;
+  const base = { repository, owner: parsed2.owner };
+  const tenants = matchingTenants(config, parsed2.owner, parsed2.repo);
   if (tenants.length === 0) return { ...base, tenant: null, reason: `${repository} matches no tenant` };
   if (tenants.length > 1) return { ...base, tenant: null, reason: `${repository} matches more than one tenant` };
   const tenant = tenants[0];
@@ -457,6 +473,12 @@ function mentionsRepoTerm(text, repoTerms) {
 
 // src/gate.ts
 var MAX_STATEMENT = 300;
+function namesOrganisation(text, terms) {
+  const visible2 = visibleText(text);
+  return terms.some(
+    (t) => t.length >= 2 && new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu").test(visible2)
+  );
+}
 function refusal(text, organisationTerms2) {
   if (text.trim().length === 0) return "it is empty";
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(text)) return "it has a line break or a control character; one item is one line";
@@ -473,11 +495,7 @@ function refusal(text, organisationTerms2) {
   }
   if (organisationTerms2 !== void 0) {
     const reasons = codeFreeViolations(text);
-    const visible2 = visibleText(text);
-    const named = organisationTerms2.some(
-      (t) => t.length >= 2 && new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu").test(visible2)
-    );
-    if (named) reasons.push("an organisation or repository name");
+    if (namesOrganisation(text, organisationTerms2)) reasons.push("an organisation or repository name");
     if (reasons.length > 0) return `a person or global item must be organisation-free, and this has: ${reasons.join(", ")}`;
   }
   return null;
@@ -485,23 +503,54 @@ function refusal(text, organisationTerms2) {
 
 // src/items.ts
 import { createHash as createHash3, randomBytes } from "node:crypto";
+
+// src/store/audit.ts
+import { randomUUID } from "node:crypto";
+function recordAudit(db, action, subject, metadata = {}) {
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO audit_events (audit_id, action, subject_type, subject_id, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, action, subject?.type ?? null, subject?.id ?? null, JSON.stringify(metadata), (/* @__PURE__ */ new Date()).toISOString());
+  return id;
+}
+
+// src/items.ts
 var SCOPES = ["repository", "organisation", "person", "global"];
 var TYPES = ["preference", "convention", "decision", "hazard", "precedent", "failure-pattern", "repair-recipe"];
 var sha256 = (text) => createHash3("sha256").update(text).digest("hex");
+var statementKey = (text) => sha256(visibleText(text).replace(/^[ \t]*[-*][ \t]+/, "").replace(/\s+/g, " ").trim().replace(/[.;]+$/, "").toLowerCase());
 function insertItem(db, item) {
   const id = `m-${randomBytes(5).toString("hex")}`;
   const now = (/* @__PURE__ */ new Date()).toISOString();
+  const trust = item.trust ?? "owner";
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO items (id, tenant, scope, scope_key, type, statement, rationale, status, authority, origin_trust,
-         anchors_json, valid_from, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'advisory', 'owner', ?, ?, ?)`
-    ).run(id, item.tenant, item.scope, item.scopeKey, item.type, item.statement, item.rationale, JSON.stringify(item.anchors), now, now);
+      `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
+         authority, origin_trust, anchors_json, valid_from, valid_to, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      item.tenant,
+      item.scope,
+      item.scopeKey,
+      item.type,
+      item.statement,
+      statementKey(item.statement),
+      item.rationale,
+      item.status ?? "active",
+      item.statusReason ?? null,
+      trust,
+      JSON.stringify(item.anchors),
+      now,
+      item.validTo ?? null,
+      now
+    );
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
-       VALUES (?, ?, ?, 'owner', ?, ?, 'deterministic')`
-    ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, sha256(item.statement), now);
+       VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`
+    ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, trust, sha256(item.statement), now);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -531,6 +580,22 @@ function tenantItems(db, tenant, repository, owner) {
 function personItems(db) {
   return visible(db.prepare(`${SELECT} AND scope IN ('person', 'global')`).all());
 }
+var TOMBSTONE_DAYS = 30;
+function reduceTombstones(db) {
+  const due = `status IN ('rejected', 'expired') AND statement != '' AND valid_to < ?`;
+  const cutoff = new Date(Date.now() - TOMBSTONE_DAYS * 864e5).toISOString();
+  if (db.prepare(`SELECT 1 FROM items WHERE ${due} LIMIT 1`).get(cutoff) === void 0) return;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff);
+    const { changes } = db.prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, scope_key = '', anchors_json = '[]' WHERE ${due}`).run(cutoff);
+    recordAudit(db, "tombstones_reduced", null, { count: Number(changes) });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
 
 // src/slice.ts
 var SCOPE_POINTS = { repository: 2, organisation: 1, person: 1, global: 0.5 };
@@ -543,7 +608,7 @@ function rank(items) {
 }
 var oneLine = (text) => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 function row(item) {
-  const anchors = item.anchors.map((a) => a.start === void 0 ? a.path : `${a.path}:${a.start}-${a.end ?? a.start}`).join(", ");
+  const anchors = item.anchors.map((a) => a.symbol ?? (a.start === void 0 ? a.path : `${a.path}:${a.start}-${a.end ?? a.start}`)).join(", ");
   const source = item.source !== "" && item.source !== "remember" ? ` ${item.source}` : "";
   return oneLine(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ""}${source}`) + "\n";
 }
@@ -565,36 +630,26 @@ function renderAll(items) {
   return items.length === 0 ? "" : compose(rank(items).map(row), 0);
 }
 
-// src/store/audit.ts
-import { randomUUID } from "node:crypto";
-function recordAudit(db, action, subject, metadata = {}) {
-  const id = randomUUID();
-  db.prepare(
-    `INSERT INTO audit_events (audit_id, action, subject_type, subject_id, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, action, subject?.type ?? null, subject?.id ?? null, JSON.stringify(metadata), (/* @__PURE__ */ new Date()).toISOString());
-  return id;
-}
-
 // src/anchors.ts
 var WINDOW = 50;
 function fileLines(text) {
-  const lines = text === "" ? [] : text.split("\n");
-  if (text.endsWith("\n")) lines.pop();
-  return lines;
+  const lines2 = text === "" ? [] : text.split("\n");
+  if (text.endsWith("\n")) lines2.pop();
+  return lines2;
 }
-var rangeHash = (lines, start, end) => sha256(lines.slice(start - 1, end).join("\n"));
+var rangeHash = (lines2, start, end) => sha256(lines2.slice(start - 1, end).join("\n"));
 function checkAnchor(anchor, text, window = WINDOW) {
   if (text === null) return { ok: false, reason: "path gone" };
+  if (anchor.citedHash === void 0) return { ok: true, anchor };
   if (anchor.start === void 0) {
     return sha256(text) === anchor.citedHash ? { ok: true, anchor } : { ok: false, reason: "cited text gone" };
   }
-  const lines = fileLines(text);
+  const lines2 = fileLines(text);
   const length = (anchor.end ?? anchor.start) - anchor.start + 1;
-  for (let d = 0; d <= window && (anchor.start - d >= 1 || anchor.start + d + length - 1 <= lines.length); d++) {
+  for (let d = 0; d <= window && (anchor.start - d >= 1 || anchor.start + d + length - 1 <= lines2.length); d++) {
     for (const start of d === 0 ? [anchor.start] : [anchor.start - d, anchor.start + d]) {
-      if (start < 1 || start + length - 1 > lines.length) continue;
-      if (rangeHash(lines, start, start + length - 1) === anchor.citedHash) {
+      if (start < 1 || start + length - 1 > lines2.length) continue;
+      if (rangeHash(lines2, start, start + length - 1) === anchor.citedHash) {
         return { ok: true, anchor: { ...anchor, start, end: start + length - 1 } };
       }
     }
@@ -683,7 +738,8 @@ function buildConsentPlan(config, storageLocation) {
     dataCategories: [
       "Statements you ask memory to remember, each with its scope, type and an optional source reference",
       "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves",
-      "The working directory's git origin remote, read at session start to find its tenant"
+      "The working directory's git origin remote, read at session start to find its tenant",
+      "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval"
     ],
     optIns: { ...config.optIns },
     storageLocation,
@@ -691,6 +747,7 @@ function buildConsentPlan(config, storageLocation) {
       "Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored",
       "Person and global statements are refused unless they name no code, path, tenant or repository",
       "Items are kept until you purge them with memory purge --tenant, --repo or --all",
+      "A rejected item is kept as a tombstone, reduced to a hash of its statement and its type 30 days after rejection, so the statement is never proposed again",
       "memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown",
       "Each tenant has its own file; a session opens only the tenant its repository and config allow",
       "Nothing is uploaded; the store never leaves this machine"
@@ -715,7 +772,7 @@ function previewPurge(db, scope) {
     evidence = count(db, "SELECT COUNT(*) AS n FROM evidence WHERE captured_at < ?", before);
     returnedToProposed = count(
       db,
-      `SELECT COUNT(*) AS n FROM items i WHERE status != 'proposed'
+      `SELECT COUNT(*) AS n FROM items i WHERE status NOT IN ('proposed', 'rejected')
          AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = i.id AND e.captured_at >= ?)`,
       before
     );
@@ -731,7 +788,7 @@ function executePurge(db, scope) {
     if (scope.before !== void 0) {
       db.prepare("DELETE FROM evidence WHERE captured_at < ?").run(scope.before);
       db.prepare(
-        "UPDATE items SET status = 'proposed' WHERE NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)"
+        "UPDATE items SET status = 'proposed' WHERE status != 'rejected' AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)"
       ).run();
     }
     recordAudit(db, "purge", null, { scope, removed: preview });
@@ -742,6 +799,10 @@ function executePurge(db, scope) {
   }
   return preview;
 }
+
+// src/import/import.ts
+import { existsSync as existsSync3, lstatSync, readFileSync as readFileSync3, readdirSync, realpathSync, statSync } from "node:fs";
+import { join as join4, sep } from "node:path";
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
@@ -793,7 +854,15 @@ var MIGRATIONS = [
   );
   `,
   // v2 - why an item went stale (slice 2), so the owner can see it before a recheck.
-  `ALTER TABLE items ADD COLUMN status_reason TEXT;`
+  `ALTER TABLE items ADD COLUMN status_reason TEXT;`,
+  // v3 - the normalised statement's hash (slice 3): what a duplicate and a tombstone are matched by.
+  (db) => {
+    db.exec("ALTER TABLE items ADD COLUMN statement_key TEXT; CREATE INDEX idx_items_key ON items (tenant, statement_key);");
+    const set = db.prepare("UPDATE items SET statement_key = ? WHERE id = ?");
+    for (const r of db.prepare("SELECT id, statement FROM items").all()) {
+      set.run(statementKey(r.statement), r.id);
+    }
+  }
 ];
 function openStore(path, create) {
   if (!existsSync2(path)) {
@@ -808,7 +877,9 @@ function openStore(path, create) {
     db.exec("BEGIN IMMEDIATE");
     try {
       for (let v = version(); v < MIGRATIONS.length; v++) {
-        db.exec(MIGRATIONS[v]);
+        const migration = MIGRATIONS[v];
+        if (typeof migration === "string") db.exec(migration);
+        else migration(db);
         db.exec(`PRAGMA user_version = ${v + 1}`);
       }
       db.exec("COMMIT");
@@ -817,6 +888,7 @@ function openStore(path, create) {
       throw error;
     }
   }
+  reduceTombstones(db);
   return db;
 }
 
@@ -843,6 +915,279 @@ function dataDirectory(env = process.env) {
 var tenantFile = (data, tenant) => join3(data, "tenants", `${tenant}.sqlite`);
 var personFile = (data) => join3(data, "person.sqlite");
 
+// src/import/silos.ts
+import { isAbsolute, normalize } from "node:path";
+var parsed = (statements, rest = {}) => ({ statements, links: [], unreadable: [], skippedNotes: 0, ...rest });
+var unquote = (v) => /^"(.*)"$/.test(v) ? v.slice(1, -1) : /^'(.*)'$/.test(v) ? v.slice(1, -1).replace(/''/g, "'") : v;
+var lines = (text) => text.split(/\r?\n/);
+function markdown(text) {
+  const all = lines(text);
+  if (all[0]?.trim() === "---") {
+    const end = all.findIndex((l, i) => i > 0 && l.trim() === "---");
+    for (let i = 1; i < end; i++) {
+      const m = /^description:\s*(.*?)\s*$/.exec(all[i]);
+      if (m && m[1] !== "" && !/^[>|]/.test(m[1])) return parsed([{ line: i + 1, text: unquote(m[1]) }]);
+    }
+    return parsed([]);
+  }
+  const statements = [];
+  const links = [];
+  let fenced = false;
+  all.forEach((line, i) => {
+    if (/^\s*(?:```|~~~)/.test(line)) fenced = !fenced;
+    const item = fenced ? null : /^\s*[-*+]\s+(.*\S)\s*$/.exec(line);
+    if (!item) return;
+    const link = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(item[1]);
+    if (link === null) statements.push({ line: i + 1, text: item[1] });
+    else if (!/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(link[1])) links.push(link[1]);
+  });
+  return parsed(statements, { links });
+}
+var POLICY_KEYS = /* @__PURE__ */ new Set(["suppressed_patterns", "required_checks"]);
+function policy(text) {
+  const statements = [];
+  let key = "";
+  lines(text).forEach((line, i) => {
+    const top = /^([A-Za-z_][\w-]*):/.exec(line);
+    if (top) key = top[1];
+    const item = /^\s+-\s+(.*\S)\s*$/.exec(line);
+    if (!top && item && POLICY_KEYS.has(key)) statements.push({ line: i + 1, text: unquote(item[1]) });
+  });
+  return parsed(statements);
+}
+function jsonLines(text, each) {
+  const unreadable = [];
+  lines(text).forEach((raw, i) => {
+    if (raw.trim() === "") return;
+    let entry;
+    try {
+      entry = JSON.parse(raw);
+    } catch {
+    }
+    const ok = typeof entry === "object" && entry !== null && !Array.isArray(entry) && each(entry, i + 1);
+    if (!ok) unreadable.push(i + 1);
+  });
+  return unreadable;
+}
+function rejections(text) {
+  const statements = [];
+  const unreadable = jsonLines(text, (e, line) => {
+    if (typeof e["text"] !== "string" || e["text"].trim() === "") return false;
+    const at2 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? e["at"] : void 0;
+    statements.push({ line, text: e["text"].trim(), ...at2 !== void 0 ? { at: new Date(at2).toISOString() } : {} });
+    return true;
+  });
+  return parsed(statements, { unreadable });
+}
+var NOTE_TYPES = { gotcha: "hazard", invariant: "convention", decision: "decision" };
+var SYMBOL_KEY = /^([^#\s]+)#[^#\n]+#[^#\s]+$/;
+function notes(text) {
+  const statements = [];
+  let skippedNotes = 0;
+  const unreadable = jsonLines(text, (e, line) => {
+    const { kind, text: body, symbol } = e;
+    if (typeof kind !== "string" || typeof body !== "string" || body.trim() === "") return false;
+    if (symbol !== void 0 && (typeof symbol !== "string" || !SYMBOL_KEY.test(symbol) || !inside(symbolPath(symbol)))) return false;
+    const type = Object.hasOwn(NOTE_TYPES, kind) ? NOTE_TYPES[kind] : void 0;
+    if (type === void 0) {
+      skippedNotes++;
+      return true;
+    }
+    statements.push({ line, text: body.trim(), type, ...symbol !== void 0 ? { symbol } : {} });
+    return true;
+  });
+  return parsed(statements, { unreadable, skippedNotes });
+}
+var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
+var inside = (path) => !isAbsolute(path) && !normalize(path).split(/[\\/]/).includes("..");
+
+// src/import/import.ts
+function readInside(path, root) {
+  try {
+    if (!existsSync3(path)) return { reason: "not there" };
+    const link = lstatSync(path).isSymbolicLink();
+    const real = realpathSync(path);
+    const top = realpathSync(root);
+    if (!real.startsWith(top + sep)) return { reason: link ? "a symbolic link outside its folder" : "outside its folder" };
+    if (!statSync(real).isFile()) return { reason: "not a file" };
+    return { text: readFileSync3(real, "utf8") };
+  } catch (error) {
+    return { reason: `cannot be read (${error.code ?? "error"})` };
+  }
+}
+function namedRepositories(config, text) {
+  const named = /* @__PURE__ */ new Map();
+  const plain = text.replace(/https?:\/\/github\.com\//gi, " ");
+  for (const m of plain.matchAll(/(?<![\w./-])([a-z0-9][a-z0-9-]*)\/([a-z0-9._-]*[a-z0-9_-])/gi)) {
+    const [owner, repo] = [m[1].toLowerCase(), m[2].toLowerCase()];
+    const tenants = matchingTenants(config, owner, repo);
+    if (tenants.length === 1) named.set(`${owner}/${repo}`, tenants[0]);
+  }
+  return named;
+}
+function importSilos(config, data, configDir, dryRun) {
+  const report = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
+  const candidates = [];
+  const terms = organisationTerms(config, null);
+  const read = (path, root, parse) => {
+    const file = readInside(path, root);
+    if ("reason" in file) {
+      report.skippedFiles.push({ path, reason: file.reason });
+      return null;
+    }
+    const parsed2 = parse(file.text);
+    report.files.push({ path, statements: parsed2.statements.length });
+    report.skippedNotes += parsed2.skippedNotes;
+    for (const line of parsed2.unreadable) report.refused.push({ source: `${path}:${line}`, reason: "the line is not what this file format holds" });
+    return parsed2;
+  };
+  const refused = (source, why) => {
+    if (why !== null) report.refused.push({ source, reason: why });
+    return why !== null;
+  };
+  for (const dir of Object.keys(config.configs).sort()) {
+    const projects = join4(dir, "projects");
+    if (!existsSync3(projects)) continue;
+    for (const project of readdirSync(projects).sort()) {
+      const folder = join4(projects, project, "memory");
+      if (!existsSync3(folder) || !statSync(folder).isDirectory()) continue;
+      for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
+        const path = join4(folder, name);
+        const parsed2 = read(path, folder, markdown);
+        if (parsed2 === null) continue;
+        for (const link of parsed2.links) if (!existsSync3(join4(folder, link))) report.danglingLinks.push({ file: path, link });
+        for (const { line, text } of parsed2.statements) {
+          const source = `${path}:${line}`;
+          if (refused(source, refusal(text))) continue;
+          const named = namedRepositories(config, text);
+          const base = { statement: text, rationale: null, anchors: [], status: "proposed", trust: "agent" };
+          if (named.size > 1) {
+            refused(source, "it names more than one repository");
+          } else if (named.size === 1) {
+            const [repository, tenant] = [...named][0];
+            if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
+            candidates.push({ ...base, tenant, scope: "repository", scopeKey: repository, type: "convention", source });
+          } else {
+            if (refused(source, refusal(text, terms))) continue;
+            if (refused(source, namesOrganisation(name, terms) ? "its file name names an organisation" : null)) continue;
+            candidates.push({ ...base, tenant: "", scope: "person", scopeKey: "", type: "preference", source: `auto memory ${name}:${line}` });
+          }
+        }
+      }
+    }
+  }
+  const parsers = { rejections, standards: markdown, policy, notes };
+  for (const [checkout, silos] of Object.entries(config.imports ?? {}).sort()) {
+    const context = resolveContext(checkout, config, configDir);
+    for (const silo of SILOS) {
+      const rel = silos[silo];
+      if (rel === void 0) continue;
+      const path = join4(checkout, rel);
+      if (!inside(rel)) {
+        report.skippedFiles.push({ path, reason: "not a path inside the repository" });
+        continue;
+      }
+      if (context.tenant === null || context.repository === null) {
+        report.skippedFiles.push({ path, reason: context.reason });
+        continue;
+      }
+      const parsed2 = read(path, checkout, parsers[silo]);
+      for (const { line, text, type, symbol, at: at2 } of parsed2?.statements ?? []) {
+        const source = `${path}:${line}`;
+        if (refused(source, refusal(text)) || symbol !== void 0 && refused(source, refusal(symbol))) continue;
+        const anchors = symbol === void 0 ? [] : [{ path: symbolPath(symbol), symbol }];
+        candidates.push({
+          tenant: context.tenant,
+          scope: "repository",
+          scopeKey: context.repository,
+          type: type ?? "convention",
+          statement: text,
+          rationale: null,
+          anchors,
+          source,
+          trust: "owner",
+          ...silo === "rejections" ? { status: "rejected", validTo: at2 ?? (/* @__PURE__ */ new Date()).toISOString(), statusReason: "rejected in the retro record" } : { status: "proposed" }
+        });
+      }
+    }
+  }
+  if (dryRun) return report;
+  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0 };
+  candidates.sort((a, b) => Number(b.status === "rejected") - Number(a.status === "rejected"));
+  const byFile = /* @__PURE__ */ new Map();
+  for (const c of candidates) {
+    const file = c.tenant === "" ? personFile(data) : tenantFile(data, c.tenant);
+    byFile.set(file, [...byFile.get(file) ?? [], c]);
+  }
+  for (const [file, list2] of byFile) {
+    const db = openStore(file, true);
+    try {
+      const known = db.prepare("SELECT status FROM items WHERE tenant = ? AND statement_key = ? ORDER BY status = 'rejected' DESC LIMIT 1");
+      const added = { proposed: 0, tombstones: 0 };
+      for (const c of list2) {
+        const was = known.get(c.tenant, statementKey(c.statement));
+        if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
+        else {
+          insertItem(db, c);
+          added[c.status === "rejected" ? "tombstones" : "proposed"]++;
+        }
+      }
+      counts.proposed += added.proposed;
+      counts.tombstones += added.tombstones;
+      recordAudit(db, "import", null, added);
+    } finally {
+      db.close();
+    }
+  }
+  Object.assign(report, counts);
+  return report;
+}
+
+// src/review/review.ts
+function shadow(p) {
+  const signals = new Set(p.evidence.map((e) => e.source_ref)).size;
+  const owner = new Set(p.evidence.filter((e) => e.author_role === "owner").map((e) => e.source_ref)).size;
+  return { decision: signals >= 3 && owner >= 1 && p.contradictions === 0 ? "approve" : "hold", signals, owner };
+}
+function proposals(db, tenant, id) {
+  const rows = db.prepare(
+    `SELECT id, scope, scope_key, type, statement, origin_trust, contradictions, anchors_json FROM items
+       WHERE status = 'proposed' AND tenant = ? ${id === void 0 ? "" : "AND id = ?"} ORDER BY created_at, id`
+  ).all(tenant, ...id === void 0 ? [] : [id]);
+  const evidence = db.prepare("SELECT source_ref, author_role FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
+  for (const r of rows) r.evidence = evidence.all(r.id);
+  return rows;
+}
+function renderProposals(list2) {
+  return list2.map((p) => {
+    const g = shadow(p);
+    const where = p.scope_key === "" ? p.scope : `${p.scope} ${p.scope_key}`;
+    return [
+      oneLine(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}: ${p.statement}`),
+      ...p.evidence.map((e) => oneLine(`  evidence: ${e.source_ref} (${e.author_role})`)),
+      `  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? "" : "s"}, ${g.owner} from the owner)`
+    ].join("\n");
+  }).map((block) => `${block}
+`).join("");
+}
+function decide(db, p, decision, change) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const { changes } = "scope" in change ? db.prepare("UPDATE items SET status = 'active', scope = ?, scope_key = ?, valid_from = ? WHERE id = ? AND status = 'proposed'").run(change.scope, change.scopeKey, now, p.id) : db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'").run(now, change.reason, p.id);
+    if (changes !== 1) throw new Error(`proposal ${p.id} changed while it was being decided`);
+    recordAudit(db, decision === "approve" ? "proposal_approved" : "proposal_rejected", { type: "item", id: p.id }, {
+      decision,
+      shadow: shadow(p).decision,
+      ..."scope" in change ? { scope: change.scope } : {}
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 // src/cli.ts
 suppressSqliteExperimentalWarning();
 var USAGE = `usage: memory <command>
@@ -854,6 +1199,15 @@ var USAGE = `usage: memory <command>
       remember one statement, active at once
   list
       every item visible here
+  import [--dry-run]
+      read the silos (each bound config's auto memory, and the files under "imports" in config.json)
+      and store each statement as a proposal; with --dry-run, list the files and write nothing
+  review
+      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
+  approve <id> [--scope repository|organisation|person|global]
+      make a proposal active
+  reject <id> [--reason <text>]
+      keep a proposal as a tombstone, so the same statement is never proposed again
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -874,14 +1228,6 @@ function setUp(data) {
   const config = loadConfig(data);
   if (!consented(config)) throw new Refusal(NOT_SET_UP);
   return config;
-}
-function organisationTerms(config, context) {
-  const terms = new Set(Object.keys(config.tenants));
-  for (const patterns of Object.values(config.tenants)) {
-    for (const p of patterns) for (const part of p.split("/")) if (part !== "*") terms.add(part);
-  }
-  if (context.repository !== null) for (const part of context.repository.split("/")) terms.add(part);
-  return [...terms];
 }
 function visibleItems(data, context, cwd) {
   const out = [];
@@ -941,8 +1287,8 @@ function init(args, data) {
 function anchorAt(cwd, spec) {
   const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(spec);
   const path = m?.[1] ?? "";
-  const clean = normalize(path);
-  if (!m || isAbsolute(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
+  const clean = normalize2(path);
+  if (!m || isAbsolute2(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
     throw new Refusal("an anchor is a path inside the repository, as path or path:start-end");
   }
   const top = git(cwd, "rev-parse", "--show-toplevel")?.trim();
@@ -952,9 +1298,9 @@ function anchorAt(cwd, spec) {
   if (m[2] === void 0) return { path: clean, commit, citedHash: sha256(text) };
   const start = Number(m[2]);
   const end = m[3] === void 0 ? start : Number(m[3]);
-  const lines = fileLines(text);
-  if (start < 1 || end < start || end > lines.length) throw new Refusal(`${clean} has ${lines.length} lines; ${start}-${end} is outside it`);
-  return { path: clean, start, end, commit, citedHash: rangeHash(lines, start, end) };
+  const lines2 = fileLines(text);
+  if (start < 1 || end < start || end > lines2.length) throw new Refusal(`${clean} has ${lines2.length} lines; ${start}-${end} is outside it`);
+  return { path: clean, start, end, commit, citedHash: rangeHash(lines2, start, end) };
 }
 function remember(args, data, cwd) {
   const { values, positionals } = parseArgs({
@@ -980,7 +1326,7 @@ function remember(args, data, cwd) {
     throw new Refusal(`a ${scope} item needs a tenant, and ${context.reason}; only person and global items can be remembered here`);
   }
   if (values.anchor !== void 0 && scope !== "repository") throw new Refusal("only a repository item can have an anchor");
-  const terms = personal ? organisationTerms(config, context) : void 0;
+  const terms = personal ? organisationTerms(config, context.repository) : void 0;
   for (const [what, text] of [
     ["the statement", statement],
     ["the rationale", values.rationale],
@@ -1016,6 +1362,69 @@ function list(data, cwd) {
   const config = setUp(data);
   process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd)));
 }
+function importCommand(args, data) {
+  const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" } } });
+  const dryRun = values["dry-run"] === true;
+  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun), null, 2));
+  if (dryRun) console.error("Nothing was written. Run memory import without --dry-run to store these as proposals.");
+}
+function proposalStores(data, cwd) {
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  return [...context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }], { file: personFile(data), tenant: "" }];
+}
+function review(data, cwd) {
+  let out = "";
+  for (const { file, tenant } of proposalStores(data, cwd)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      out += renderProposals(proposals(db, tenant));
+    } finally {
+      db.close();
+    }
+  }
+  if (out === "") console.error("No proposals to review here.");
+  else process.stdout.write(`Memory proposals (statements recorded earlier, with their source; memory approve <id> or memory reject <id>):
+${out}`);
+}
+function decideCommand(args, data, cwd, decision) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: decision === "approve" ? { scope: { type: "string" } } : { reason: { type: "string" } }
+  });
+  if (positionals.length !== 1) throw new Refusal("give one proposal id", 2);
+  const id = positionals[0];
+  const scope = values.scope;
+  if (scope !== void 0 && !SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(", ")}`, 2);
+  const reason = typeof values.reason === "string" ? values.reason.trim() : "";
+  const why = reason === "" ? null : refusal(reason);
+  if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
+  for (const { file, tenant } of proposalStores(data, cwd)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      const [p] = proposals(db, tenant, id);
+      if (p === void 0) continue;
+      if (decision === "reject") {
+        decide(db, p, "reject", { reason: reason === "" ? null : reason });
+        console.log(`rejected ${id}; the same statement will not be proposed again`);
+        return;
+      }
+      const allowed = tenant === "" ? ["person", "global"] : p.scope === "repository" ? ["repository", "organisation"] : [p.scope];
+      const to = scope ?? p.scope;
+      if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(" or ")} only`);
+      if (to === "organisation" && p.anchors_json !== "[]") throw new Refusal("only a repository item can have an anchor");
+      const scopeKey = to === "organisation" && p.scope === "repository" ? p.scope_key.split("/")[0] : p.scope_key;
+      decide(db, p, "approve", { scope: to, scopeKey });
+      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""})`);
+      return;
+    } finally {
+      db.close();
+    }
+  }
+  throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+}
 function recheckCommand(args, data, cwd) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
   if (positionals.length > 1) throw new Refusal("give at most one item id", 2);
@@ -1037,7 +1446,7 @@ function sessionStart(data) {
   try {
     let cwd = process.cwd();
     try {
-      const input = JSON.parse(readFileSync3(0, "utf8"));
+      const input = JSON.parse(readFileSync4(0, "utf8"));
       if (typeof input.cwd === "string" && input.cwd.length > 0) cwd = input.cwd;
     } catch {
     }
@@ -1074,8 +1483,8 @@ function purge(args, data) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join4(data, "tenants");
-  const tenants = values.tenant !== void 0 ? [values.tenant] : existsSync3(tenantsDir) ? readdirSync(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
+  const tenantsDir = join5(data, "tenants");
+  const tenants = values.tenant !== void 0 ? [values.tenant] : existsSync4(tenantsDir) ? readdirSync2(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
   const files = tenants.filter((t) => TENANT_NAME.test(t)).map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0) files.push(personFile(data));
   const report = {};
@@ -1109,6 +1518,13 @@ function main(argv) {
       return remember(rest, data, process.cwd());
     case "list":
       return list(data, process.cwd());
+    case "import":
+      return importCommand(rest, data);
+    case "review":
+      return review(data, process.cwd());
+    case "approve":
+    case "reject":
+      return decideCommand(rest, data, process.cwd(), command);
     case "recheck":
       return recheckCommand(rest, data, process.cwd());
     case "session-start":

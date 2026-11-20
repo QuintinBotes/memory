@@ -8,9 +8,10 @@ a few of them when they matter, inside a fixed token budget. Items are kept
 per organisation (a "tenant"), one SQLite file each, so what you learned in
 one client's repositories never reaches another organisation's work.
 
-**Status: early.** Slices 1 and 2 of eighteen are in: the tenant-isolated
-store, `remember`, the slice printed at session start, and the re-check of
-every cited file and line before an item is shown. The plan is tracked in
+**Status: early.** Slices 1 to 3 of eighteen are in: the tenant-isolated
+store, `remember`, the slice printed at session start, the re-check of every
+cited file and line before an item is shown, and the import of what your
+existing silos already hold, as proposals you approve. The plan is tracked in
 [#1](https://github.com/QuintinBotes/memory/issues/1), one issue per slice.
 
 ## Principles
@@ -104,6 +105,46 @@ Data lives in `~/Library/Application Support/claude-code-memory` on macOS,
 `$XDG_DATA_HOME/claude-code-memory` (or `~/.local/share/claude-code-memory`)
 on Linux, or wherever `MEMORY_DATA_DIR` points: `config.json`, one
 `tenants/<name>.sqlite` per tenant, and `person.sqlite`.
+
+## Importing what you already have
+
+`memory import --dry-run` lists every file it would read with the number of
+statements each holds, the index links that point at nothing, and what it
+would refuse; `memory import` stores each statement as a proposal. It reads
+the auto memory of every Claude Code config bound in the plan (one statement
+per topic file, its `description`, and the list items of an index that are
+not links), and, for each checkout listed under `imports` in `config.json`,
+the files you name there:
+
+```json
+"imports": {
+  "/path/to/acme-api": {
+    "standards": ".stack/review-standards.md",
+    "rejections": ".git/stack/retro-rejected.jsonl",
+    "policy": ".review-voice/policy.yaml",
+    "notes": "notes.jsonl"
+  }
+}
+```
+
+A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
+"...", "symbol": "path#qualified_name#kind"}`; only `gotcha`, `invariant` and
+`decision` notes are imported. A line of the rejections file arrives as a
+tombstone. An auto memory statement goes to the tenant of the repository it
+names, as `owner/repo`, when the config it came from is bound to that tenant,
+or to person scope when it is organisation-free; anything else is reported
+and not stored. Auto memory carries agent trust, since a model wrote it.
+
+```bash
+memory review                          # proposals for this repository's tenant and you
+memory approve m-1a2b3c4d5e            # add --scope organisation to widen it
+memory reject m-1a2b3c4d5e --reason 'too broad'
+```
+
+A rejected statement is kept as a tombstone and never proposed again; after
+30 days only its hash and type remain. Approve and reject are terminal
+commands. To be asked before an agent runs one, add ask rules such as
+`Bash(*memory.mjs*approve*)` and `Bash(*memory.mjs*reject*)`.
 
 ## Recall budgets
 

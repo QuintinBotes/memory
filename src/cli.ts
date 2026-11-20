@@ -12,6 +12,7 @@ import {
   currentConfigDir,
   emptyConfig,
   loadConfig,
+  organisationTerms,
   planHash,
   saveConfig,
   type Config,
@@ -23,6 +24,8 @@ import { renderAll, renderSlice } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { buildConsentPlan } from './consent/plan.ts';
 import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
+import { importSilos } from './import/import.ts';
+import { decide, proposals, renderProposals } from './review/review.ts';
 import { openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, personFile, tenantFile } from './store/paths.ts';
@@ -38,6 +41,15 @@ const USAGE = `usage: memory <command>
       remember one statement, active at once
   list
       every item visible here
+  import [--dry-run]
+      read the silos (each bound config's auto memory, and the files under "imports" in config.json)
+      and store each statement as a proposal; with --dry-run, list the files and write nothing
+  review
+      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
+  approve <id> [--scope repository|organisation|person|global]
+      make a proposal active
+  reject <id> [--reason <text>]
+      keep a proposal as a tombstone, so the same statement is never proposed again
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -63,16 +75,6 @@ function setUp(data: string): Config {
   const config = loadConfig(data);
   if (!consented(config)) throw new Refusal(NOT_SET_UP);
   return config;
-}
-
-/** Every tenant, owner and repository name: a person or global item must carry none of them. */
-function organisationTerms(config: Config, context: Context): string[] {
-  const terms = new Set<string>(Object.keys(config.tenants));
-  for (const patterns of Object.values(config.tenants)) {
-    for (const p of patterns) for (const part of p.split('/')) if (part !== '*') terms.add(part);
-  }
-  if (context.repository !== null) for (const part of context.repository.split('/')) terms.add(part);
-  return [...terms];
 }
 
 /**
@@ -183,7 +185,7 @@ function remember(args: string[], data: string, cwd: string): void {
   }
   if (values.anchor !== undefined && scope !== 'repository') throw new Refusal('only a repository item can have an anchor');
 
-  const terms = personal ? organisationTerms(config, context) : undefined;
+  const terms = personal ? organisationTerms(config, context.repository) : undefined;
   for (const [what, text] of [
     ['the statement', statement],
     ['the rationale', values.rationale],
@@ -220,6 +222,76 @@ function remember(args: string[], data: string, cwd: string): void {
 function list(data: string, cwd: string): void {
   const config = setUp(data);
   process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd)));
+}
+
+function importCommand(args: string[], data: string): void {
+  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' } } });
+  const dryRun = values['dry-run'] === true;
+  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun), null, 2));
+  if (dryRun) console.error('Nothing was written. Run memory import without --dry-run to store these as proposals.');
+}
+
+/** The stores whose proposals may be reviewed here: this repository's tenant, then the person file. */
+function proposalStores(data: string, cwd: string): { file: string; tenant: string }[] {
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  return [...(context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }]), { file: personFile(data), tenant: '' }];
+}
+
+function review(data: string, cwd: string): void {
+  let out = '';
+  for (const { file, tenant } of proposalStores(data, cwd)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      out += renderProposals(proposals(db, tenant));
+    } finally {
+      db.close();
+    }
+  }
+  if (out === '') console.error('No proposals to review here.');
+  else process.stdout.write(`Memory proposals (statements recorded earlier, with their source; memory approve <id> or memory reject <id>):\n${out}`);
+}
+
+/** `memory approve <id> [--scope]` and `memory reject <id> [--reason]`: the owner's decision on one proposal. */
+function decideCommand(args: string[], data: string, cwd: string, decision: 'approve' | 'reject'): void {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: decision === 'approve' ? { scope: { type: 'string' } } : { reason: { type: 'string' } },
+  });
+  if (positionals.length !== 1) throw new Refusal('give one proposal id', 2);
+  const id = positionals[0]!;
+  const scope = values.scope as Scope | undefined;
+  if (scope !== undefined && !SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(', ')}`, 2);
+  const reason = typeof values.reason === 'string' ? values.reason.trim() : '';
+  const why = reason === '' ? null : refusal(reason);
+  if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
+
+  for (const { file, tenant } of proposalStores(data, cwd)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      const [p] = proposals(db, tenant, id);
+      if (p === undefined) continue;
+      if (decision === 'reject') {
+        decide(db, p, 'reject', { reason: reason === '' ? null : reason });
+        console.log(`rejected ${id}; the same statement will not be proposed again`);
+        return;
+      }
+      // A proposal keeps to its file: moving between the person file and a tenant is a new item.
+      const allowed = tenant === '' ? ['person', 'global'] : p.scope === 'repository' ? ['repository', 'organisation'] : [p.scope];
+      const to = scope ?? p.scope;
+      if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(' or ')} only`);
+      if (to === 'organisation' && p.anchors_json !== '[]') throw new Refusal('only a repository item can have an anchor');
+      const scopeKey = to === 'organisation' && p.scope === 'repository' ? p.scope_key.split('/')[0]! : p.scope_key;
+      decide(db, p, 'approve', { scope: to, scopeKey });
+      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})`);
+      return;
+    } finally {
+      db.close();
+    }
+  }
+  throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
 }
 
 /** `memory recheck [<id>]`: check this repository's anchored items, stale ones included, and restore what holds. */
@@ -334,6 +406,13 @@ function main(argv: string[]): void {
       return remember(rest, data, process.cwd());
     case 'list':
       return list(data, process.cwd());
+    case 'import':
+      return importCommand(rest, data);
+    case 'review':
+      return review(data, process.cwd());
+    case 'approve':
+    case 'reject':
+      return decideCommand(rest, data, process.cwd(), command);
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
     case 'session-start':

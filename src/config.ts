@@ -11,14 +11,21 @@ import { join, resolve } from 'node:path';
  * `consent` holds the hash of the plan the owner confirmed; any change to
  * tenants, bindings or opt-ins changes the hash, and memory is inert until the
  * owner confirms the new plan.
+ *
+ * `imports` maps a repository checkout to the silo files `memory import`
+ * reads there, each a path inside the checkout. No path has a default.
  */
 export interface Config {
   tenants: Record<string, string[]>;
   configs: Record<string, string[]>;
   optIns: { transcripts: boolean; failingCommands: boolean };
   sessionBudget?: number;
+  imports?: Record<string, RepositorySilos>;
   consent?: { planHash: string; grantedAt: string };
 }
+
+export const SILOS = ['rejections', 'standards', 'policy', 'notes'] as const;
+export type RepositorySilos = Partial<Record<(typeof SILOS)[number], string>>;
 
 export const DEFAULT_SESSION_BUDGET = 300;
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -64,11 +71,26 @@ export function loadConfig(data: string): Config | null {
   if (budget !== undefined && !(Number.isInteger(budget) && budget >= 0)) {
     throw new ConfigError('sessionBudget must be a whole number, 0 or more');
   }
+  const imports = c.imports;
+  if (
+    imports !== undefined &&
+    !(
+      typeof imports === 'object' && imports !== null && !Array.isArray(imports) &&
+      Object.values(imports).every(
+        (silos) =>
+          typeof silos === 'object' && silos !== null &&
+          Object.entries(silos).every(([k, v]) => (SILOS as readonly string[]).includes(k) && typeof v === 'string'),
+      )
+    )
+  ) {
+    throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(', ')}`);
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
     optIns: { transcripts: optIns.transcripts === true, failingCommands: optIns.failingCommands === true },
     ...(budget !== undefined ? { sessionBudget: budget } : {}),
+    ...(imports !== undefined ? { imports } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
   };
 }
@@ -97,3 +119,13 @@ export function planHash(config: Config): string {
 
 export const consented = (config: Config | null): config is Config =>
   config !== null && config.consent?.planHash === planHash(config);
+
+/** Every tenant, owner and repository name: a person or global item must carry none of them. */
+export function organisationTerms(config: Config, repository: string | null): string[] {
+  const terms = new Set<string>(Object.keys(config.tenants));
+  for (const patterns of Object.values(config.tenants)) {
+    for (const p of patterns) for (const part of p.split('/')) if (part !== '*') terms.add(part);
+  }
+  if (repository !== null) for (const part of repository.split('/')) terms.add(part);
+  return [...terms];
+}

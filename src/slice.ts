@@ -16,11 +16,11 @@ export function rank(items: Visible[]): Visible[] {
   );
 }
 
-const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
+export const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
 
 export function row(item: Visible): string {
   const anchors = item.anchors
-    .map((a) => (a.start === undefined ? a.path : `${a.path}:${a.start}-${a.end ?? a.start}`))
+    .map((a) => a.symbol ?? (a.start === undefined ? a.path : `${a.path}:${a.start}-${a.end ?? a.start}`))
     .join(', ');
   const source = item.source !== '' && item.source !== 'remember' ? ` ${item.source}` : '';
   return oneLine(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ''}${source}`) + '\n';
