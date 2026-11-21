@@ -23,9 +23,10 @@ const withDb = (file, fn) => {
     db.close();
   }
 };
+/** `n` filler items, written as memory writes, with secure deletion on, so a page split leaves no stale copy. */
 const fill = (file, n) =>
   withDb(file, (db) => {
-    db.exec('BEGIN');
+    db.exec('PRAGMA secure_delete = ON; BEGIN');
     const ins = db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, status, origin_trust, valid_from, created_at)
        VALUES (?, 'acme', 'repository', 'acme/api', 'convention', ?, ?, 'active', 'owner', '2026-01-01', '2026-01-01')`,
@@ -158,7 +159,7 @@ test('the audit entry records the scope and counts, never the purged text or the
   assert.equal(purge(s, s.acmeApi, '--source', s.pr12, '--confirm').status, 0);
   withDb(acme(s), (db) => {
     const meta = db.prepare("SELECT metadata_json FROM audit_events WHERE action = 'purge'").get().metadata_json;
-    assert.doesNotMatch(meta, /pull\/12|backoff/);
+    assert.doesNotMatch(meta, /pull\/12|exponential/);
     assert.match(meta, /"evidence":2/);
   });
 });

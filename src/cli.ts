@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { parseArgs } from 'node:util';
 import { suppressSqliteExperimentalWarning } from './warnings.ts';
@@ -69,8 +69,9 @@ const USAGE = `usage: memory <command>
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
-  purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
-      preview, or with --confirm delete
+  purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
+      preview, or with --confirm delete, leaving no recoverable bytes. --source reaches this repository's tenant and the
+      person file: an item left without evidence returns to proposed, or with --with-derived is deleted
   eval [replay | false-recall | orbit | lab] [--since <date> --pulls <file>] [--log <file>]
        [--agent <command> --model <name> [--task <name>]]
       scorecard rows, memory off and on, one JSON object per line; no measure named means all four.
@@ -372,34 +373,72 @@ function subagentStart(data: string): void {
     const id = (v: unknown) => (typeof v === 'string' && v !== '' ? v : 'unknown');
     const lines = shown.map(
       (item) =>
-        `${JSON.stringify({ event: 'injected', session: id(input['session_id']), agent: id(input['agent_id']), item: item.id, via: 'subagent-start', anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)) })}\n`,
+        `${JSON.stringify({ event: 'injected', session: id(input['session_id']), agent: id(input['agent_id']), item: item.id, via: 'subagent-start', anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)), at: new Date().toISOString() })}\n`,
     );
     const file = injectionLog(data);
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     // One write per slice, so lines from parallel subagents do not interleave.
-    // shortcut: the log only grows; rotate or purge it with the store when gap 4 (#24) lands.
     appendFileSync(file, lines.join(''), { mode: 0o600 });
   } catch {
     // Silent by design; see above.
   }
 }
 
-function purge(args: string[], data: string): void {
+/**
+ * The injection log after a purge: no line of an item that no store holds any more, and with a cut-off no line older
+ * than it, or of unknown age. Rewritten whole, so no purged line is left in the file.
+ * shortcut: a subagent line appended while the log is rewritten can be lost; fine for a log, revisit with #24.
+ */
+function pruneLog(data: string, files: string[], before: string | undefined): void {
+  const file = injectionLog(data);
+  if (!existsSync(file)) return;
+  const held = new Set<string>();
+  for (const f of files) {
+    const db = openStore(f, false);
+    if (db === null) continue;
+    try {
+      for (const r of db.prepare('SELECT id FROM items').all() as { id: string }[]) held.add(r.id);
+    } finally {
+      db.close();
+    }
+  }
+  const kept = readFileSync(file, 'utf8').split('\n').filter((line) => {
+    if (line.trim() === '') return false;
+    try {
+      const e = JSON.parse(line) as { item?: unknown; at?: unknown };
+      if (typeof e.item === 'string' && !held.has(e.item)) return false;
+      return before === undefined || (typeof e.at === 'string' && e.at >= before);
+    } catch {
+      return false;
+    }
+  });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, kept.map((l) => `${l}\n`).join(''), { mode: 0o600 });
+  renameSync(tmp, file);
+}
+
+function purge(args: string[], data: string, cwd: string): void {
   const { values } = parseArgs({
     args,
     options: {
       tenant: { type: 'string' },
       repo: { type: 'string' },
+      item: { type: 'string' },
+      source: { type: 'string' },
+      'with-derived': { type: 'boolean' },
       'older-than': { type: 'string' },
       all: { type: 'boolean' },
       confirm: { type: 'boolean' },
     },
   });
-  const chosen = [values.tenant, values.repo, values['older-than'], values.all].filter((v) => v !== undefined);
-  if (chosen.length !== 1) throw new Refusal('give exactly one of --tenant, --repo, --older-than or --all', 2);
+  const chosen = [values.tenant, values.repo, values.item, values.source, values['older-than'], values.all].filter((v) => v !== undefined);
+  if (chosen.length !== 1) throw new Refusal('give exactly one of --tenant, --repo, --item, --source, --older-than or --all', 2);
+  if (values['with-derived'] === true && values.source === undefined) throw new Refusal('--with-derived goes with --source', 2);
   const days = values['older-than'];
   if (days !== undefined && !/^\d+$/.test(days)) throw new Refusal('--older-than takes a whole number of days', 2);
   if (values.tenant !== undefined && !TENANT_NAME.test(values.tenant)) throw new Refusal(`no tenant named "${values.tenant}"`, 2);
+  if (values.item !== undefined && !/^m-[0-9a-f]+$/.test(values.item)) throw new Refusal(`"${values.item}" is not an item id`, 2);
+  if (values.source !== undefined && values.source.trim() === '') throw new Refusal('--source takes a source reference', 2);
   const repository = values.repo?.toLowerCase();
   if (repository !== undefined && !/^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(repository)) {
     throw new Refusal('--repo takes owner/repo', 2);
@@ -407,6 +446,9 @@ function purge(args: string[], data: string): void {
   const scope: PurgeScope = {
     tenant: values.tenant,
     repository,
+    item: values.item,
+    source: values.source?.trim(),
+    withDerived: values['with-derived'],
     before: days === undefined ? undefined : new Date(Date.now() - Number(days) * 86_400_000).toISOString(),
     all: values.all,
   };
@@ -414,17 +456,21 @@ function purge(args: string[], data: string): void {
   // Every tenant file, not only those the allowlist matches now: an item stored
   // under an earlier allowlist must still be purgeable.
   const tenantsDir = join(data, 'tenants');
-  const tenants =
-    values.tenant !== undefined
-      ? [values.tenant]
-      : existsSync(tenantsDir)
-        ? readdirSync(tenantsDir).filter((f) => f.endsWith('.sqlite')).map((f) => f.slice(0, -'.sqlite'.length))
-        : [];
-  const files = tenants.filter((t) => TENANT_NAME.test(t)).map((t) => tenantFile(data, t));
-  if (values.all === true || days !== undefined) files.push(personFile(data));
+  const every = existsSync(tenantsDir)
+    ? readdirSync(tenantsDir).filter((f) => f.endsWith('.sqlite')).map((f) => f.slice(0, -'.sqlite'.length)).filter((t) => TENANT_NAME.test(t))
+    : [];
+  let tenants = values.tenant !== undefined ? [values.tenant] : every;
+  if (values.source !== undefined) {
+    // A source reaches only this repository's tenant, never another tenant's file holding the same reference.
+    const config = loadConfig(data);
+    const tenant = config === null ? null : resolveContext(cwd, config, currentConfigDir()).tenant;
+    tenants = tenant === null ? [] : [tenant];
+  }
+  const files = tenants.map((t) => tenantFile(data, t));
+  if (values.all === true || days !== undefined || values.item !== undefined || values.source !== undefined) files.push(personFile(data));
 
   const report: Record<string, ReturnType<typeof previewPurge>> = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0 };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, checks: [] as string[] };
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -434,12 +480,18 @@ function purge(args: string[], data: string): void {
       total.items += r.items;
       total.evidence += r.evidence;
       total.returnedToProposed += r.returnedToProposed;
+      total.checks.push(...r.checks);
     } finally {
       db.close();
     }
   }
+  if (values.confirm === true) {
+    if (values.all === true) rmSync(injectionLog(data), { force: true });
+    else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
+  }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
   if (values.confirm !== true) console.error('Nothing was deleted. Run the same command with --confirm to delete.');
+  else if (total.checks.length > 0) console.error('Review the promoted checks listed under "checks"; memory does not edit them.');
 }
 
 const MEASURES = ['replay', 'false-recall', 'orbit', 'lab'] as const;
@@ -529,7 +581,7 @@ function main(argv: string[]): void {
     case 'subagent-start':
       return subagentStart(data);
     case 'purge':
-      return purge(rest, data);
+      return purge(rest, data, process.cwd());
     case 'eval':
       return evalCommand(rest);
     case undefined:

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { appendFileSync, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync3 } from "node:fs";
+import { appendFileSync, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync3, renameSync as renameSync2, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute3, join as join7, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -1162,8 +1162,12 @@ var MIGRATIONS = [
       restore.run(id);
       recordAudit(db, "item_restored", { type: "item", id }, { reason: "an agent stale report is now counted, not obeyed" });
     }
+  },
+  // v6 - secure deletion (#23). Its one change to the file, rewriting a store written before it, runs in openStore.
+  () => {
   }
 ];
+var SECURE_DELETE = 6;
 function openStore(path, create) {
   if (!existsSync2(path)) {
     if (!create) return null;
@@ -1171,8 +1175,9 @@ function openStore(path, create) {
   }
   const db = new DatabaseSync(path);
   chmodSync(path, 384);
-  db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;");
+  db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000; PRAGMA secure_delete = ON;");
   const version = () => db.prepare("PRAGMA user_version").get().user_version;
+  if (version() > 0 && version() < SECURE_DELETE) db.exec("VACUUM");
   if (version() < MIGRATIONS.length) {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -1570,44 +1575,62 @@ var count = (db, sql, ...params) => db.prepare(sql).get(...params).n;
 function itemClause(scope) {
   if (scope.all === true || scope.tenant !== void 0) return { where: "1=1", params: [] };
   if (scope.repository !== void 0) return { where: "scope = 'repository' AND scope_key = ?", params: [scope.repository] };
+  if (scope.item !== void 0) return { where: "id = ?", params: [scope.item] };
   return { where: "1=0", params: [] };
 }
+function evidenceClause(scope) {
+  if (scope.before !== void 0) return { where: "captured_at < ?", params: [scope.before] };
+  if (scope.source !== void 0) return { where: "source_ref = ?", params: [scope.source] };
+  return null;
+}
+var touched = (e) => ({ where: `id IN (SELECT item_id FROM evidence WHERE ${e.where})`, params: e.params });
+var orphaned = (e) => ({
+  where: `${touched(e).where} AND NOT EXISTS (SELECT 1 FROM evidence k WHERE k.item_id = items.id AND NOT (${e.where}))`,
+  params: [...e.params, ...e.params]
+});
+var SHOWN = "status IN ('active', 'stale')";
 function previewPurge(db, scope) {
-  const { where, params } = itemClause(scope);
-  const items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${where}`, ...params);
-  let evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where})`, ...params);
+  const i = itemClause(scope);
+  const e = evidenceClause(scope);
+  let items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${i.where}`, ...i.params);
+  let evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${i.where})`, ...i.params);
   let returnedToProposed = 0;
-  const before = scope.before;
-  if (before !== void 0) {
-    evidence = count(db, "SELECT COUNT(*) AS n FROM evidence WHERE captured_at < ?", before);
-    returnedToProposed = count(
-      db,
-      `SELECT COUNT(*) AS n FROM items i WHERE status IN ('active', 'stale')
-         AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = i.id AND e.captured_at >= ?)`,
-      before
-    );
+  let reached = i;
+  if (e !== null) {
+    const o = orphaned(e);
+    evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE ${e.where}`, ...e.params);
+    if (scope.withDerived === true) items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${o.where}`, ...o.params);
+    else returnedToProposed = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${SHOWN} AND ${o.where}`, ...o.params);
+    reached = touched(e);
   }
-  return { items, evidence, returnedToProposed };
+  const checks = db.prepare(`SELECT DISTINCT promoted_to AS c FROM items WHERE promoted_to IS NOT NULL AND ${reached.where} ORDER BY c`).all(...reached.params).map((r) => r.c);
+  return { items, evidence, returnedToProposed, checks };
 }
 function executePurge(db, scope) {
   const preview = previewPurge(db, scope);
-  const { where, params } = itemClause(scope);
+  const i = itemClause(scope);
+  const e = evidenceClause(scope);
   db.exec("BEGIN");
   try {
-    db.prepare(`DELETE FROM items WHERE ${where}`).run(...params);
-    if (scope.before !== void 0) {
-      db.prepare("DELETE FROM evidence WHERE captured_at < ?").run(scope.before);
+    db.prepare(`DELETE FROM items WHERE ${i.where}`).run(...i.params);
+    if (e !== null) {
+      const t = touched(e);
+      const o = orphaned(e);
       db.prepare(
-        // Only an item that was shown goes back: a tombstone stays one.
-        "UPDATE items SET status = 'proposed' WHERE status IN ('active', 'stale') AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)"
-      ).run();
+        `UPDATE items SET support = MAX(1, support - (SELECT COUNT(*) FROM evidence k WHERE k.item_id = items.id AND ${e.where})) WHERE ${t.where}`
+      ).run(...e.params, ...t.params);
+      if (scope.withDerived === true) db.prepare(`DELETE FROM items WHERE ${o.where}`).run(...o.params);
+      else db.prepare(`UPDATE items SET status = 'proposed' WHERE ${SHOWN} AND ${o.where}`).run(...o.params);
+      db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
-    recordAudit(db, "purge", null, { scope, removed: preview });
+    const audited = scope.source === void 0 ? scope : { ...scope, source: sha256(scope.source) };
+    recordAudit(db, "purge", null, { scope: audited, removed: preview });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   return preview;
 }
 
@@ -1962,18 +1985,18 @@ var FALSE_RECALL = { measure: "false-recall", on: [], bar: "false recall under 1
 var covers = (anchor, path) => path === anchor || path.startsWith(`${anchor}/`);
 function falseRecall(version, events) {
   const flagged = /* @__PURE__ */ new Set();
-  const touched = /* @__PURE__ */ new Map();
+  const touched2 = /* @__PURE__ */ new Map();
   const verdict2 = /* @__PURE__ */ new Map();
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e.event === "feedback") {
       if (e.signal === "wrong" || e.signal === "stale") flagged.add(e.item);
     } else if (e.event === "touched") {
-      const paths = touched.get(e.session) ?? [];
+      const paths = touched2.get(e.session) ?? [];
       paths.push(...e.paths);
-      touched.set(e.session, paths);
+      touched2.set(e.session, paths);
     } else {
-      const paths = touched.get(e.session) ?? [];
+      const paths = touched2.get(e.session) ?? [];
       const why = flagged.has(e.item) ? "wrong or stale" : e.anchors.length > 0 && !e.anchors.some((a) => paths.some((p) => covers(a, p))) ? "untouched" : null;
       verdict2.set(JSON.stringify([e.session, e.item]), { session: e.session, via: e.via, why });
     }
@@ -2275,8 +2298,9 @@ var USAGE = `usage: memory <command>
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
-  purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
-      preview, or with --confirm delete
+  purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
+      preview, or with --confirm delete, leaving no recoverable bytes. --source reaches this repository's tenant and the
+      person file: an item left without evidence returns to proposed, or with --with-derived is deleted
   eval [replay | false-recall | orbit | lab] [--since <date> --pulls <file>] [--log <file>]
        [--agent <command> --model <name> [--task <name>]]
       scorecard rows, memory off and on, one JSON object per line; no measure named means all four.
@@ -2534,7 +2558,7 @@ function subagentStart(data) {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text2 } }));
     const id = (v) => typeof v === "string" && v !== "" ? v : "unknown";
     const lines2 = shown.map(
-      (item) => `${JSON.stringify({ event: "injected", session: id(input2["session_id"]), agent: id(input2["agent_id"]), item: item.id, via: "subagent-start", anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)) })}
+      (item) => `${JSON.stringify({ event: "injected", session: id(input2["session_id"]), agent: id(input2["agent_id"]), item: item.id, via: "subagent-start", anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)), at: (/* @__PURE__ */ new Date()).toISOString() })}
 `
     );
     const file = injectionLog(data);
@@ -2543,22 +2567,56 @@ function subagentStart(data) {
   } catch {
   }
 }
-function purge(args, data) {
+function pruneLog(data, files, before) {
+  const file = injectionLog(data);
+  if (!existsSync5(file)) return;
+  const held2 = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    const db = openStore(f, false);
+    if (db === null) continue;
+    try {
+      for (const r of db.prepare("SELECT id FROM items").all()) held2.add(r.id);
+    } finally {
+      db.close();
+    }
+  }
+  const kept = readFileSync5(file, "utf8").split("\n").filter((line) => {
+    if (line.trim() === "") return false;
+    try {
+      const e = JSON.parse(line);
+      if (typeof e.item === "string" && !held2.has(e.item)) return false;
+      return before === void 0 || typeof e.at === "string" && e.at >= before;
+    } catch {
+      return false;
+    }
+  });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync2(tmp, kept.map((l) => `${l}
+`).join(""), { mode: 384 });
+  renameSync2(tmp, file);
+}
+function purge(args, data, cwd) {
   const { values } = parseArgs({
     args,
     options: {
       tenant: { type: "string" },
       repo: { type: "string" },
+      item: { type: "string" },
+      source: { type: "string" },
+      "with-derived": { type: "boolean" },
       "older-than": { type: "string" },
       all: { type: "boolean" },
       confirm: { type: "boolean" }
     }
   });
-  const chosen = [values.tenant, values.repo, values["older-than"], values.all].filter((v) => v !== void 0);
-  if (chosen.length !== 1) throw new Refusal("give exactly one of --tenant, --repo, --older-than or --all", 2);
+  const chosen = [values.tenant, values.repo, values.item, values.source, values["older-than"], values.all].filter((v) => v !== void 0);
+  if (chosen.length !== 1) throw new Refusal("give exactly one of --tenant, --repo, --item, --source, --older-than or --all", 2);
+  if (values["with-derived"] === true && values.source === void 0) throw new Refusal("--with-derived goes with --source", 2);
   const days = values["older-than"];
   if (days !== void 0 && !/^\d+$/.test(days)) throw new Refusal("--older-than takes a whole number of days", 2);
   if (values.tenant !== void 0 && !TENANT_NAME.test(values.tenant)) throw new Refusal(`no tenant named "${values.tenant}"`, 2);
+  if (values.item !== void 0 && !/^m-[0-9a-f]+$/.test(values.item)) throw new Refusal(`"${values.item}" is not an item id`, 2);
+  if (values.source !== void 0 && values.source.trim() === "") throw new Refusal("--source takes a source reference", 2);
   const repository = values.repo?.toLowerCase();
   if (repository !== void 0 && !/^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(repository)) {
     throw new Refusal("--repo takes owner/repo", 2);
@@ -2566,15 +2624,24 @@ function purge(args, data) {
   const scope = {
     tenant: values.tenant,
     repository,
+    item: values.item,
+    source: values.source?.trim(),
+    withDerived: values["with-derived"],
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
   const tenantsDir = join7(data, "tenants");
-  const tenants = values.tenant !== void 0 ? [values.tenant] : existsSync5(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
-  const files = tenants.filter((t) => TENANT_NAME.test(t)).map((t) => tenantFile(data, t));
-  if (values.all === true || days !== void 0) files.push(personFile(data));
+  const every = existsSync5(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  let tenants = values.tenant !== void 0 ? [values.tenant] : every;
+  if (values.source !== void 0) {
+    const config = loadConfig(data);
+    const tenant = config === null ? null : resolveContext(cwd, config, currentConfigDir()).tenant;
+    tenants = tenant === null ? [] : [tenant];
+  }
+  const files = tenants.map((t) => tenantFile(data, t));
+  if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0) files.push(personFile(data));
   const report = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0 };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, checks: [] };
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -2584,12 +2651,18 @@ function purge(args, data) {
       total.items += r.items;
       total.evidence += r.evidence;
       total.returnedToProposed += r.returnedToProposed;
+      total.checks.push(...r.checks);
     } finally {
       db.close();
     }
   }
+  if (values.confirm === true) {
+    if (values.all === true) rmSync3(injectionLog(data), { force: true });
+    else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
+  }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
   if (values.confirm !== true) console.error("Nothing was deleted. Run the same command with --confirm to delete.");
+  else if (total.checks.length > 0) console.error('Review the promoted checks listed under "checks"; memory does not edit them.');
 }
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
@@ -2679,7 +2752,7 @@ function main(argv) {
     case "subagent-start":
       return subagentStart(data);
     case "purge":
-      return purge(rest, data);
+      return purge(rest, data, process.cwd());
     case "eval":
       return evalCommand(rest);
     case void 0:
