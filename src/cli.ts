@@ -468,8 +468,9 @@ function purge(args: string[], data: string, cwd: string): void {
   if (values.source !== undefined) {
     // A source reaches only this repository's tenant, never another tenant's file holding the same reference.
     const config = loadConfig(data);
-    const tenant = config === null ? null : resolveContext(cwd, config, currentConfigDir()).tenant;
-    tenants = tenant === null ? [] : [tenant];
+    const context = config === null ? null : resolveContext(cwd, config, currentConfigDir());
+    tenants = context?.tenant == null ? [] : [context.tenant];
+    if (tenants.length === 0) console.error(`--source reaches only the person file here: ${context?.reason ?? 'memory is not set up'}`);
   }
   const files = tenants.map((t) => tenantFile(data, t));
   if (values.all === true || days !== undefined || values.item !== undefined || values.source !== undefined) files.push(personFile(data));

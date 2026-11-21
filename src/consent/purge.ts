@@ -1,7 +1,6 @@
 // Adapted from Review Voice, plugins/review-voice/src/consent/purge.ts at 707ba60
 // (https://github.com/QuintinBotes/review-voice, MIT).
 import type { DatabaseSync } from 'node:sqlite';
-import { sha256 } from '../items.ts';
 import { recordAudit } from '../store/audit.ts';
 
 export interface PurgeScope {
@@ -85,7 +84,8 @@ export function previewPurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
  * Deletes in one transaction. Evidence goes with its item; an item that loses
  * all its evidence returns to `proposed`, because an item without evidence
  * must not be recalled, or with `withDerived` is deleted. Secure deletion
- * (see openStore) overwrites what is deleted, and the checkpoint leaves none of it in a write-ahead log.
+ * (see openStore) overwrites what is deleted. The stores use a rollback journal, unlinked at commit; the checkpoint
+ * empties a write-ahead log should one ever be in use.
  */
 export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview {
   const preview = previewPurge(db, scope);
@@ -105,9 +105,11 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
       else db.prepare(`UPDATE items SET status = 'proposed' WHERE ${SHOWN} AND ${o.where}`).run(...o.params);
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
+    // A deleted item's audit trail goes with it: an anchor_moved entry names its cited file.
+    db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     // In the same transaction: a purge that cannot be audited does not happen.
-    // The entry survives the purge it records, and names a source only by its hash.
-    const audited = scope.source === undefined ? scope : { ...scope, source: sha256(scope.source) };
+    // The entry survives the purge it records, and never names the source: a hash of a pull request URL is guessable.
+    const audited = scope.source === undefined ? scope : { ...scope, source: 'withheld' };
     recordAudit(db, 'purge', null, { scope: audited, removed: preview });
     db.exec('COMMIT');
   } catch (error) {

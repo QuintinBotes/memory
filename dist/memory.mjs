@@ -1628,7 +1628,8 @@ function executePurge(db, scope) {
       else db.prepare(`UPDATE items SET status = 'proposed' WHERE ${SHOWN} AND ${o.where}`).run(...o.params);
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
-    const audited = scope.source === void 0 ? scope : { ...scope, source: sha256(scope.source) };
+    db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
+    const audited = scope.source === void 0 ? scope : { ...scope, source: "withheld" };
     recordAudit(db, "purge", null, { scope: audited, removed: preview });
     db.exec("COMMIT");
   } catch (error) {
@@ -2647,8 +2648,9 @@ function purge(args, data, cwd) {
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
-    const tenant = config === null ? null : resolveContext(cwd, config, currentConfigDir()).tenant;
-    tenants = tenant === null ? [] : [tenant];
+    const context = config === null ? null : resolveContext(cwd, config, currentConfigDir());
+    tenants = context?.tenant == null ? [] : [context.tenant];
+    if (tenants.length === 0) console.error(`--source reaches only the person file here: ${context?.reason ?? "memory is not set up"}`);
   }
   const files = tenants.map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0) files.push(personFile(data));
