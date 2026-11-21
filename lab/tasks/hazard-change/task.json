@@ -1,0 +1,7 @@
+{
+  "about": "A seeded hazard on a symbol the task must change.",
+  "prompt": "In src/ledger.mjs, make consume throw a RangeError when the amount is negative. Keep the change small.",
+  "memory": [
+    { "scope": "repository", "type": "hazard", "anchor": "src/ledger.mjs:3-6", "statement": "consume runs while its caller holds the run lock; an await inside it lets a second run spend the same budget (PR #81)" }
+  ]
+}

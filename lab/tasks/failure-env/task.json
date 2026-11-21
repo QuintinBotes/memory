@@ -1,0 +1,7 @@
+{
+  "about": "The orbit#133 environment: the first check fails because a dependency is not installed, not because the code is wrong.",
+  "prompt": "Add a --version flag to cli.mjs that prints 1.0.0, then make node scripts/check.mjs pass.",
+  "memory": [
+    { "scope": "repository", "type": "failure-pattern", "anchor": "scripts/check.mjs", "statement": "node scripts/check.mjs failing with ERR_MODULE_NOT_FOUND for fmt means node scripts/setup.mjs has not run in this checkout; the check itself is not at fault (orbit#133)" }
+  ]
+}

@@ -251,13 +251,68 @@ it, so repeats are counted without a model:
 The false-recall report reads the injection log: one JSON object per line, in
 the order things happened. The recall hooks will write it (slice 10); until
 then a fixture stands in. It reads three events and ignores other fields and
-other events:
+other events; the session lab also sums an `injected` event's `tokens`, its
+estimated tokens, when present:
 
 ```json
 {"event": "injected", "session": "s1", "item": "m-1a2b3c4d5e", "via": "session-start", "anchors": ["src/ledger.ts"]}
 {"event": "touched", "session": "s1", "paths": ["src/ledger.ts"]}
 {"event": "feedback", "session": "s2", "item": "m-1a2b3c4d5e", "signal": "wrong"}
 ```
+
+### The session lab
+
+Orbit's workers load no hooks, so what memory delivers through a hook is
+measured in the session lab. `memory eval lab` runs each fixture task under
+`lab/tasks` with memory's plugin off and on, three runs per arm, and grades
+each run with the task's hidden tests, run only after the agent exits and
+never given to the agent: not in its directory, its environment or its
+plugin copy. Each run gets a temporary copy of
+the task's repository and its own empty data directory; on the on arm that
+directory is consented and holds the task's items, so no run reads or writes
+your store. The six tasks: a seeded hazard on a symbol the task must change
+(`hazard-change`) and on one it must not (`hazard-keep`), the
+[orbit#133](https://github.com/QuintinBotes/orbit/issues/133) environment
+(`failure-env`), a task long enough to compact (`compaction`), one that
+spawns a subagent (`subagent`), and a change-reach task (`change-reach`).
+
+```bash
+# Run from a memory checkout. The agent runs in each run's copy, so its paths are absolute: $PWD expands here.
+memory eval lab --model claude-sonnet-5 --agent "node $PWD/lab/claude-agent.mjs"    # real Claude Code: a login, a model, money
+memory eval lab --task hazard-change --model fixture --agent "node $PWD/lab/replay-agent.mjs $PWD/test/fixtures/lab"   # no model
+memory eval verdict --scorecard scorecard.jsonl --lab lab.jsonl
+```
+
+The lab runs only the agent command you name, under `/bin/sh` in the run's
+copy, with the prompt on stdin and `MEMORY_LAB_TASK`, `MEMORY_LAB_ARM`,
+`MEMORY_LAB_RUN`, `MEMORY_LAB_MODEL`, `MEMORY_LAB_OUT` and, on the on arm,
+`MEMORY_LAB_PLUGIN` (a copy of the plugin without the lab) in its
+environment. Its stdout is read as Claude Code's `stream-json`: tokens, cache
+reads and turns come from the `result` line's `modelUsage` and `num_turns`.
+Hook durations come from `$MEMORY_LAB_OUT/session.jsonl`, the session
+transcript Claude Code keeps, from its `hook_success` records of memory's
+own hooks. A run whose agent exits non-zero counts as failed, and then the
+task's bar is not judged (`meets_bar` is null) until the lab runs again.
+`lab/claude-agent.mjs` removes each run's project folder from your Claude
+Code config afterwards, so nothing a run wrote there reaches `memory import`. Each task row
+reports pass rate, mean input and cache-read tokens and turns, hook counts
+and 95th percentiles, and the `injected` events memory's injection log
+recorded in the run, with their summed `tokens`; its bar is a pass
+rate with memory on no lower than off.
+
+`lab/replay-agent.mjs` stands in for Claude Code and calls no model, which is
+how CI runs the lab. It replays a transcript per task and arm, one JSON
+object per line: `attachment` records go to `session.jsonl`, every other line
+is printed as a `stream-json` event, and each `Write` and `Edit` tool call in
+an `assistant` event is applied to the working directory. Recorded
+transcripts replay too: absolute paths are re-rooted from the `cwd` of the
+`system` init event, and no path may leave the working directory.
+
+`memory eval verdict` reads `memory eval`'s rows and the lab's, and prints
+`auto memory may be switched off in <config>` only when each shows memory no
+worse: at least one measured row that holds its bar, and none that misses
+it. Otherwise it names the measure and arm that missed. It changes no
+setting; you do.
 
 ## Code anchor providers
 

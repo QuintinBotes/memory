@@ -1,0 +1,7 @@
+{
+  "about": "A change-reach task: one function's signature changes, and every caller must follow, an aliased import included.",
+  "prompt": "Change price in src/price.mjs to take a single object { amount, currency }, and update everything that calls it.",
+  "memory": [
+    { "scope": "repository", "type": "hazard", "anchor": "src/price.mjs:1-3", "statement": "price has three callers: src/cart.mjs, src/invoice.mjs and src/report/summary.mjs, which imports it as toPrice" }
+  ]
+}

@@ -37,6 +37,7 @@ import { dataDirectory, injectionLog, personFile, tenantFile } from './store/pat
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
 import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
+import { LAB, lab, labTasks, parseRows, verdict } from './eval/lab.ts';
 
 suppressSqliteExperimentalWarning();
 
@@ -69,12 +70,17 @@ const USAGE = `usage: memory <command>
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete
-  eval [replay | false-recall | orbit] [--since <date> --pulls <file>] [--log <file>]
-      scorecard rows, memory off and on, one JSON object per line; no measure named means all three.
+  eval [replay | false-recall | orbit | lab] [--since <date> --pulls <file>] [--log <file>]
+       [--agent <command> --model <name> [--task <name>]]
+      scorecard rows, memory off and on, one JSON object per line; no measure named means all four.
       replay: memory built only from the pull requests reviewed before --since, restated owner-declined
       findings counted after it. false-recall: recalled items later marked wrong or stale, or anchored
       where nothing was touched, from the injection log. orbit: Orbit's benchmark arm, not run until it
-      has a memory switch. Calls no model, posts nothing and never opens the memory store
+      has a memory switch. lab: the session lab's fixture tasks, three runs per arm, each run by the agent
+      command you name in a temporary copy and graded by hidden tests. Calls no model itself, posts nothing and
+      never opens the memory store
+  eval verdict --scorecard <file> --lab <file>
+      whether auto memory may be switched off: only when both files of rows show memory no worse
   --version`;
 
 /** Exit 1: refused, nothing was written. Exit 2: the command cannot run as given. */
@@ -433,7 +439,7 @@ function purge(args: string[], data: string): void {
   if (values.confirm !== true) console.error('Nothing was deleted. Run the same command with --confirm to delete.');
 }
 
-const MEASURES = ['replay', 'false-recall', 'orbit'] as const;
+const MEASURES = ['replay', 'false-recall', 'orbit', 'lab'] as const;
 
 /** Reads and parses one input file, or refuses with the file and the reason. */
 function input<T>(file: string, parse: (text: string) => T): T {
@@ -449,9 +455,17 @@ function evalCommand(args: string[]): void {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { since: { type: 'string' }, pulls: { type: 'string' }, log: { type: 'string' } },
+    options: {
+      since: { type: 'string' }, pulls: { type: 'string' }, log: { type: 'string' },
+      agent: { type: 'string' }, model: { type: 'string' }, task: { type: 'string' },
+      scorecard: { type: 'string' }, lab: { type: 'string' },
+    },
   });
   const only = positionals[0];
+  if (only === 'verdict' && positionals.length === 1) {
+    if (values.scorecard === undefined || values.lab === undefined) throw new Refusal('verdict needs --scorecard <file> and --lab <file>', 2);
+    return void console.log(verdict(input(values.scorecard, parseRows), input(values.lab, parseRows), currentConfigDir()));
+  }
   if (positionals.length > 1 || (only !== undefined && !(MEASURES as readonly string[]).includes(only))) {
     throw new Refusal(`unknown measure ${positionals.join(' ')}; give one of ${MEASURES.join(', ')}, or none for all`, 2);
   }
@@ -472,6 +486,14 @@ function evalCommand(args: string[]): void {
     else rows.push(...notRun(version, FALSE_RECALL, 'no --log given', ['false_recall']));
   }
   if (want('orbit')) rows.push(...orbitArm(version));
+  if (want('lab')) {
+    const { agent, model, task } = values;
+    if (agent !== undefined && model !== undefined) {
+      if (task !== undefined && !labTasks().includes(task)) throw new Refusal(`no lab task ${task}; the tasks are ${labTasks().join(', ')}`, 2);
+      rows.push(...lab(version, agent, model, task));
+    } else if (only !== undefined || agent !== undefined || model !== undefined) throw new Refusal('lab needs --agent <command> and --model <name>', 2);
+    else rows.push(...notRun(version, LAB, 'no --agent and --model given; the lab runs only the agent command you name', ['pass_rate', 'input_tokens', 'cache_read_tokens', 'turns', 'hook_ms', 'injected']));
+  }
   process.stdout.write(rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
 }
 
