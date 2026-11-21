@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `subagentTypes` in `config.json` adds other agent types; `Explore`, `Plan`
   and Review Voice's agents never get it, and naming one is refused. Each
   item a subagent is shown is logged in `logs/injections.jsonl` by item id,
-  with the session and agent ids and its estimated tokens, never its text.
+  with its anchored file paths, the session and agent ids and its estimated
+  tokens, never its text. `memory purge` does not reach the log yet.
 - `memory eval`, the evaluation harness, prints scorecard rows with memory
   off and on: the review replay (restated owner-declined findings after a
   cut-off, with memory built only from the pull requests before it), the

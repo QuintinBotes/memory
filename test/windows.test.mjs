@@ -133,6 +133,9 @@ test('each subagent slice stays within 300 tokens and is logged with its agent i
   assert.equal(first.length, shown);
   assert.ok(first.reduce((sum, l) => sum + l.tokens, 0) <= tokens(slice));
   assert.doesNotMatch(readFileSync(log(s.data), 'utf8'), /Convention number|Releases are cut/);
+  // The consent plan says what the log holds.
+  const plan = run(['init'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.match(plan.stdout, /anchored file paths.*logs\/injections\.jsonl; never their text/);
   // A startup or compaction slice is not a subagent's, and is not logged here.
   sessionStart(s.acmeApi, s.data, s.configA);
   compacted(s.acmeApi, s.data, s.configA);

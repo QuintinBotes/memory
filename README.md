@@ -104,8 +104,10 @@ tokens. To give the slice to other subagent types, such as an editing agent,
 list them in `config.json`: `"subagentTypes": ["my-plugin:implementer"]`.
 `Explore`, `Plan` and Review Voice's agents never get it, and naming one there
 is refused. Each item a subagent is shown is logged in
-`logs/injections.jsonl` in the data directory, by item id with the session
-and agent ids and its estimated tokens, never its text.
+`logs/injections.jsonl` in the data directory, by item id with its anchored
+file paths, the session and agent ids and its estimated tokens, never its
+text. `memory purge` does not reach this log yet; delete the file to clear
+it.
 
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your

@@ -1547,7 +1547,7 @@ function buildConsentPlan(config, storageLocation) {
       "Statements you ask memory to remember, each with its scope, type and an optional source reference",
       "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves",
       "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant",
-      "Which items a subagent was shown, by item id, with the session and agent ids and the estimated tokens, in logs/injections.jsonl; never their text",
+      "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids and the estimated tokens, in logs/injections.jsonl; never their text. memory purge does not reach this log yet; delete the file to clear it",
       "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval"
     ],
     optIns: { ...config.optIns },
