@@ -11,6 +11,9 @@ export interface Context {
   reason: string;
 }
 
+/** The variables that point git at a repository other than the working directory's. */
+export const REPOSITORY_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE'];
+
 /**
  * git, asked about the working directory only. A repository named in the
  * environment is not the one the session is in. Null when git answered no;
@@ -19,7 +22,7 @@ export interface Context {
  */
 export function git(cwd: string, ...args: string[]): string | null {
   const env = { ...process.env };
-  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE']) delete env[k];
+  for (const k of REPOSITORY_VARIABLES) delete env[k];
   // A partial clone may fetch a missing object; it must never wait on a credential prompt in a hook.
   env['GIT_TERMINAL_PROMPT'] = '0';
   const r = spawnSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
