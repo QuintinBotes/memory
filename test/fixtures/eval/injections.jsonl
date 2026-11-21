@@ -1,0 +1,16 @@
+{"event":"feedback","session":"s0","item":"m-a","signal":"wrong"}
+{"event":"injected","session":"s1","item":"m-a","via":"session-start","anchors":[]}
+{"event":"injected","session":"s1","item":"m-b","via":"session-start","anchors":["src/ledger.ts"]}
+{"event":"touched","session":"s1","paths":["src/ledger.ts"]}
+{"event":"injected","session":"s1","item":"m-c","via":"memory_search","anchors":["src/retry.ts"]}
+{"event":"touched","session":"s2","paths":["src/retry.ts"]}
+{"event":"injected","session":"s2","item":"m-d","via":"memory_search","anchors":[]}
+{"event":"injected","session":"s2","item":"m-e","via":"memory_search","anchors":["src/cache.ts"]}
+{"event":"touched","session":"s2","paths":["src/cache.ts"]}
+{"event":"injected","session":"s2","item":"m-f","via":"memory_search","anchors":["src"]}
+{"event":"touched","session":"s2","paths":["src/api.ts"],"tool":"Edit"}
+{"event":"injected","session":"s1","item":"m-a","via":"session-start","anchors":[]}
+{"event":"skipped","session":"s3","reason":"lock held"}
+{"event":"feedback","session":"s3","item":"m-d","signal":"wrong"}
+{"event":"feedback","session":"s3","item":"m-e","signal":"stale"}
+{"event":"feedback","session":"s3","item":"m-f","signal":"helped"}

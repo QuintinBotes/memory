@@ -32,6 +32,9 @@ import { decide, proposals, renderProposals, type Proposal } from './review/revi
 import { openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, personFile, tenantFile } from './store/paths.ts';
+import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
+import { REPLAY, parsePulls, replay } from './eval/replay.ts';
+import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
 
 suppressSqliteExperimentalWarning();
 
@@ -62,6 +65,12 @@ const USAGE = `usage: memory <command>
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete
+  eval [replay | false-recall | orbit] [--since <date> --pulls <file>] [--log <file>]
+      scorecard rows, memory off and on, one JSON object per line; no measure named means all three.
+      replay: memory built only from the pull requests reviewed before --since, restated owner-declined
+      findings counted after it. false-recall: recalled items later marked wrong or stale, or anchored
+      where nothing was touched, from the injection log. orbit: Orbit's benchmark arm, not run until it
+      has a memory switch. Calls no model, posts nothing and never opens the memory store
   --version`;
 
 /** Exit 1: refused, nothing was written. Exit 2: the command cannot run as given. */
@@ -381,6 +390,48 @@ function purge(args: string[], data: string): void {
   if (values.confirm !== true) console.error('Nothing was deleted. Run the same command with --confirm to delete.');
 }
 
+const MEASURES = ['replay', 'false-recall', 'orbit'] as const;
+
+/** Reads and parses one input file, or refuses with the file and the reason. */
+function input<T>(file: string, parse: (text: string) => T): T {
+  try {
+    return parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Refusal(`${file}: ${(error as Error).message}`, 2);
+  }
+}
+
+/** `memory eval`: one named measure needs its inputs; with none named, a measure without them reports not run. */
+function evalCommand(args: string[]): void {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { since: { type: 'string' }, pulls: { type: 'string' }, log: { type: 'string' } },
+  });
+  const only = positionals[0];
+  if (positionals.length > 1 || (only !== undefined && !(MEASURES as readonly string[]).includes(only))) {
+    throw new Refusal(`unknown measure ${positionals.join(' ')}; give one of ${MEASURES.join(', ')}, or none for all`, 2);
+  }
+  const want = (m: (typeof MEASURES)[number]): boolean => only === undefined || only === m;
+  const version = pluginVersion();
+  const rows: Row[] = [];
+  if (want('replay')) {
+    const { since, pulls } = values;
+    if (since !== undefined && Number.isNaN(Date.parse(since))) throw new Refusal(`--since takes a date, such as 2026-03-01, not "${since}"`, 2);
+    if (since !== undefined && pulls !== undefined) rows.push(...replay(version, input(pulls, parsePulls), since));
+    else if (only !== undefined || since !== undefined || pulls !== undefined) throw new Refusal('replay needs --since <date> and --pulls <file>', 2);
+    else rows.push(...notRun(version, REPLAY, 'no --since and --pulls given', ['repeats']));
+    rows.push(...seededRecall(version));
+  }
+  if (want('false-recall')) {
+    if (values.log !== undefined) rows.push(...falseRecall(version, input(values.log, parseLog)));
+    else if (only !== undefined) throw new Refusal('false-recall needs --log <file>', 2);
+    else rows.push(...notRun(version, FALSE_RECALL, 'no --log given', ['false_recall']));
+  }
+  if (want('orbit')) rows.push(...orbitArm(version));
+  process.stdout.write(rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+}
+
 function main(argv: string[]): void {
   const [command, ...rest] = argv;
   const data = dataDirectory();
@@ -409,6 +460,8 @@ function main(argv: string[]): void {
       return sessionStart(data);
     case 'purge':
       return purge(rest, data);
+    case 'eval':
+      return evalCommand(rest);
     case undefined:
     case '--help':
     case 'help':

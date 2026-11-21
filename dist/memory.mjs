@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync as readdirSync2 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join5, normalize as normalize2 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join6, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -272,9 +272,9 @@ function isPlaceholder(value) {
   if (PLACEHOLDERS.has(normalised)) return true;
   return value.length >= 4 && value === value.charAt(0).repeat(value.length);
 }
-function redact(input) {
+function redact(input2) {
   const counts = {};
-  let text2 = input;
+  let text2 = input2;
   for (const { label, pattern, group = 0 } of SECRET_PATTERNS) {
     pattern.lastIndex = 0;
     let redacted = "";
@@ -294,7 +294,7 @@ function redact(input) {
   return {
     text: text2,
     counts,
-    sourceHash: hash(input),
+    sourceHash: hash(input2),
     redactedHash: hash(text2),
     version: REDACTION_VERSION
   };
@@ -909,9 +909,9 @@ function leanRow(item, why = "", maxTokens = Infinity) {
   const source = item.source !== "" && item.source !== "remember" ? safe(item.source) : "";
   const statement = safe(item.statement);
   const build = (s, src2, loc2) => `[${item.id}] ${item.type}${loc2 === "" ? "" : ` \xB7 ${loc2}`} \xB7 ${s}${src2 === "" ? "" : ` (${src2})`}${why === "" ? "" : ` \xB7 why: ${why}`}`;
-  const row2 = build(statement, source, where);
+  const row3 = build(statement, source, where);
   const room = maxTokens * 4;
-  if (row2.length <= room) return row2;
+  if (row3.length <= room) return row3;
   const [src, loc] = [cutLeft(source, 40), cutLeft(where, 40)];
   return build(cut(statement, room - build("", src, loc).length), src, loc);
 }
@@ -1010,8 +1010,8 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
   };
   const toStale = db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ? AND status = 'active'");
   const toActive = db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'");
-  for (const row2 of rows) {
-    const anchors = JSON.parse(row2.anchors_json);
+  for (const row3 of rows) {
+    const anchors = JSON.parse(row3.anchors_json);
     const texts = anchors.map((a) => read(a.path));
     if (texts.includes(void 0)) continue;
     result.checked++;
@@ -1019,28 +1019,28 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
     const failed = checks.find((c) => !c.ok);
     if (failed !== void 0 && !failed.ok) {
       result.stale++;
-      result.staleItems.push({ id: row2.id, reason: failed.reason });
+      result.staleItems.push({ id: row3.id, reason: failed.reason });
       transition(
         db,
-        () => toStale.run(failed.reason, row2.id).changes === 1,
-        () => recordAudit(db, "item_stale", { type: "item", id: row2.id }, { reason: failed.reason })
+        () => toStale.run(failed.reason, row3.id).changes === 1,
+        () => recordAudit(db, "item_stale", { type: "item", id: row3.id }, { reason: failed.reason })
       );
       continue;
     }
     result.current++;
     const now = checks.map((c) => c.ok ? c.anchor : anchors[0]);
     const moved = JSON.stringify(now);
-    if (moved !== row2.anchors_json) {
+    if (moved !== row3.anchors_json) {
       transition(
         db,
-        () => db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(moved, row2.id).changes === 1,
-        () => recordAudit(db, "anchor_moved", { type: "item", id: row2.id }, { from: anchors.map(at), to: now.map(at) })
+        () => db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(moved, row3.id).changes === 1,
+        () => recordAudit(db, "anchor_moved", { type: "item", id: row3.id }, { from: anchors.map(at), to: now.map(at) })
       );
     }
     const restored = transition(
       db,
-      () => toActive.run(row2.id).changes === 1,
-      () => recordAudit(db, "item_restored", { type: "item", id: row2.id })
+      () => toActive.run(row3.id).changes === 1,
+      () => recordAudit(db, "item_restored", { type: "item", id: row3.id })
     );
     if (restored) result.restored++;
   }
@@ -1204,15 +1204,16 @@ var tenantFile = (data, tenant) => join3(data, "tenants", `${tenant}.sqlite`);
 var personFile = (data) => join3(data, "person.sqlite");
 
 // src/recall/visible.ts
+function withTextRatio(items, matches) {
+  const best = Math.min(0, ...items.map((i) => matches.get(i.id) ?? 0));
+  return items.map((item) => {
+    const bm25 = matches.get(item.id);
+    return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
+  });
+}
 function visibleItems(data, context, cwd, terms = []) {
   const out = [];
-  const add = (items, matches) => {
-    const best = Math.min(0, ...items.map((i) => matches.get(i.id) ?? 0));
-    for (const item of items) {
-      const bm25 = matches.get(item.id);
-      out.push(bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best });
-    }
-  };
+  const add = (items, matches) => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const db = openStore(tenantFile(data, context.tenant), false);
     if (db !== null) {
@@ -1351,49 +1352,49 @@ function get(args, data, context, cwd) {
   const format = args["format"] === void 0 ? "rows" : oneOf(args["format"], ["rows", "json"], "format");
   const found = first(data, context, (db, store) => {
     const checked = store.tenant === "" ? void 0 : recheck(db, store.tenant, context.repository, cwd, { id });
-    const row3 = db.prepare(
+    const row4 = db.prepare(
       `SELECT *, coalesce(reinforced_at, valid_from) AS reinforced, (${READS_EXPIRED}) AS expired FROM items
          WHERE id = ? AND ${store.where} AND status NOT IN ('proposed', 'rejected') AND statement != ''`
     ).get(id, ...store.params);
-    if (row3 === void 0) return void 0;
+    if (row4 === void 0) return void 0;
     const evidence2 = db.prepare("SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt FROM evidence WHERE item_id = ? ORDER BY captured_at, id").all(id);
-    return { row: row3, evidence: evidence2, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
+    return { row: row4, evidence: evidence2, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
   });
   if (found === void 0) throw new ToolError(`no item ${id} here; memory_search finds the items this repository may see`);
-  const { row: row2, evidence, gone } = found;
-  const anchors = JSON.parse(row2.anchors_json);
-  const status = row2.status === "active" && row2.expired === 1 ? "expired" : row2.status;
+  const { row: row3, evidence, gone } = found;
+  const anchors = JSON.parse(row3.anchors_json);
+  const status = row3.status === "active" && row3.expired === 1 ? "expired" : row3.status;
   const anchorStatus = anchors.length === 0 ? "none" : gone ?? "current";
-  const level = band(confidence(row2));
+  const level = band(confidence(row3));
   if (format === "json") {
     return fence(ITEMS_LABEL, `${safeJson({
-      id: row2.id,
-      type: row2.type,
-      scope: row2.scope,
-      scopeKey: row2.scope_key,
-      statement: row2.statement,
-      rationale: row2.rationale,
+      id: row3.id,
+      type: row3.type,
+      scope: row3.scope,
+      scopeKey: row3.scope_key,
+      statement: row3.statement,
+      rationale: row3.rationale,
       status,
-      statusReason: row2.status_reason,
-      trust: row2.origin_trust,
-      quarantine: row2.quarantine,
+      statusReason: row3.status_reason,
+      trust: row3.origin_trust,
+      quarantine: row3.quarantine,
       anchors,
       anchorStatus,
-      support: row2.support,
-      helped: row2.helped,
-      wrong: row2.wrong,
-      contradictions: row2.contradictions,
+      support: row3.support,
+      helped: row3.helped,
+      wrong: row3.wrong,
+      contradictions: row3.contradictions,
       confidence: level,
-      validFrom: row2.valid_from,
+      validFrom: row3.valid_from,
       evidence
     })}
 `);
   }
-  const item = { ...row2, anchors, source: evidence[0]?.source ?? "" };
+  const item = { ...row3, anchors, source: evidence[0]?.source ?? "" };
   return fence(ITEMS_LABEL, [
     leanRow(item),
-    ...row2.rationale === null ? [] : [safe(`because: ${row2.rationale}`)],
-    safe(`status ${status}${row2.status_reason === null ? "" : ` (${row2.status_reason})`} \xB7 confidence ${level} \xB7 support ${row2.support} \xB7 helped ${row2.helped} \xB7 wrong ${row2.wrong} \xB7 contradicted ${row2.contradictions} \xB7 anchor ${anchorStatus}`),
+    ...row3.rationale === null ? [] : [safe(`because: ${row3.rationale}`)],
+    safe(`status ${status}${row3.status_reason === null ? "" : ` (${row3.status_reason})`} \xB7 confidence ${level} \xB7 support ${row3.support} \xB7 helped ${row3.helped} \xB7 wrong ${row3.wrong} \xB7 contradicted ${row3.contradictions} \xB7 anchor ${anchorStatus}`),
     ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}`))
   ].map((l) => `${l}
 `).join(""));
@@ -1893,6 +1894,176 @@ function decide(db, p, decision, change) {
   }
 }
 
+// src/eval/scorecard.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+var row2 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
+  measure: m.measure,
+  arm,
+  version,
+  switches,
+  status,
+  bar: m.bar,
+  ...fields
+});
+var notRun = (version, m, note, figures, extra = {}) => ["off", "on"].map((arm) => row2(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures.map((f) => [f, "not run"])), note }));
+var seededRecall = (version) => notRun(
+  version,
+  { measure: "review-voice-seeded-recall", on: ["memory_search"], bar: "seeded recall unchanged with memory on" },
+  "Review Voice's seeded-defect suite runs its reviewer, a model, and Review Voice does not call memory yet; this harness calls no model",
+  ["recall"]
+);
+function orbitArm(version) {
+  const r = spawnSync2("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
+  const found = r.status === 0 ? r.stdout.trim().split("\n")[0] : void 0;
+  const note = r.error?.code === "ENOENT" ? "Orbit is not installed (no orbit on PATH), so its arm is skipped" : found === void 0 ? "orbit --version failed, so its arm is skipped" : `Orbit ${found} is installed, but its benchmark has no memory switch until QuintinBotes/orbit#233; a live run calls a model and spends money, which this harness never does`;
+  return notRun(
+    version,
+    { measure: "orbit-benchmark", on: ["orbit memory adapter"], bar: "no fall in pass rate; no rise in cost per accepted task" },
+    note,
+    ["pass_rate", "cost_per_accepted_task", "false_done_rate", "attempts_to_first_green"],
+    { runs_per_goal: 3 }
+  );
+}
+
+// src/eval/false-recall.ts
+var isText = (v) => typeof v === "string" && v !== "";
+var isPaths = (v) => Array.isArray(v) && v.every(isText);
+function parseLog(text2) {
+  const out = [];
+  text2.split("\n").forEach((line, i) => {
+    if (line.trim() === "") return;
+    let e;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      throw new Error(`line ${i + 1} is not JSON`);
+    }
+    const ok = e?.event === "injected" ? isText(e.session) && isText(e.item) && isText(e.via) && isPaths(e.anchors) : e?.event === "touched" ? isText(e.session) && isPaths(e.paths) : e?.event === "feedback" ? isText(e.session) && isText(e.item) && ["helped", "wrong", "stale"].includes(e.signal) : null;
+    if (ok === false) throw new Error(`line ${i + 1}: a ${String(e.event)} event lacks a field it needs`);
+    if (ok === true) out.push(e);
+  });
+  return out;
+}
+var FALSE_RECALL = { measure: "false-recall", on: [], bar: "false recall under 10% of recalled items" };
+var covers = (anchor, path) => path === anchor || path.startsWith(`${anchor}/`);
+function falseRecall(version, events) {
+  const flagged = /* @__PURE__ */ new Set();
+  const touched = /* @__PURE__ */ new Map();
+  const verdict = /* @__PURE__ */ new Map();
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.event === "feedback") {
+      if (e.signal === "wrong" || e.signal === "stale") flagged.add(e.item);
+    } else if (e.event === "touched") {
+      const paths = touched.get(e.session) ?? [];
+      paths.push(...e.paths);
+      touched.set(e.session, paths);
+    } else {
+      const paths = touched.get(e.session) ?? [];
+      const why = flagged.has(e.item) ? "wrong or stale" : e.anchors.length > 0 && !e.anchors.some((a) => paths.some((p) => covers(a, p))) ? "untouched" : null;
+      verdict.set(JSON.stringify([e.session, e.item]), { session: e.session, via: e.via, why });
+    }
+  }
+  const all = [...verdict.values()];
+  const wrong = all.filter((v) => v.why === "wrong or stale").length;
+  const untouched = all.filter((v) => v.why === "untouched").length;
+  const sessions = new Set(all.map((v) => v.session)).size;
+  const rate = all.length === 0 ? null : Math.round((wrong + untouched) / all.length * 1e3) / 1e3;
+  return [
+    row2(version, FALSE_RECALL, "off", "measured", { samples: { sessions: 0, recalled: 0 }, false_recall: null, note: "memory off recalls nothing" }),
+    row2(version, FALSE_RECALL, "on", "measured", {
+      samples: { sessions, recalled: all.length },
+      false_recall: rate,
+      why: { marked_wrong_or_stale: wrong, no_anchor_touched: untouched },
+      meets_bar: all.length === 0 ? null : (wrong + untouched) * 10 < all.length,
+      ...all.length === 0 ? { note: "the log records no recall" } : {}
+    }, [...new Set(all.map((v) => v.via))].sort())
+  ];
+}
+
+// src/eval/replay.ts
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join5 } from "node:path";
+var isText2 = (v) => typeof v === "string" && v.trim() !== "";
+function parsePulls(text2) {
+  const doc = JSON.parse(text2);
+  if (!Array.isArray(doc?.pulls)) throw new Error('expected {"pulls": [...]}');
+  const ids = /* @__PURE__ */ new Set();
+  const restates = [];
+  for (const p of doc.pulls) {
+    if (!Number.isInteger(p?.number) || !isText2(p.reviewed_at) || Number.isNaN(Date.parse(p.reviewed_at)) || !Array.isArray(p.findings)) {
+      throw new Error(`pull ${JSON.stringify(p?.number)} needs a number, a reviewed_at date and a findings list`);
+    }
+    for (const f of p.findings) {
+      const bad = !isText2(f?.id) || ids.has(f.id) ? "a unique id" : !isText2(f.statement) ? "a statement" : f.path !== void 0 && !isText2(f.path) ? "a path that is text" : f.owner !== void 0 && f.owner !== "declined" && f.owner !== "accepted" ? "an owner of declined or accepted" : f.restates !== void 0 && !isText2(f.restates) ? "a restates id that is text" : null;
+      if (bad !== null) throw new Error(`a finding in pull ${p.number} needs ${bad}`);
+      ids.add(f.id);
+      if (f.restates !== void 0) restates.push(f);
+    }
+  }
+  const unknown = restates.find((f) => !ids.has(f.restates));
+  if (unknown !== void 0) throw new Error(`finding ${unknown.id} restates ${unknown.restates}, which no pull holds`);
+  return doc.pulls;
+}
+var REPLAY = { measure: "review-replay", on: ["memory_search"], bar: "repeats halved: on at most half of off" };
+var TENANT = "replay";
+var REPOSITORY = "replay/replay";
+function held(learned, repeats) {
+  if (learned.length === 0 || repeats.length === 0) return 0;
+  const dir = mkdtempSync(join5(tmpdir(), "memory-replay-"));
+  try {
+    const db = openStore(join5(dir, "replay.sqlite"), true);
+    try {
+      const finding = /* @__PURE__ */ new Map();
+      for (const f of learned) {
+        const id = insertItem(db, {
+          tenant: TENANT,
+          scope: "repository",
+          scopeKey: REPOSITORY,
+          type: "precedent",
+          statement: f.statement,
+          rationale: null,
+          anchors: f.path === void 0 ? [] : [{ path: f.path }],
+          source: `replay ${f.id}`
+        });
+        finding.set(id, f.id);
+      }
+      const items = tenantItems(db, TENANT, REPOSITORY, "replay");
+      return repeats.filter((f) => {
+        const ranked = withTextRatio(items, textMatches(db, searchTerms(f.statement))).map((i) => ({ ...i, id: finding.get(i.id) }));
+        return rank(ranked, f.path === void 0 ? [] : [f.path]).some((h) => h.item.id === f.restates);
+      }).length;
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+function replay(version, pulls, since) {
+  const cut2 = Date.parse(since);
+  const before = pulls.filter((p) => Date.parse(p.reviewed_at) < cut2);
+  const after = pulls.filter((p) => Date.parse(p.reviewed_at) >= cut2);
+  const declined = new Set(pulls.flatMap((p) => p.findings).filter((f) => f.owner === "declined").map((f) => f.id));
+  const findingsAfter = after.flatMap((p) => p.findings);
+  const repeats = findingsAfter.filter((f) => f.restates !== void 0 && declined.has(f.restates));
+  const learned = before.flatMap((p) => p.findings).filter((f) => f.owner === "declined");
+  const kept = held(learned, repeats);
+  const samples = (memory) => ({ pulls_before: before.length, pulls_after: after.length, findings_after: findingsAfter.length, restatements: repeats.length, memory_items: memory });
+  return [
+    row2(version, REPLAY, "off", "measured", { since, samples: samples(0), repeats: repeats.length, held: 0 }),
+    row2(version, REPLAY, "on", "measured", {
+      since,
+      samples: samples(learned.length),
+      repeats: repeats.length - kept,
+      held: kept,
+      meets_bar: repeats.length === 0 ? null : 2 * (repeats.length - kept) <= repeats.length,
+      ...repeats.length === 0 ? { note: "no owner-declined finding was restated after the cut-off, so there is no repeat to halve" } : {}
+    })
+  ];
+}
+
 // src/cli.ts
 suppressSqliteExperimentalWarning();
 var USAGE = `usage: memory <command>
@@ -1922,6 +2093,12 @@ var USAGE = `usage: memory <command>
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete
+  eval [replay | false-recall | orbit] [--since <date> --pulls <file>] [--log <file>]
+      scorecard rows, memory off and on, one JSON object per line; no measure named means all three.
+      replay: memory built only from the pull requests reviewed before --since, restated owner-declined
+      findings counted after it. false-recall: recalled items later marked wrong or stale, or anchored
+      where nothing was touched, from the injection log. orbit: Orbit's benchmark arm, not run until it
+      has a memory switch. Calls no model, posts nothing and never opens the memory store
   --version`;
 var Refusal = class extends Error {
   constructor(message, code = 1) {
@@ -2139,8 +2316,8 @@ function sessionStart(data) {
   try {
     let cwd = process.cwd();
     try {
-      const input = JSON.parse(readFileSync4(0, "utf8"));
-      if (typeof input.cwd === "string" && input.cwd.length > 0) cwd = input.cwd;
+      const input2 = JSON.parse(readFileSync4(0, "utf8"));
+      if (typeof input2.cwd === "string" && input2.cwd.length > 0) cwd = input2.cwd;
     } catch {
     }
     const config = loadConfig(data);
@@ -2176,7 +2353,7 @@ function purge(args, data) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join5(data, "tenants");
+  const tenantsDir = join6(data, "tenants");
   const tenants = values.tenant !== void 0 ? [values.tenant] : existsSync4(tenantsDir) ? readdirSync2(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
   const files = tenants.filter((t) => TENANT_NAME.test(t)).map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0) files.push(personFile(data));
@@ -2197,6 +2374,44 @@ function purge(args, data) {
   }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
   if (values.confirm !== true) console.error("Nothing was deleted. Run the same command with --confirm to delete.");
+}
+var MEASURES = ["replay", "false-recall", "orbit"];
+function input(file, parse) {
+  try {
+    return parse(readFileSync4(file, "utf8"));
+  } catch (error) {
+    throw new Refusal(`${file}: ${error.message}`, 2);
+  }
+}
+function evalCommand(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { since: { type: "string" }, pulls: { type: "string" }, log: { type: "string" } }
+  });
+  const only = positionals[0];
+  if (positionals.length > 1 || only !== void 0 && !MEASURES.includes(only)) {
+    throw new Refusal(`unknown measure ${positionals.join(" ")}; give one of ${MEASURES.join(", ")}, or none for all`, 2);
+  }
+  const want = (m) => only === void 0 || only === m;
+  const version = pluginVersion();
+  const rows = [];
+  if (want("replay")) {
+    const { since, pulls } = values;
+    if (since !== void 0 && Number.isNaN(Date.parse(since))) throw new Refusal(`--since takes a date, such as 2026-03-01, not "${since}"`, 2);
+    if (since !== void 0 && pulls !== void 0) rows.push(...replay(version, input(pulls, parsePulls), since));
+    else if (only !== void 0 || since !== void 0 || pulls !== void 0) throw new Refusal("replay needs --since <date> and --pulls <file>", 2);
+    else rows.push(...notRun(version, REPLAY, "no --since and --pulls given", ["repeats"]));
+    rows.push(...seededRecall(version));
+  }
+  if (want("false-recall")) {
+    if (values.log !== void 0) rows.push(...falseRecall(version, input(values.log, parseLog)));
+    else if (only !== void 0) throw new Refusal("false-recall needs --log <file>", 2);
+    else rows.push(...notRun(version, FALSE_RECALL, "no --log given", ["false_recall"]));
+  }
+  if (want("orbit")) rows.push(...orbitArm(version));
+  process.stdout.write(rows.map((r) => `${JSON.stringify(r)}
+`).join(""));
 }
 function main(argv) {
   const [command, ...rest] = argv;
@@ -2226,6 +2441,8 @@ function main(argv) {
       return sessionStart(data);
     case "purge":
       return purge(rest, data);
+    case "eval":
+      return evalCommand(rest);
     case void 0:
     case "--help":
     case "help":

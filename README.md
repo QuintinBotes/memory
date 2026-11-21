@@ -205,6 +205,51 @@ A hook with nothing to say prints nothing. Only the slice at session start
 exists so far, not yet after a compaction; the other moments arrive with
 later slices.
 
+## Measuring memory
+
+Memory stays off by default until it measures no worse. `memory eval` prints
+scorecard rows, one JSON object per line, each measure with memory off and on.
+Every row carries the plugin version, the capabilities on in its arm
+(`switches`), its sample sizes and its bar. A measure that cannot run says
+`not run` and why; it never carries a number. The harness calls no model,
+posts nothing, never opens the memory store, and prints the same rows for the
+same inputs.
+
+```bash
+memory eval replay --since 2026-03-01 --pulls pulls.json
+memory eval false-recall --log injections.jsonl
+memory eval orbit
+memory eval --since 2026-03-01 --pulls pulls.json --log injections.jsonl   # every row
+```
+
+| Measure | What it counts | Bar |
+|---|---|---|
+| `review-replay` | Findings after the cut-off that restate one the owner declined. Memory is built only from pull requests reviewed before it, and a repeat is held when a search for its statement and path, ranked as `memory_search` ranks, returns the declined item | Repeats halved |
+| `review-voice-seeded-recall` | Reported beside the replay. Not run: it needs Review Voice's reviewer, a model | Unchanged with memory on |
+| `false-recall` | Recalled items later marked wrong or stale, or anchored where nothing under the anchor was touched later in that session | Under 10% |
+| `orbit-benchmark` | Pass rate, cost per accepted task, false-done rate and attempts to first green, three runs per goal. Not run until Orbit's benchmark has a memory switch ([orbit#233](https://github.com/QuintinBotes/orbit/issues/233)); it says whether Orbit is installed | No fall in pass rate, no rise in cost |
+
+The replay reads pull requests from a JSON file. `restates` labels a finding
+that says again what an earlier one said, naming the finding that first said
+it, so repeats are counted without a model:
+
+```json
+{"pulls": [{"number": 12, "reviewed_at": "2026-03-04", "findings": [
+  {"id": "12-1", "path": "src/ledger.ts", "statement": "consume runs without the lock", "owner": "declined"},
+  {"id": "12-2", "path": "src/api.ts", "statement": "...", "owner": "accepted", "restates": "9-1"}]}]}
+```
+
+The false-recall report reads the injection log: one JSON object per line, in
+the order things happened. The recall hooks will write it (slice 10); until
+then a fixture stands in. It reads three events and ignores other fields and
+other events:
+
+```json
+{"event": "injected", "session": "s1", "item": "m-1a2b3c4d5e", "via": "session-start", "anchors": ["src/ledger.ts"]}
+{"event": "touched", "session": "s1", "paths": ["src/ledger.ts"]}
+{"event": "feedback", "session": "s2", "item": "m-1a2b3c4d5e", "signal": "wrong"}
+```
+
 ## Code anchor providers
 
 Items can be anchored to code. Memory ships a provider that anchors by path,
