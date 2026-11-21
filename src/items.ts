@@ -54,8 +54,8 @@ export interface Visible {
   reinforced: string;
   anchors: Anchor[];
   source: string;
-  /** The full-text match of a search, bm25: lower is better. */
-  bm25?: number;
+  /** A search's full-text match, against the best match in the same store: 1 is the best. */
+  textRatio?: number;
 }
 
 export const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
@@ -142,19 +142,17 @@ const visible = (rows: Row[]): Visible[] =>
     source: r.source ?? '',
   }));
 
-/** Active items of `tenant` for this repository and its owner. The tenant column is checked as well as the file. */
+/** The items of a tenant file one repository may see, given tenant, repository and owner. The tenant column is checked as well as the file. */
+export const TENANT_SCOPE = "tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))";
+export const PERSON_SCOPE = "tenant = '' AND scope IN ('person', 'global')";
+
+/** Active items of `tenant` for this repository and its owner. */
 export function tenantItems(db: DatabaseSync, tenant: string, repository: string, owner: string): Visible[] {
-  return visible(
-    db
-      .prepare(
-        `${SELECT} AND tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))`,
-      )
-      .all(tenant, repository, owner) as unknown as Row[],
-  );
+  return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE}`).all(tenant, repository, owner) as unknown as Row[]);
 }
 
 export function personItems(db: DatabaseSync): Visible[] {
-  return visible(db.prepare(`${SELECT} AND scope IN ('person', 'global')`).all() as unknown as Row[]);
+  return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all() as unknown as Row[]);
 }
 
 /** bm25 of each item whose statement or rationale holds any of `terms`, by id. */

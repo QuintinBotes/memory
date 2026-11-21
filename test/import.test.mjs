@@ -506,3 +506,18 @@ test('imperative auto memory text arrives quarantined and counted, and approving
   assert.equal(approved.status, 0, approved.stderr);
   assert.match(approved.stdout, /quarantined \(weaken-tests\)/);
 });
+
+test('a proposal stored before quarantine existed is flagged when the store is upgraded', () => {
+  const s = silos();
+  addTopic(s, 'flaky.md', 'Skip the flaky tests in acme/api before a release');
+  importSilos(s);
+  // Take the store back to the schema before slice 4, as an earlier version left it.
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.exec(`DROP TRIGGER items_fts_insert; DROP TRIGGER items_fts_delete; DROP TRIGGER items_fts_update; DROP TABLE items_fts;
+    ALTER TABLE items DROP COLUMN quarantine; ALTER TABLE items DROP COLUMN helped; ALTER TABLE items DROP COLUMN wrong;
+    ALTER TABLE items DROP COLUMN reinforced_at; PRAGMA user_version = 3;`);
+  db.close();
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(review.status, 0, review.stderr);
+  assert.match(review.stdout, /quarantined \(weaken-tests\): "Skip the flaky tests in acme\/api before a release"/);
+});

@@ -52,9 +52,8 @@ const tenth = (n: number): number => Math.round(n * 10) / 10;
  * confidence and contradictions adjust it. Ties break on support, then id.
  */
 export function rank(items: Visible[], paths: string[], now = Date.now()): Hit[] {
-  const want = paths.map((p) => posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\//, '').replace(/\/+$/, ''));
-  // bm25 is negative, more negative is better: the best visible match scores 1.
-  const best = Math.min(0, ...items.map((i) => i.bm25 ?? 0));
+  // The repository root, '.' or './', normalises to '' and holds every anchored path.
+  const want = paths.map((p) => posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\/?$|^\.\//, '').replace(/\/+$/, ''));
   const hits: Hit[] = [];
   for (const item of items) {
     const parts: string[] = [];
@@ -63,9 +62,9 @@ export function rank(items: Visible[], paths: string[], now = Date.now()): Hit[]
       score += points;
       parts.push(`${label} ${points}`);
     };
-    const overlap = item.anchors.filter((a) => want.some((p) => a.path === p || a.path.startsWith(`${p}/`))).length;
+    const overlap = item.anchors.filter((a) => want.some((p) => p === '' || a.path === p || a.path.startsWith(`${p}/`))).length;
     if (overlap > 0) add('anchor', Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
-    const ratio = best < 0 && item.bm25 !== undefined ? item.bm25 / best : 0;
+    const ratio = item.textRatio ?? 0;
     const text = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     if (overlap === 0 && text === 0) continue;
     add(item.scope, RANKING.scope[item.scope] ?? 0);

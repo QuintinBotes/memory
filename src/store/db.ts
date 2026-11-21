@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { reduceTombstones, statementKey } from '../items.ts';
+import { quarantineOf, reduceTombstones, statementKey, type Trust } from '../items.ts';
 
 /**
  * One schema for every file, tenant and person alike. Migrations follow
@@ -71,7 +71,10 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
 
   // v4 - feedback counts, the quarantine flag and the full-text index (slice 4). The index is
   // keyed by item id, not rowid, which a VACUUM may renumber, and deletes securely (#23).
-  `
+  // shortcut: deleting an item scans the index for its id: 2 ms for one item at 10,000 items,
+  // about 10 s to purge a whole 10,000-item tenant; index the id if purges that large matter.
+  (db) => {
+    db.exec(`
   ALTER TABLE items ADD COLUMN helped INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE items ADD COLUMN wrong INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE items ADD COLUMN reinforced_at TEXT;
@@ -88,7 +91,15 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   CREATE TRIGGER items_fts_update AFTER UPDATE OF statement, rationale ON items BEGIN
     UPDATE items_fts SET statement = new.statement, rationale = new.rationale WHERE item_id = old.id;
   END;
-  `,
+  `);
+    // Proposals stored before quarantine existed are classified as a new one would be.
+    const set = db.prepare('UPDATE items SET quarantine = ? WHERE id = ?');
+    const rows = db.prepare("SELECT id, statement, origin_trust FROM items WHERE status = 'proposed'").all() as { id: string; statement: string; origin_trust: string }[];
+    for (const r of rows) {
+      const flag = quarantineOf({ statement: r.statement, status: 'proposed', trust: r.origin_trust as Trust });
+      if (flag !== null) set.run(flag, r.id);
+    }
+  },
 ];
 
 /**

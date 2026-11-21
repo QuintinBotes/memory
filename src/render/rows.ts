@@ -23,9 +23,16 @@ export function defang(text: string): string {
 export const safe = (text: string): string =>
   defang(visibleText(text)).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
 
-/** JSON of an item, for a fence: fence runs broken, and line separators escaped as JSON allows. */
+/**
+ * JSON of an item, for a fence. Each string is normalised and defanged before
+ * it is serialised, so the serialiser escapes what normalising produced (a
+ * full-width quote becomes `"`), and line separators are escaped as JSON allows.
+ */
 export const safeJson = (value: unknown): string =>
-  defang(visibleText(JSON.stringify(value, null, 2))).replace(/[\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16)}`);
+  JSON.stringify(value, (_key, v: unknown) => (typeof v === 'string' ? defang(visibleText(v)) : v), 2).replace(
+    /[\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16)}`,
+  );
 
 /** The one advisory fence every rendering of items sits in. `body` is whole lines, none starting with a fence run. */
 export const fence = (label: string, body: string): string => `~~~text ${label}\n${body}~~~\n`;
@@ -48,7 +55,7 @@ export function leanRow(item: Visible, why = '', maxTokens = Infinity): string {
   const source = item.source !== '' && item.source !== 'remember' ? safe(item.source) : '';
   const statement = safe(item.statement);
   const build = (s: string, src: string, loc: string): string =>
-    [`[${item.id}] ${item.type}`, loc, `${s}${src === '' ? '' : ` (${src})`}`].filter((p) => p !== '').join(' · ') + (why === '' ? '' : ` · why: ${why}`);
+    `[${item.id}] ${item.type}${loc === '' ? '' : ` · ${loc}`} · ${s}${src === '' ? '' : ` (${src})`}${why === '' ? '' : ` · why: ${why}`}`;
   const row = build(statement, source, where);
   const room = maxTokens * 4;
   if (row.length <= room) return row;

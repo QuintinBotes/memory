@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { setup, run, remember, rpc, tools, fenced, tokens } from './helpers.mjs';
+import { setup, run, remember, rpc, tools, fenced, tokens, commit } from './helpers.mjs';
 
 const LOCK = 'consume is called with the ledger lock held';
 const ROUNDING = 'The ledger rounds units down to the nearest whole unit';
@@ -255,4 +255,55 @@ test('the full-text index uses secure-delete, and a purged item is gone from it'
   assert.deepEqual(match(), { n: 1, secure: 1 });
   assert.equal(run(['purge', '--repo', 'acme/api', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
   assert.deepEqual(match(), { n: 0, secure: 1 });
+});
+
+test('memory_get JSON stays valid when a statement holds full-width quotes or backslashes', () => {
+  const s = setup();
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Headings use ＂draft＂ and paths use ＼ separators', '--scope', 'repository').status, 0);
+  const id = idOf(s, 'Headings use ＂draft＂ and paths use ＼ separators');
+  const [json] = tools(s.acmeApi, s.data, s.configA, [['memory_get', { id, format: 'json' }]]);
+  const item = JSON.parse(fenced(json.text).join('\n'));
+  assert.equal(item.statement, 'Headings use "draft" and paths use \\ separators');
+});
+
+test('a match in a small person file is not lost against the bm25 of a larger tenant file', () => {
+  const s = setup();
+  const ok = (r) => assert.equal(r.status, 0, r.stderr);
+  ok(remember(s.acmeApi, s.data, s.configA, 'Prefer a short timeout in examples', '--scope', 'person'));
+  ok(remember(s.acmeApi, s.data, s.configA, 'The ledger timeout is ten seconds long', '--scope', 'repository'));
+  for (let n = 0; n < 20; n++) ok(remember(s.acmeApi, s.data, s.configA, `Unrelated convention number ${n} about naming`, '--scope', 'repository'));
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'timeout' }]]);
+  assert.match(search.text, /Prefer a short timeout in examples/);
+  assert.match(search.text, /The ledger timeout is ten seconds long/);
+});
+
+test('memory_get reports a gone citation even on an item an agent reported stale', () => {
+  const s = seeded();
+  const id = idOf(s, LOCK);
+  tools(s.acmeApi, s.data, s.configA, [['memory_feedback', { id, signal: 'stale' }]]);
+  commit(s.acmeApi, { 'src/ledger.ts': null });
+  const [json] = tools(s.acmeApi, s.data, s.configA, [['memory_get', { id, format: 'json' }]]);
+  assert.equal(JSON.parse(fenced(json.text).join('\n')).anchorStatus, 'path gone');
+});
+
+test('a long unanchored statement with no source still fits its row in 60 tokens', () => {
+  const s = setup();
+  const statement = 'ledger '.repeat(40).trim();
+  assert.equal(remember(s.acmeApi, s.data, s.configA, statement, '--scope', 'repository').status, 0);
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger' }]]);
+  const [row] = rowsOf(search.text);
+  assert.ok(tokens(row) <= 60, `${tokens(row)} tokens: ${row}`);
+});
+
+test('the repository root as a path overlaps every anchored item', () => {
+  const s = seeded();
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'zzz', paths: ['.'] }]]);
+  assert.match(search.text, new RegExp(`${LOCK}.*why: anchor 4`));
+});
+
+test('initialize answers with a protocol version the server supports, not any version asked for', () => {
+  const s = setup();
+  const r = rpc(s.acmeApi, s.data, s.configA, [{ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2099-01-01', capabilities: {} } }]);
+  assert.equal(r.byId(0).result.protocolVersion, '2025-06-18');
+  assert.notEqual(r.byId(1).result.protocolVersion, '2099-01-01');
 });
