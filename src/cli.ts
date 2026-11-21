@@ -15,6 +15,7 @@ import {
   loadConfig,
   organisationTerms,
   planHash,
+  neverSubagent,
   saveConfig,
   subagentAllowed,
   type Config,
@@ -344,6 +345,8 @@ function hookSlice(data: string, config: Config, input: Record<string, unknown>,
 function sessionStart(data: string): void {
   try {
     const input = hookInput();
+    // A session started with --agent names its agent; one that may never get the slice gets none here either.
+    if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);

@@ -39,7 +39,8 @@ import { join as join2, resolve } from "node:path";
 var SILOS = ["rejections", "standards", "policy", "notes"];
 var DEFAULT_SESSION_BUDGET = 300;
 var SUBAGENT_BUDGET = 300;
-var neverSubagent = (type) => type === "Explore" || type === "Plan" || type.startsWith("review-voice:");
+var REVIEW_VOICE_AGENTS = ["challenger", "concise-editor", "concurrency-analyst", "diff-analyst", "evidence-verifier", "intent-extractor", "security-analyst", "structure-analyst", "tie-breaker"];
+var neverSubagent = (type) => type === "Explore" || type === "Plan" || type.startsWith("review-voice:") || REVIEW_VOICE_AGENTS.includes(type);
 var subagentAllowed = (config, type) => !neverSubagent(type) && (type === "general-purpose" || (config.subagentTypes ?? []).includes(type));
 var TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
@@ -2515,6 +2516,7 @@ function hookSlice(data, config, input2, budget) {
 function sessionStart(data) {
   try {
     const input2 = hookInput();
+    if (typeof input2["agent_type"] === "string" && neverSubagent(input2["agent_type"])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
     process.stdout.write(hookSlice(data, config, input2, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);

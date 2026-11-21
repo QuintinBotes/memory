@@ -1,8 +1,9 @@
 import { row, type Measure, type Row } from './scorecard.ts';
 
 /**
- * The injection log: one JSON object per line, appended in the order things happened. Slice 10's hooks write
- * it, and `memory_feedback` adds its signals; until then a fixture stands in. The report reads three events:
+ * The injection log: one JSON object per line, appended in the order things happened. The SubagentStart hook writes
+ * its `injected` events; slice 10's hooks add `touched` events and `memory_feedback` its signals. Until then a log
+ * has no `touched` events, so every anchored recall in it reads as untouched, and a fixture stands in. The report reads three events:
  *
  *   {"event": "injected", "session": "<id>", "item": "<id>", "via": "<capability>", "anchors": ["<path>", ...]}
  *   {"event": "touched", "session": "<id>", "paths": ["<path>", ...]}

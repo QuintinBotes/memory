@@ -65,10 +65,16 @@ test('after a compaction, and in a general-purpose subagent, the slice is byte-i
 
 test("Explore, Plan and Review Voice's agents get nothing", () => {
   const s = seeded();
-  for (const type of ['Explore', 'Plan', 'review-voice:diff-analyst', 'review-voice:challenger', 'statusline-setup']) {
+  for (const type of ['Explore', 'Plan', 'review-voice:diff-analyst', 'review-voice:challenger', 'challenger', 'statusline-setup']) {
     assert.equal(context(subagent(s.acmeApi, s.data, s.configA, type)), null, type);
   }
   assert.deepEqual(logged(s.data), []);
+  // A session started as one of them with --agent, at startup or after a compaction, gets nothing either.
+  for (const [source, type] of [['startup', 'review-voice:evidence-verifier'], ['compact', 'Explore'], ['compact', 'diff-analyst']]) {
+    const r = run(['session-start'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 's1', hook_event_name: 'SessionStart', source, agent_type: type, cwd: s.acmeApi }) });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, '', type);
+  }
 });
 
 test('an agent type added to the allow list gets the slice; Explore, Plan and Review Voice agents can never be added', () => {
@@ -79,7 +85,7 @@ test('an agent type added to the allow list gets the slice; Explore, Plan and Re
   assert.equal(context(subagent(s.acmeApi, s.data, s.configA, 'my-plugin:implementer')), startup);
   assert.equal(context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose')), startup);
   assert.equal(context(subagent(s.acmeApi, s.data, s.configA, 'reviewer')), null);
-  for (const type of ['Explore', 'Plan', 'review-voice:evidence-verifier']) {
+  for (const type of ['Explore', 'Plan', 'review-voice:evidence-verifier', 'tie-breaker']) {
     edit(s.data, { subagentTypes: [type] });
     const r = run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA });
     assert.equal(r.status, 2, type);
@@ -93,7 +99,11 @@ test("the subagent slice resolves the tenant from the subagent's working directo
   const s = seeded();
   const beta = remember(s.betaWeb, s.data, s.configA, 'Beta deploys on Thursdays', '--scope', 'repository', '--type', 'convention');
   assert.equal(beta.status, 0, beta.stderr);
-  const inBeta = context(subagent(s.betaWeb, s.data, s.configA, 'general-purpose'));
+  // The hook runs in the session's directory; the input names the subagent's.
+  const inBeta = context(run(['subagent-start'], {
+    cwd: s.acmeApi, data: s.data, config: s.configA,
+    input: JSON.stringify({ session_id: 's1', hook_event_name: 'SubagentStart', agent_id: 'agent-1', agent_type: 'general-purpose', cwd: s.betaWeb }),
+  }));
   assert.equal(inBeta, sessionStart(s.betaWeb, s.data, s.configA).stdout);
   assert.match(inBeta, /Beta deploys/);
   assert.doesNotMatch(inBeta, /Releases are cut|health endpoint/);
@@ -147,6 +157,18 @@ test('the subagent hook prints nothing and exits 0 when memory is not set up or 
   const garbage = run(['subagent-start'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: 'not json' });
   assert.equal(garbage.status, 0);
   assert.equal(garbage.stdout, '');
+  // A plan changed since the owner agreed to it: memory is inert, and nothing is shown or logged.
+  edit(s.data, { tenants: { acme: ['acme/*'] } });
+  assert.equal(context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose')), null);
+  assert.deepEqual(logged(s.data), []);
   writeFileSync(join(s.data, 'config.json'), '{not json');
   assert.equal(context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose')), null);
+});
+
+test("an anchored item's log line carries its anchored paths, for false recall to judge", () => {
+  const s = setup();
+  const r = remember(s.acmeApi, s.data, s.configA, 'consume runs under the run lock', '--scope', 'repository', '--type', 'hazard', '--anchor', 'src/ledger.ts:1-3');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose')), /consume runs under the run lock/);
+  assert.deepEqual(logged(s.data).map((l) => l.anchors), [['src/ledger.ts']]);
 });

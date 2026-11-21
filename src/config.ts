@@ -31,8 +31,13 @@ export type RepositorySilos = Partial<Record<(typeof SILOS)[number], string>>;
 
 export const DEFAULT_SESSION_BUDGET = 300;
 export const SUBAGENT_BUDGET = 300;
-/** Read-only and review agents: a reviewer primed with the owner's preferences is no longer independent. */
-export const neverSubagent = (type: string): boolean => type === 'Explore' || type === 'Plan' || type.startsWith('review-voice:');
+/**
+ * Read-only and review agents: a reviewer primed with the owner's preferences is no longer independent. Review Voice's
+ * agents are refused bare too, as its own hooks accept them, so a user agent of the same name is refused as well.
+ */
+const REVIEW_VOICE_AGENTS = ['challenger', 'concise-editor', 'concurrency-analyst', 'diff-analyst', 'evidence-verifier', 'intent-extractor', 'security-analyst', 'structure-analyst', 'tie-breaker'];
+export const neverSubagent = (type: string): boolean =>
+  type === 'Explore' || type === 'Plan' || type.startsWith('review-voice:') || REVIEW_VOICE_AGENTS.includes(type);
 export const subagentAllowed = (config: Config, type: string): boolean =>
   !neverSubagent(type) && (type === 'general-purpose' || (config.subagentTypes ?? []).includes(type));
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
