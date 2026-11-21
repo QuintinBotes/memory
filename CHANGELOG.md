@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- An agent's `memory_feedback(id, stale)` no longer hides the item. It
+  re-checks the item's citation at HEAD at once: a citation that fails makes
+  the item stale, as the re-check would, and it comes back when the citation
+  holds again. Otherwise the item stays active, and the report is counted and
+  shown in `memory review`, where `memory approve` clears the reports and
+  `memory reject` takes the item out. Any agent could otherwise suppress any
+  item the owner approved. An item an agent hid before this change comes back
+  active with one report counted.
+
 ## [0.2.0] - 2026-11-21
 
 The second release: slices 1 to 4 of eighteen. Slices 5 to 18 are still to
