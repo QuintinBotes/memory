@@ -29,21 +29,23 @@ function compose(rows: string[], more: number): string {
 }
 
 /**
- * The rows that fit `budget`, whole, in rank order. A row that does not fit is
- * skipped and a later, shorter one may still fit. Each fit is checked as if
- * every row not yet taken were dropped, and the "more" count only falls as
- * rows are added, so the final text never exceeds the budget. Nothing fits,
- * nothing is printed.
+ * The rows that fit `budget`, whole, in rank order, with the items they show.
+ * A row that does not fit is skipped and a later, shorter one may still fit.
+ * Each fit is checked as if every row not yet taken were dropped, and the
+ * "more" count only falls as rows are added, so the final text never exceeds
+ * the budget. Nothing fits, nothing is printed.
  */
-export function renderSlice(items: Visible[], budget: number): string {
-  if (budget <= 0 || items.length === 0) return '';
-  const rows = rank(items).map(row);
-  const chosen: string[] = [];
-  for (const r of rows) {
-    const candidate = [...chosen, r];
-    if (estimate(compose(candidate, rows.length - candidate.length)) <= budget) chosen.push(r);
+export function chooseSlice(items: Visible[], budget: number): { text: string; shown: Visible[] } {
+  if (budget <= 0 || items.length === 0) return { text: '', shown: [] };
+  const ranked = rank(items);
+  const rows = ranked.map(row);
+  const chosen: number[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const candidate = [...chosen, i].map((j) => rows[j]!);
+    if (estimate(compose(candidate, rows.length - candidate.length)) <= budget) chosen.push(i);
   }
-  return chosen.length === 0 ? '' : compose(chosen, rows.length - chosen.length);
+  if (chosen.length === 0) return { text: '', shown: [] };
+  return { text: compose(chosen.map((j) => rows[j]!), rows.length - chosen.length), shown: chosen.map((j) => ranked[j]!) };
 }
 
 /** Every visible item, no budget, for `memory list`. */

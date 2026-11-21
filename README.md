@@ -96,7 +96,19 @@ restores what holds.
 
 At session start, the items this repository and config may see are printed
 in one line each, within `sessionBudget` estimated tokens (300 by default, 0
-turns it off, set in `config.json` in the data directory).
+turns it off, set in `config.json` in the data directory). The same bytes are
+printed again after a compaction, which summarises the first copy away, and
+at the start of a `general-purpose` subagent, which never saw it, as context
+for that subagent, resolved from its own working directory. A subagent's
+slice is chosen within 300 tokens, so with a `sessionBudget` above 300 it
+holds fewer items than the session's. To give the slice to other subagent types, such as an editing agent,
+list them in `config.json`: `"subagentTypes": ["my-plugin:implementer"]`.
+`Explore`, `Plan` and Review Voice's agents never get it, not even in a
+session started as one with `--agent`, and naming one there is refused. Each item a subagent is shown is logged in
+`logs/injections.jsonl` in the data directory, by item id with its anchored
+file paths, the session and agent ids and its estimated tokens, never its
+text. `memory purge` does not reach this log yet; delete the file to clear
+it.
 
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your
@@ -201,9 +213,9 @@ each proposal's statement in quotes.
 | A failing command that matches a known failure | 120 tokens |
 | A diff, at review or commit | 600 tokens |
 
-A hook with nothing to say prints nothing. Only the slice at session start
-exists so far, not yet after a compaction; the other moments arrive with
-later slices.
+A hook with nothing to say prints nothing. The slice at session start, after
+a compaction and at a subagent's start exists so far; the other moments
+arrive with later slices.
 
 ## Measuring memory
 
@@ -240,8 +252,10 @@ it, so repeats are counted without a model:
 ```
 
 The false-recall report reads the injection log: one JSON object per line, in
-the order things happened. The recall hooks will write it (slice 10); until
-then a fixture stands in. It reads three events and ignores other fields and
+the order things happened. The subagent hook writes its `injected` events
+already; the recall hooks will add `touched` events (slice 10), and until then
+a log without them judges every anchored recall untouched, so a fixture
+stands in. It reads three events and ignores other fields and
 other events; the session lab also sums an `injected` event's `tokens`, its
 estimated tokens, when present:
 
