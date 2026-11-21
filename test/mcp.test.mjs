@@ -169,22 +169,48 @@ test('memory_feedback wrong raises the wrong count and lowers confidence on the 
   assert.equal(item.status, 'active', 'wrong changes no status');
 });
 
-test('helped raises the helped count; stale takes the item out of search and keeps it out at the next session', () => {
+test('helped raises the helped count; an agent\'s stale report on a citation that holds keeps the item active and counts the report', () => {
   const s = seeded();
   const lock = idOf(s, LOCK);
   const rounding = idOf(s, ROUNDING);
-  const [helped, stale] = tools(s.acmeApi, s.data, s.configA, [
+  const [helped, stale, unanchored] = tools(s.acmeApi, s.data, s.configA, [
     ['memory_feedback', { id: rounding, signal: 'helped' }],
     ['memory_feedback', { id: lock, signal: 'stale' }],
+    ['memory_feedback', { id: rounding, signal: 'stale' }],
   ]);
   assert.equal(helped.isError, false, helped.text);
   assert.equal(stale.isError, false, stale.text);
+  assert.match(stale.text, /stays active/);
+  assert.equal(unanchored.isError, false, unanchored.text);
+  assert.match(unanchored.text, /stays active/, 'an item with no citation has nothing that shows it stale');
   run(['session-start'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ cwd: s.acmeApi }) });
   const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger lock', paths: ['src/ledger.ts'] }]]);
-  assert.doesNotMatch(search.text, new RegExp(lock), 'an agent\'s stale report is not undone by the citation re-check');
+  assert.match(search.text, new RegExp(lock), 'an agent cannot take an item out of recall by saying so');
   const rows = items(s.data, 'tenants/acme.sqlite');
   assert.equal(rows.find((r) => r.id === rounding).helped, 1);
-  assert.equal(rows.find((r) => r.id === lock).status, 'stale');
+  const row = rows.find((r) => r.id === lock);
+  assert.equal(row.status, 'active');
+  assert.equal(row.stale_reports, 1);
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(review.status, 0, review.stderr);
+  assert.match(fenced(review.stdout).find((l) => l.includes(lock)), /active, reported stale by an agent 1 time:/);
+});
+
+test('an agent\'s stale report on a citation that fails at HEAD makes the item stale at once, and it comes back when the citation holds', () => {
+  const s = seeded();
+  const lock = idOf(s, LOCK);
+  commit(s.acmeApi, { 'src/ledger.ts': null });
+  const [stale] = tools(s.acmeApi, s.data, s.configA, [['memory_feedback', { id: lock, signal: 'stale' }]]);
+  assert.equal(stale.isError, false, stale.text);
+  assert.match(stale.text, /path gone/);
+  const row = items(s.data, 'tenants/acme.sqlite').find((r) => r.id === lock);
+  assert.equal(row.status, 'stale');
+  assert.equal(row.status_reason, 'path gone');
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger lock' }]]);
+  assert.doesNotMatch(search.text, new RegExp(lock));
+  commit(s.acmeApi, { 'src/ledger.ts': 'export function consume() {\n  return 1;\n}\n' });
+  const [again] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger lock' }]]);
+  assert.match(again.text, new RegExp(lock), 'the report gives the agent no hold over the item once its citation holds again');
 });
 
 test('an untenanted repository or an unbound config searches person and global items only', () => {
@@ -333,18 +359,61 @@ test('helped reinforces an item, so it does not expire 90 days after it was appr
   assert.match(search.text, new RegExp(id));
 });
 
-test('the owner sees an item an agent reported stale in memory review, and approve brings it back', () => {
+test('the owner\'s path is unchanged: memory reject takes a reported item out for good, and memory approve clears its reports', () => {
   const s = seeded();
-  const id = idOf(s, ROUNDING);
-  tools(s.acmeApi, s.data, s.configA, [['memory_feedback', { id, signal: 'stale' }]]);
+  const lock = idOf(s, LOCK);
+  const rounding = idOf(s, ROUNDING);
+  tools(s.acmeApi, s.data, s.configA, [
+    ['memory_feedback', { id: lock, signal: 'stale' }],
+    ['memory_feedback', { id: rounding, signal: 'stale' }],
+    ['memory_feedback', { id: rounding, signal: 'stale' }],
+  ]);
   const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
   assert.equal(review.status, 0, review.stderr);
-  const line = fenced(review.stdout).find((l) => l.includes(id));
-  assert.match(line, /reported stale by an agent/);
-  assert.match(review.stdout, /1 reported stale/);
-  const approved = run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.match(fenced(review.stdout).find((l) => l.includes(rounding)), /reported stale by an agent 2 times/);
+  assert.match(review.stdout, /2 reported stale/);
+  const rejected = run(['reject', lock], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(rejected.status, 0, rejected.stderr);
+  const approved = run(['approve', rounding], { cwd: s.acmeApi, data: s.data, config: s.configA });
   assert.equal(approved.status, 0, approved.stderr);
+  const rows = items(s.data, 'tenants/acme.sqlite');
+  assert.equal(rows.find((r) => r.id === lock).status, 'rejected');
+  assert.equal(rows.find((r) => r.id === rounding).status, 'active');
+  assert.equal(rows.find((r) => r.id === rounding).stale_reports, 0);
+  assert.doesNotMatch(run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stdout, new RegExp(rounding));
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger lock rounds units', paths: ['src/ledger.ts'] }]]);
+  assert.doesNotMatch(search.text, new RegExp(lock));
+  assert.match(search.text, new RegExp(rounding));
+});
+
+test('an item an agent took out of recall before this change comes back active, its report counted for the owner', () => {
+  const s = seeded();
+  const id = idOf(s, ROUNDING);
+  // Take the store back to the schema before stale reports were counted, as an earlier version left it.
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.prepare("UPDATE items SET status = 'stale', status_reason = 'reported stale' WHERE id = ?").run(id);
+  db.exec('ALTER TABLE items DROP COLUMN stale_reports; PRAGMA user_version = 4;');
+  db.close();
   const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger rounds units' }]]);
   assert.match(search.text, new RegExp(id));
-  assert.equal(items(s.data, 'tenants/acme.sqlite').find((r) => r.id === id).status_reason, null);
+  const row = items(s.data, 'tenants/acme.sqlite').find((r) => r.id === id);
+  assert.equal(row.stale_reports, 1);
+  assert.equal(row.status_reason, null);
+  const audit = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'), { readOnly: true });
+  assert.equal(audit.prepare("SELECT count(*) AS n FROM audit_events WHERE action = 'item_restored' AND subject_id = ?").get(id).n, 1);
+  audit.close();
+});
+
+test('an item an older install hid on an agent\'s report, in an upgraded store, is listed for the owner and approve restores it', () => {
+  const s = seeded();
+  const id = idOf(s, ROUNDING);
+  tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger' }]]);
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.prepare("UPDATE items SET status = 'stale', status_reason = 'reported stale' WHERE id = ?").run(id);
+  db.close();
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.match(fenced(review.stdout).find((l) => l.includes(id)), /hidden by an agent through an older install/);
+  assert.equal(run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger rounds units' }]]);
+  assert.match(search.text, new RegExp(id));
 });

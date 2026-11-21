@@ -1009,9 +1009,7 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
     return files.get(path);
   };
   const toStale = db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ? AND status = 'active'");
-  const toActive = db.prepare(
-    "UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale' AND status_reason IN ('path gone', 'cited text gone')"
-  );
+  const toActive = db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'");
   for (const row2 of rows) {
     const anchors = JSON.parse(row2.anchors_json);
     const texts = anchors.map((a) => read(a.path));
@@ -1140,6 +1138,17 @@ var MIGRATIONS = [
     for (const r of rows) {
       const flag = quarantineOf({ statement: r.statement, status: "proposed", trust: r.origin_trust });
       if (flag !== null) set.run(flag, r.id);
+    }
+  },
+  // v5 - agents' stale reports, counted for the owner instead of hiding the item. An item an agent
+  // took out of recall before comes back active with its report; the next re-check judges its citation.
+  (db) => {
+    db.exec("ALTER TABLE items ADD COLUMN stale_reports INTEGER NOT NULL DEFAULT 0;");
+    const hidden = db.prepare("SELECT id FROM items WHERE status = 'stale' AND status_reason = 'reported stale'").all();
+    const restore = db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 1 WHERE id = ?");
+    for (const { id } of hidden) {
+      restore.run(id);
+      recordAudit(db, "item_restored", { type: "item", id }, { reason: "an agent stale report is now counted, not obeyed" });
     }
   }
 ];
@@ -1280,7 +1289,7 @@ var TOOLS = [
   },
   {
     name: "memory_feedback",
-    description: "Report whether an item you used helped, was wrong, or is stale. Feedback changes only the counts behind its confidence; stale takes it out of recall until the owner restores it in memory review.",
+    description: "Report whether an item you used helped, was wrong, or is stale. Feedback changes only the counts behind its confidence. Stale re-checks its citation at HEAD at once: a citation that fails takes it out of recall; otherwise it stays active and the owner sees your report in memory review.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string" }, signal: { type: "string", enum: [...SIGNALS] } },
@@ -1424,28 +1433,32 @@ function propose(args, data, config, context) {
     db.close();
   }
 }
-function feedback(args, data, context) {
+function feedback(args, data, context, cwd) {
   const id = text(args, "id");
   const signal = oneOf(args["signal"], SIGNALS, "signal");
   const change = {
     helped: "helped = helped + 1, reinforced_at = ?",
     wrong: "wrong = wrong + 1",
-    stale: "status = 'stale', status_reason = 'reported stale'"
+    // An agent's word alone hides nothing, or any agent could suppress any item: it is counted for the owner.
+    stale: "stale_reports = stale_reports + 1"
   }[signal];
   const done = first(data, context, (db, store) => {
+    const gone = signal === "stale" && store.tenant !== "" ? recheck(db, store.tenant, context.repository, cwd, { id }).staleItems.find((i) => i.id === id) : void 0;
+    if (gone !== void 0) return `${id} is stale: its citation fails at HEAD (${gone.reason}), so it leaves recall until the citation holds again`;
     db.exec("BEGIN IMMEDIATE");
     try {
       const { changes } = db.prepare(`UPDATE items SET ${change} WHERE id = ? AND ${store.where} AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`).run(...signal === "helped" ? [(/* @__PURE__ */ new Date()).toISOString()] : [], id, ...store.params);
       if (changes === 1) recordAudit(db, "feedback", { type: "item", id }, { signal });
       db.exec("COMMIT");
-      return changes === 1 ? true : void 0;
+      if (changes !== 1) return void 0;
+      return signal === "stale" ? `recorded stale for ${id}; nothing at HEAD shows it stale, so it stays active and the owner sees your report in memory review` : `recorded ${signal} for ${id}`;
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
     }
   });
   if (done === void 0) throw new ToolError(`no active item ${id} here; feedback applies to items memory_search can return`);
-  return `recorded ${signal} for ${id}`;
+  return done;
 }
 function call(name, args, data, cwd) {
   const config = loadConfig(data);
@@ -1459,7 +1472,7 @@ function call(name, args, data, cwd) {
     case "memory_propose":
       return propose(args, data, config, context);
     case "memory_feedback":
-      return feedback(args, data, context);
+      return feedback(args, data, context, cwd);
     default:
       throw new ToolError(`no tool ${String(name)}; memory's tools are ${TOOLS.map((t) => t.name).join(", ")}`);
   }
@@ -1840,8 +1853,8 @@ function shadow(p) {
 }
 function proposals(db, tenant, id) {
   const rows = db.prepare(
-    `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json FROM items
-       WHERE (status = 'proposed' OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
+    `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports FROM items
+       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`
   ).all(tenant, ...id === void 0 ? [] : [id]);
@@ -1855,9 +1868,9 @@ function renderProposals(list2) {
     const where = p.scope_key === "" ? p.scope : `${p.scope} ${p.scope_key}`;
     return [
       // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
-      safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? ", reported stale by an agent" : ""}: ${JSON.stringify(safe(p.statement))}`),
+      safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? ", hidden by an agent through an older install" : p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
       ...p.evidence.map((e) => safe(`  evidence: ${e.source_ref} (${e.author_role})`)),
-      ...p.status === "stale" ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? "" : "s"}, ${g.owner} from the owner)`]
+      ...p.status !== "proposed" ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? "" : "s"}, ${g.owner} from the owner)`]
     ].join("\n");
   }).map((block) => `${block}
 `).join("");
@@ -1866,7 +1879,7 @@ function decide(db, p, decision, change) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
   db.exec("BEGIN IMMEDIATE");
   try {
-    const { changes } = "scope" in change ? db.prepare("UPDATE items SET status = 'active', status_reason = NULL, scope = ?, scope_key = ?, valid_from = ? WHERE id = ? AND status = ?").run(change.scope, change.scopeKey, now, p.id, p.status) : db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = ?").run(now, change.reason, p.id, p.status);
+    const { changes } = "scope" in change ? db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 0, scope = ?, scope_key = ?, valid_from = ? WHERE id = ? AND status = ?").run(change.scope, change.scopeKey, now, p.id, p.status) : db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = ?").run(now, change.reason, p.id, p.status);
     if (changes !== 1) throw new Error(`proposal ${p.id} changed while it was being decided`);
     recordAudit(db, decision === "approve" ? "proposal_approved" : "proposal_rejected", { type: "item", id: p.id }, {
       decision,
@@ -2058,9 +2071,9 @@ function review(data, cwd) {
   }
   if (all.length === 0) return void console.error("No proposals to review here.");
   const quarantined = all.filter((p) => p.quarantine !== null).length;
-  const stale = all.filter((p) => p.status === "stale").length;
+  const stale = all.filter((p) => p.status !== "proposed").length;
   process.stdout.write(
-    `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. Decide with memory approve <id> (approving a reported item restores it) or memory reject <id>.
+    `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.
 ` + fence(PROPOSALS_LABEL, renderProposals(all))
   );
 }

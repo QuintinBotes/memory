@@ -515,7 +515,7 @@ test('a proposal stored before quarantine existed is flagged when the store is u
   const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
   db.exec(`DROP TRIGGER items_fts_insert; DROP TRIGGER items_fts_delete; DROP TRIGGER items_fts_update; DROP TABLE items_fts;
     ALTER TABLE items DROP COLUMN quarantine; ALTER TABLE items DROP COLUMN helped; ALTER TABLE items DROP COLUMN wrong;
-    ALTER TABLE items DROP COLUMN reinforced_at; PRAGMA user_version = 3;`);
+    ALTER TABLE items DROP COLUMN reinforced_at; ALTER TABLE items DROP COLUMN stale_reports; PRAGMA user_version = 3;`);
   db.close();
   const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
   assert.equal(review.status, 0, review.stderr);

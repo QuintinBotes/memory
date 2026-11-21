@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { quarantineOf, reduceTombstones, statementKey, type Trust } from '../items.ts';
+import { recordAudit } from './audit.ts';
 
 /**
  * One schema for every file, tenant and person alike. Migrations follow
@@ -98,6 +99,18 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     for (const r of rows) {
       const flag = quarantineOf({ statement: r.statement, status: 'proposed', trust: r.origin_trust as Trust });
       if (flag !== null) set.run(flag, r.id);
+    }
+  },
+
+  // v5 - agents' stale reports, counted for the owner instead of hiding the item. An item an agent
+  // took out of recall before comes back active with its report; the next re-check judges its citation.
+  (db) => {
+    db.exec('ALTER TABLE items ADD COLUMN stale_reports INTEGER NOT NULL DEFAULT 0;');
+    const hidden = db.prepare("SELECT id FROM items WHERE status = 'stale' AND status_reason = 'reported stale'").all() as { id: string }[];
+    const restore = db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 1 WHERE id = ?");
+    for (const { id } of hidden) {
+      restore.run(id);
+      recordAudit(db, 'item_restored', { type: 'item', id }, { reason: 'an agent stale report is now counted, not obeyed' });
     }
   },
 ];
