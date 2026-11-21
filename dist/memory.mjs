@@ -2333,7 +2333,8 @@ function init(args, data) {
   const plan = buildConsentPlan(config, data);
   console.log(JSON.stringify(plan, null, 2));
   const added = config.consent === void 0 ? [] : uncovered(config);
-  if (added.length > 0) console.error(`These kinds of data are new since you agreed, and stay off until you confirm:
+  const when = values.confirm === true ? "are on from now" : "stay off until you confirm";
+  if (added.length > 0) console.error(`These kinds of data are new since you agreed, and ${when}:
 ${added.map((c) => `  - ${c.text}
 `).join("")}`);
   if (values.confirm !== true) {

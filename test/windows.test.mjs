@@ -199,6 +199,7 @@ test('an owner who agreed before the injection log existed keeps every older cat
 
   const agreed = run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA });
   assert.equal(agreed.status, 0, agreed.stderr);
+  assert.match(agreed.stderr, /new since you agreed, and are on from now/);
   context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose'));
   assert.ok(logged(s.data).length > 0, 'once agreed, the log is written');
   assert.doesNotMatch(run(['init'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stderr, /new since you agreed/);

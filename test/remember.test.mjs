@@ -68,6 +68,7 @@ test('nothing is stored or printed before consent is confirmed', () => {
   assert.match(plan.stdout, /storageLocation/);
   assert.match(plan.stdout, /"transcripts": false/);
   assert.match(plan.stdout, /"failingCommands": false/);
+  assert.doesNotMatch(plan.stderr, /new since you agreed/, 'a first plan has nothing new since an earlier one');
   const r = remember(dir, s.data, s.configA, 'Prefer small pull requests', '--scope', 'person');
   assert.equal(r.status, 1);
   assert.match(r.stderr, /memory init/);

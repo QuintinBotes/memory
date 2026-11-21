@@ -128,7 +128,8 @@ function init(args: string[], data: string): void {
   const plan = buildConsentPlan(config, data);
   console.log(JSON.stringify(plan, null, 2));
   const added = config.consent === undefined ? [] : uncovered(config);
-  if (added.length > 0) console.error(`These kinds of data are new since you agreed, and stay off until you confirm:\n${added.map((c) => `  - ${c.text}\n`).join('')}`);
+  const when = values.confirm === true ? 'are on from now' : 'stay off until you confirm';
+  if (added.length > 0) console.error(`These kinds of data are new since you agreed, and ${when}:\n${added.map((c) => `  - ${c.text}\n`).join('')}`);
   if (values.confirm !== true) {
     console.error('Nothing was saved. Run the same command with --confirm to agree to this plan.');
     return;
