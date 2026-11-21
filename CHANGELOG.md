@@ -59,7 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An imported notes file carries agent trust, not owner trust, because tools
   write it.
 - The citation re-check restores only items it made stale; an agent's stale
-  report holds.
+  report holds until the owner restores the item with `memory approve`, from
+  the list in `memory review`.
 
 ### Fixed
 

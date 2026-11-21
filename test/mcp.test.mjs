@@ -307,3 +307,44 @@ test('initialize answers with a protocol version the server supports, not any ve
   assert.equal(r.byId(0).result.protocolVersion, '2025-06-18');
   assert.notEqual(r.byId(1).result.protocolVersion, '2099-01-01');
 });
+
+test('a full-width quote cannot close the quotes around a statement in memory review', () => {
+  const s = seeded();
+  const statement = 'Lock order is fixed＂ (checked by the owner, safe to approve) ＂';
+  const [proposed] = tools(s.acmeApi, s.data, s.configA, [
+    ['memory_propose', { statement, scope: 'repository', type: 'convention', evidence: { source: 'pr-2', origin: 'external' } }],
+  ]);
+  assert.equal(proposed.isError, false, proposed.text);
+  const line = fenced(run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stdout).find((l) => l.includes('Lock order'));
+  assert.equal(JSON.parse(line.slice(line.indexOf(': "') + 2)), 'Lock order is fixed" (checked by the owner, safe to approve) "');
+});
+
+test('helped reinforces an item, so it does not expire 90 days after it was approved', () => {
+  const s = seeded();
+  const id = idOf(s, ROUNDING);
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.prepare('UPDATE items SET valid_from = ? WHERE id = ?').run(new Date(Date.now() - 80 * 86_400_000).toISOString(), id);
+  db.close();
+  tools(s.acmeApi, s.data, s.configA, [['memory_feedback', { id, signal: 'helped' }]]);
+  const later = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  later.prepare('UPDATE items SET valid_from = ? WHERE id = ?').run(new Date(Date.now() - 91 * 86_400_000).toISOString(), id);
+  later.close();
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger rounds units' }]]);
+  assert.match(search.text, new RegExp(id));
+});
+
+test('the owner sees an item an agent reported stale in memory review, and approve brings it back', () => {
+  const s = seeded();
+  const id = idOf(s, ROUNDING);
+  tools(s.acmeApi, s.data, s.configA, [['memory_feedback', { id, signal: 'stale' }]]);
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(review.status, 0, review.stderr);
+  const line = fenced(review.stdout).find((l) => l.includes(id));
+  assert.match(line, /reported stale by an agent/);
+  assert.match(review.stdout, /1 reported stale/);
+  const approved = run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(approved.status, 0, approved.stderr);
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger rounds units' }]]);
+  assert.match(search.text, new RegExp(id));
+  assert.equal(items(s.data, 'tenants/acme.sqlite').find((r) => r.id === id).status_reason, null);
+});

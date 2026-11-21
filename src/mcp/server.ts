@@ -76,7 +76,7 @@ const TOOLS = [
   },
   {
     name: 'memory_feedback',
-    description: 'Report whether an item you used helped, was wrong, or is stale. Feedback changes only the counts behind its confidence; stale takes it out of recall until the owner acts.',
+    description: 'Report whether an item you used helped, was wrong, or is stale. Feedback changes only the counts behind its confidence; stale takes it out of recall until the owner restores it in memory review.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' }, signal: { type: 'string', enum: [...SIGNALS] } },

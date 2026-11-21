@@ -173,7 +173,8 @@ reject, purge or change the configuration, and nothing they write is active.
   the rule that flagged it, and active only if you approve it.
 - `memory_feedback(id, helped|wrong|stale)` changes only the counts behind an
   item's confidence. `stale` takes it out of recall, and the citation re-check
-  does not bring it back.
+  does not bring it back: `memory review` lists it, `memory approve` restores
+  it and `memory reject` keeps it out.
 
 Confidence is computed on read as `min(1, 0.5^(age/90 days) × 1.1^helped ×
 0.8^wrong)`, age counted from the last approval, `remember` or `helped`, and
