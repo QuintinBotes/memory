@@ -117,7 +117,8 @@ function runOnce(task: string, t: Task, arm: 'off' | 'on', n: number, agent: str
   const r = spawnSync('/bin/sh', ['-c', agent], {
     cwd: repo, env, input: t.prompt, encoding: 'utf8', timeout: RUN_TIMEOUT_MS, maxBuffer: 512 * 1024 * 1024, stdio: ['pipe', 'pipe', 'inherit'],
   });
-  const agentFailed = r.error !== undefined || r.status !== 0;
+  // An agent that exits without reading its prompt leaves EPIPE on stdin; its exit status still decides.
+  const agentFailed = (r.error !== undefined && (r.error as NodeJS.ErrnoException).code !== 'EPIPE') || r.status !== 0;
   const hidden = join(TASKS, task, 'hidden');
   const tests = readdirSync(hidden).filter((f) => f.endsWith('.test.mjs')).map((f) => join(hidden, f));
   // The hidden tests never enter the agent's directory; they read the copy it left through LAB_REPO.

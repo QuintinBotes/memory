@@ -88,8 +88,8 @@ test('a run is graded by hidden tests the agent is never given: not in its direc
   assert.equal(r.row('hazard-change', 'off').samples.agent_failed, 0);
   assert.equal(r.row('hazard-change', 'on').samples.agent_failed, 0);
   assert.equal(r.row('hazard-change', 'on').pass_rate, 1);
-  // An agent that changes nothing ends with success, and the hidden tests still fail it.
-  const idle = hazard('true');
+  // An agent that changes nothing, and exits before reading its prompt, ends with success; the hidden tests still fail it.
+  const idle = hazard('exec 0<&-; true');
   assert.equal(idle.row('hazard-change', 'on').pass_rate, 0);
   assert.equal(idle.row('hazard-change', 'on').samples.agent_failed, 0);
 });

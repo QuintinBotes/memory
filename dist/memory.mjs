@@ -2150,7 +2150,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base) {
     maxBuffer: 512 * 1024 * 1024,
     stdio: ["pipe", "pipe", "inherit"]
   });
-  const agentFailed = r.error !== void 0 || r.status !== 0;
+  const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join6(TASKS, task, "hidden");
   const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join6(hidden, f));
   const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
