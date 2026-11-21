@@ -23,7 +23,8 @@ export interface Config {
   /** Subagent types, beyond general-purpose, that get the slice at their start. */
   subagentTypes?: string[];
   imports?: Record<string, RepositorySilos>;
-  consent?: { planHash: string; grantedAt: string };
+  /** `version` is the consent plan's version agreed to; absent in a consent saved before plans had one. */
+  consent?: { planHash: string; grantedAt: string; version?: number };
 }
 
 export const SILOS = ['rejections', 'standards', 'policy', 'notes'] as const;

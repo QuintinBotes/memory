@@ -1540,17 +1540,22 @@ function serve(data, cwd, version) {
 }
 
 // src/consent/plan.ts
+var DATA_CATEGORIES = [
+  { id: "statements", since: 1, text: "Statements you ask memory to remember, each with its scope, type and an optional source reference" },
+  { id: "anchors", since: 1, text: "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves" },
+  { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
+  { id: "injections", since: 2, text: "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids and the estimated tokens, in logs/injections.jsonl; never their text. memory purge does not reach this log yet; delete the file to clear it" },
+  { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval" }
+];
+var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
+var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
+var covers = (config, id) => !uncovered(config).some((c) => c.id === id);
 function buildConsentPlan(config, storageLocation) {
   return {
+    version: PLAN_VERSION,
     tenants: config.tenants,
     configs: config.configs,
-    dataCategories: [
-      "Statements you ask memory to remember, each with its scope, type and an optional source reference",
-      "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves",
-      "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant",
-      "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids and the estimated tokens, in logs/injections.jsonl; never their text. memory purge does not reach this log yet; delete the file to clear it",
-      "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval"
-    ],
+    dataCategories: DATA_CATEGORIES.map((c) => c.text),
     optIns: { ...config.optIns },
     storageLocation,
     retention: [
@@ -1959,7 +1964,7 @@ function parseLog(text2) {
   return out;
 }
 var FALSE_RECALL = { measure: "false-recall", on: [], bar: "false recall under 10% of recalled items" };
-var covers = (anchor, path) => path === anchor || path.startsWith(`${anchor}/`);
+var covers2 = (anchor, path) => path === anchor || path.startsWith(`${anchor}/`);
 function falseRecall(version, events) {
   const flagged = /* @__PURE__ */ new Set();
   const touched = /* @__PURE__ */ new Map();
@@ -1974,7 +1979,7 @@ function falseRecall(version, events) {
       touched.set(e.session, paths);
     } else {
       const paths = touched.get(e.session) ?? [];
-      const why = flagged.has(e.item) ? "wrong or stale" : e.anchors.length > 0 && !e.anchors.some((a) => paths.some((p) => covers(a, p))) ? "untouched" : null;
+      const why = flagged.has(e.item) ? "wrong or stale" : e.anchors.length > 0 && !e.anchors.some((a) => paths.some((p) => covers2(a, p))) ? "untouched" : null;
       verdict2.set(JSON.stringify([e.session, e.item]), { session: e.session, via: e.via, why });
     }
   }
@@ -2300,6 +2305,7 @@ var NOT_SET_UP = "memory is not set up, or its configuration changed since you a
 function setUp(data) {
   const config = loadConfig(data);
   if (!consented(config)) throw new Refusal(NOT_SET_UP);
+  if (uncovered(config).length > 0) console.error("memory: this release keeps a kind of data you have not agreed to; it stays off until you run memory init and confirm");
   return config;
 }
 function init(args, data) {
@@ -2326,14 +2332,18 @@ function init(args, data) {
   }
   const plan = buildConsentPlan(config, data);
   console.log(JSON.stringify(plan, null, 2));
+  const added = config.consent === void 0 ? [] : uncovered(config);
+  if (added.length > 0) console.error(`These kinds of data are new since you agreed, and stay off until you confirm:
+${added.map((c) => `  - ${c.text}
+`).join("")}`);
   if (values.confirm !== true) {
     console.error("Nothing was saved. Run the same command with --confirm to agree to this plan.");
     return;
   }
-  config.consent = { planHash: planHash(config), grantedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  config.consent = { planHash: planHash(config), grantedAt: (/* @__PURE__ */ new Date()).toISOString(), version: PLAN_VERSION };
   saveConfig(data, config);
   const db = openStore(personFile(data), true);
-  recordAudit(db, "consent_granted", null, { planHash: config.consent.planHash });
+  recordAudit(db, "consent_granted", null, { planHash: config.consent.planHash, version: PLAN_VERSION });
   db.close();
   console.error("Consent recorded. Memory is on for the tenants this config is bound to.");
 }
@@ -2532,6 +2542,7 @@ function subagentStart(data) {
     const { text: text2, shown } = hookSlice(data, config, input2, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
     if (text2 === "") return;
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text2 } }));
+    if (!covers(config, "injections")) return;
     const id = (v) => typeof v === "string" && v !== "" ? v : "unknown";
     const lines2 = shown.map(
       (item) => `${JSON.stringify({ event: "injected", session: id(input2["session_id"]), agent: id(input2["agent_id"]), item: item.id, via: "subagent-start", anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)) })}

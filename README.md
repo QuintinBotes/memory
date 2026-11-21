@@ -63,7 +63,9 @@ memory init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind perso
 
 The first command prints the plan: tenants, bindings, what is stored, where,
 and for how long. The second saves it. Changing tenants, bindings or opt-ins
-later makes memory inert until you confirm the new plan.
+later makes memory inert until you confirm the new plan. A release that adds
+a kind of data keeps it off until you run `memory init` again, which lists
+what is new, and confirm; what you agreed to before keeps working.
 
 Then, in a session, `/memory:remember Releases are cut from the main branch
 only`, or from a terminal:
