@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync as readdirSync2 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join6, normalize as normalize2 } from "node:path";
+import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync as readdirSync2 } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join6, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -38,6 +38,9 @@ import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
 var SILOS = ["rejections", "standards", "policy", "notes"];
 var DEFAULT_SESSION_BUDGET = 300;
+var SUBAGENT_BUDGET = 300;
+var neverSubagent = (type) => type === "Explore" || type === "Plan" || type.startsWith("review-voice:");
+var subagentAllowed = (config, type) => !neverSubagent(type) && (type === "general-purpose" || (config.subagentTypes ?? []).includes(type));
 var TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
 var ConfigError = class extends Error {
@@ -73,6 +76,10 @@ function loadConfig(data) {
   if (budget !== void 0 && !(Number.isInteger(budget) && budget >= 0)) {
     throw new ConfigError("sessionBudget must be a whole number, 0 or more");
   }
+  const types = c.subagentTypes;
+  if (types !== void 0 && !isList(types)) throw new ConfigError("subagentTypes must be a list of agent type names");
+  const never = types?.find(neverSubagent);
+  if (never !== void 0) throw new ConfigError(`subagentTypes names ${never}, which can never receive the slice`);
   const imports = c.imports;
   if (imports !== void 0 && !(typeof imports === "object" && imports !== null && !Array.isArray(imports) && Object.values(imports).every(
     (silos) => typeof silos === "object" && silos !== null && Object.entries(silos).every(([k, v]) => SILOS.includes(k) && typeof v === "string")
@@ -84,6 +91,7 @@ function loadConfig(data) {
     configs: c.configs,
     optIns: { transcripts: optIns.transcripts === true, failingCommands: optIns.failingCommands === true },
     ...budget !== void 0 ? { sessionBudget: budget } : {},
+    ...types !== void 0 ? { subagentTypes: types } : {},
     ...imports !== void 0 ? { imports } : {},
     ...c.consent !== void 0 ? { consent: c.consent } : {}
   };
@@ -933,15 +941,17 @@ function compose(rows, more) {
   return fence(ITEMS_LABEL, rows.join("") + (more > 0 ? `+${more} more: memory list
 ` : ""));
 }
-function renderSlice(items, budget) {
-  if (budget <= 0 || items.length === 0) return "";
-  const rows = rank2(items).map(row);
+function chooseSlice(items, budget) {
+  if (budget <= 0 || items.length === 0) return { text: "", shown: [] };
+  const ranked = rank2(items);
+  const rows = ranked.map(row);
   const chosen = [];
-  for (const r of rows) {
-    const candidate = [...chosen, r];
-    if (estimate(compose(candidate, rows.length - candidate.length)) <= budget) chosen.push(r);
+  for (let i = 0; i < rows.length; i++) {
+    const candidate = [...chosen, i].map((j) => rows[j]);
+    if (estimate(compose(candidate, rows.length - candidate.length)) <= budget) chosen.push(i);
   }
-  return chosen.length === 0 ? "" : compose(chosen, rows.length - chosen.length);
+  if (chosen.length === 0) return { text: "", shown: [] };
+  return { text: compose(chosen.map((j) => rows[j]), rows.length - chosen.length), shown: chosen.map((j) => ranked[j]) };
 }
 function renderAll(items) {
   return items.length === 0 ? "" : compose(rank2(items).map(row), 0);
@@ -1202,6 +1212,7 @@ function dataDirectory(env = process.env) {
 }
 var tenantFile = (data, tenant) => join3(data, "tenants", `${tenant}.sqlite`);
 var personFile = (data) => join3(data, "person.sqlite");
+var injectionLog = (data) => join3(data, "logs", "injections.jsonl");
 
 // src/recall/visible.ts
 function withTextRatio(items, matches) {
@@ -1534,7 +1545,8 @@ function buildConsentPlan(config, storageLocation) {
     dataCategories: [
       "Statements you ask memory to remember, each with its scope, type and an optional source reference",
       "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves",
-      "The working directory's git origin remote, read at session start to find its tenant",
+      "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant",
+      "Which items a subagent was shown, by item id, with the session and agent ids and the estimated tokens, in logs/injections.jsonl; never their text",
       "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval"
     ],
     optIns: { ...config.optIns },
@@ -2090,7 +2102,9 @@ var USAGE = `usage: memory <command>
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_propose, memory_feedback
   session-start
-      the SessionStart hook: the slice for this repository and config, within budget
+      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
+  subagent-start
+      the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete
   eval [replay | false-recall | orbit] [--since <date> --pulls <file>] [--log <file>]
@@ -2312,18 +2326,44 @@ function recheckCommand(args, data, cwd) {
     db.close();
   }
 }
+function hookInput() {
+  try {
+    const v = JSON.parse(readFileSync4(0, "utf8"));
+    return typeof v === "object" && v !== null ? v : {};
+  } catch {
+    return {};
+  }
+}
+function hookSlice(data, config, input2, budget) {
+  const cwd = typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd();
+  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd), budget);
+}
 function sessionStart(data) {
   try {
-    let cwd = process.cwd();
-    try {
-      const input2 = JSON.parse(readFileSync4(0, "utf8"));
-      if (typeof input2.cwd === "string" && input2.cwd.length > 0) cwd = input2.cwd;
-    } catch {
-    }
+    const input2 = hookInput();
     const config = loadConfig(data);
     if (!consented(config)) return;
-    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd);
-    process.stdout.write(renderSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET));
+    process.stdout.write(hookSlice(data, config, input2, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
+  } catch {
+  }
+}
+function subagentStart(data) {
+  try {
+    const input2 = hookInput();
+    const type = input2["agent_type"];
+    const config = loadConfig(data);
+    if (!consented(config) || typeof type !== "string" || !subagentAllowed(config, type)) return;
+    const { text: text2, shown } = hookSlice(data, config, input2, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    if (text2 === "") return;
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text2 } }));
+    const id = (v) => typeof v === "string" && v !== "" ? v : "unknown";
+    const lines2 = shown.map(
+      (item) => `${JSON.stringify({ event: "injected", session: id(input2["session_id"]), agent: id(input2["agent_id"]), item: item.id, via: "subagent-start", anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)) })}
+`
+    );
+    const file = injectionLog(data);
+    mkdirSync3(dirname3(file), { recursive: true, mode: 448 });
+    appendFileSync(file, lines2.join(""), { mode: 384 });
   } catch {
   }
 }
@@ -2439,6 +2479,8 @@ function main(argv) {
       return serve(data, process.cwd(), pluginVersion());
     case "session-start":
       return sessionStart(data);
+    case "subagent-start":
+      return subagentStart(data);
     case "purge":
       return purge(rest, data);
     case "eval":

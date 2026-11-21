@@ -34,3 +34,5 @@ export function dataDirectory(env: NodeJS.ProcessEnv = process.env): string {
 /** One file per tenant, beside one person file. A tenant name is checked before it gets here. */
 export const tenantFile = (data: string, tenant: string): string => join(data, 'tenants', `${tenant}.sqlite`);
 export const personFile = (data: string): string => join(data, 'person.sqlite');
+/** One JSON object per line: what a hook showed, by item id and estimated tokens, never the item's text. */
+export const injectionLog = (data: string): string => join(data, 'logs', 'injections.jsonl');

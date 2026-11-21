@@ -96,7 +96,16 @@ restores what holds.
 
 At session start, the items this repository and config may see are printed
 in one line each, within `sessionBudget` estimated tokens (300 by default, 0
-turns it off, set in `config.json` in the data directory).
+turns it off, set in `config.json` in the data directory). The same bytes are
+printed again after a compaction, which summarises the first copy away, and
+at the start of a `general-purpose` subagent, which never saw it, as context
+for that subagent, resolved from its own working directory and within 300
+tokens. To give the slice to other subagent types, such as an editing agent,
+list them in `config.json`: `"subagentTypes": ["my-plugin:implementer"]`.
+`Explore`, `Plan` and Review Voice's agents never get it, and naming one there
+is refused. Each item a subagent is shown is logged in
+`logs/injections.jsonl` in the data directory, by item id with the session
+and agent ids and its estimated tokens, never its text.
 
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your
@@ -201,9 +210,9 @@ each proposal's statement in quotes.
 | A failing command that matches a known failure | 120 tokens |
 | A diff, at review or commit | 600 tokens |
 
-A hook with nothing to say prints nothing. Only the slice at session start
-exists so far, not yet after a compaction; the other moments arrive with
-later slices.
+A hook with nothing to say prints nothing. The slice at session start, after
+a compaction and at a subagent's start exists so far; the other moments
+arrive with later slices.
 
 ## Measuring memory
 

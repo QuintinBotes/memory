@@ -1,11 +1,12 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { isAbsolute, join, normalize } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { parseArgs } from 'node:util';
 import { suppressSqliteExperimentalWarning } from './warnings.ts';
 import { pluginVersion } from './version.ts';
 import {
   ConfigError,
   DEFAULT_SESSION_BUDGET,
+  SUBAGENT_BUDGET,
   TENANT_NAME,
   TENANT_PATTERN,
   consented,
@@ -15,12 +16,13 @@ import {
   organisationTerms,
   planHash,
   saveConfig,
+  subagentAllowed,
   type Config,
 } from './config.ts';
 import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
 import { SCOPES, TYPES, insertItem, sha256, type Anchor, type Scope } from './items.ts';
-import { renderAll, renderSlice } from './slice.ts';
+import { chooseSlice, estimate, renderAll, row } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { serve } from './mcp/server.ts';
 import { visibleItems } from './recall/visible.ts';
@@ -31,7 +33,7 @@ import { importSilos } from './import/import.ts';
 import { decide, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
-import { dataDirectory, personFile, tenantFile } from './store/paths.ts';
+import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
 import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
@@ -62,7 +64,9 @@ const USAGE = `usage: memory <command>
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_propose, memory_feedback
   session-start
-      the SessionStart hook: the slice for this repository and config, within budget
+      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
+  subagent-start
+      the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete
   eval [replay | false-recall | orbit] [--since <date> --pulls <file>] [--log <file>]
@@ -310,23 +314,62 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   }
 }
 
+/** The JSON a hook is given on stdin, or nothing when there is none or it is not an object. */
+function hookInput(): Record<string, unknown> {
+  try {
+    const v = JSON.parse(readFileSync(0, 'utf8')) as unknown;
+    return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The slice for the hook's working directory: the subagent's own, for a subagent, so its tenant is resolved there. */
+function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number) {
+  const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
+  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd), budget);
+}
+
 /**
- * The SessionStart hook. It never fails the session: anything that goes wrong
- * prints nothing, so a broken store costs no tokens and no error.
+ * The SessionStart hook, at startup and again after a compaction, with the same
+ * bytes for the same store. It never fails the session: anything that goes
+ * wrong prints nothing, so a broken store costs no tokens and no error.
  */
 function sessionStart(data: string): void {
   try {
-    let cwd = process.cwd();
-    try {
-      const input = JSON.parse(readFileSync(0, 'utf8')) as { cwd?: unknown };
-      if (typeof input.cwd === 'string' && input.cwd.length > 0) cwd = input.cwd;
-    } catch {
-      // No input or not JSON: the working directory decides.
-    }
+    const input = hookInput();
     const config = loadConfig(data);
     if (!consented(config)) return;
-    const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd);
-    process.stdout.write(renderSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET));
+    process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
+  } catch {
+    // Silent by design; see above.
+  }
+}
+
+/**
+ * The SubagentStart hook: the session slice for an allowed agent type, as additional context, within the subagent
+ * budget, so it is byte-identical to the startup slice whenever the session budget is no larger. Each item shown is
+ * logged with the agent's id and its row's tokens. Silent on any failure, as the SessionStart hook is.
+ */
+function subagentStart(data: string): void {
+  try {
+    const input = hookInput();
+    const type = input['agent_type'];
+    const config = loadConfig(data);
+    if (!consented(config) || typeof type !== 'string' || !subagentAllowed(config, type)) return;
+    const { text, shown } = hookSlice(data, config, input, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    if (text === '') return;
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: text } }));
+    const id = (v: unknown) => (typeof v === 'string' && v !== '' ? v : 'unknown');
+    const lines = shown.map(
+      (item) =>
+        `${JSON.stringify({ event: 'injected', session: id(input['session_id']), agent: id(input['agent_id']), item: item.id, via: 'subagent-start', anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)) })}\n`,
+    );
+    const file = injectionLog(data);
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    // One write per slice, so lines from parallel subagents do not interleave.
+    // shortcut: the log only grows; rotate or purge it with the store when gap 4 (#24) lands.
+    appendFileSync(file, lines.join(''), { mode: 0o600 });
   } catch {
     // Silent by design; see above.
   }
@@ -458,6 +501,8 @@ function main(argv: string[]): void {
       return serve(data, process.cwd(), pluginVersion());
     case 'session-start':
       return sessionStart(data);
+    case 'subagent-start':
+      return subagentStart(data);
     case 'purge':
       return purge(rest, data);
     case 'eval':

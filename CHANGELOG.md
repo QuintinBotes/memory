@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The session slice in every context window: printed again, byte-identical,
+  after a compaction (`SessionStart` with the `compact` matcher), and given
+  to `general-purpose` subagents at their start (`SubagentStart`), resolved
+  from the subagent's working directory and within 300 tokens.
+  `subagentTypes` in `config.json` adds other agent types; `Explore`, `Plan`
+  and Review Voice's agents never get it, and naming one is refused. Each
+  item a subagent is shown is logged in `logs/injections.jsonl` by item id,
+  with the session and agent ids and its estimated tokens, never its text.
 - `memory eval`, the evaluation harness, prints scorecard rows with memory
   off and on: the review replay (restated owner-declined findings after a
   cut-off, with memory built only from the pull requests before it), the

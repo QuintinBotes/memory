@@ -20,6 +20,8 @@ export interface Config {
   configs: Record<string, string[]>;
   optIns: { transcripts: boolean; failingCommands: boolean };
   sessionBudget?: number;
+  /** Subagent types, beyond general-purpose, that get the slice at their start. */
+  subagentTypes?: string[];
   imports?: Record<string, RepositorySilos>;
   consent?: { planHash: string; grantedAt: string };
 }
@@ -28,6 +30,11 @@ export const SILOS = ['rejections', 'standards', 'policy', 'notes'] as const;
 export type RepositorySilos = Partial<Record<(typeof SILOS)[number], string>>;
 
 export const DEFAULT_SESSION_BUDGET = 300;
+export const SUBAGENT_BUDGET = 300;
+/** Read-only and review agents: a reviewer primed with the owner's preferences is no longer independent. */
+export const neverSubagent = (type: string): boolean => type === 'Explore' || type === 'Plan' || type.startsWith('review-voice:');
+export const subagentAllowed = (config: Config, type: string): boolean =>
+  !neverSubagent(type) && (type === 'general-purpose' || (config.subagentTypes ?? []).includes(type));
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
 
@@ -71,6 +78,10 @@ export function loadConfig(data: string): Config | null {
   if (budget !== undefined && !(Number.isInteger(budget) && budget >= 0)) {
     throw new ConfigError('sessionBudget must be a whole number, 0 or more');
   }
+  const types = c.subagentTypes;
+  if (types !== undefined && !isList(types)) throw new ConfigError('subagentTypes must be a list of agent type names');
+  const never = types?.find(neverSubagent);
+  if (never !== undefined) throw new ConfigError(`subagentTypes names ${never}, which can never receive the slice`);
   const imports = c.imports;
   if (
     imports !== undefined &&
@@ -90,6 +101,7 @@ export function loadConfig(data: string): Config | null {
     configs: c.configs,
     optIns: { transcripts: optIns.transcripts === true, failingCommands: optIns.failingCommands === true },
     ...(budget !== undefined ? { sessionBudget: budget } : {}),
+    ...(types !== undefined ? { subagentTypes: types } : {}),
     ...(imports !== undefined ? { imports } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
   };
