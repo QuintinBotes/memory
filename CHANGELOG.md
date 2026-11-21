@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replay, report `not run` with the reason, since both need a model. The
   harness calls no model, posts nothing and never opens the memory store.
   The README documents the pull request file and the injection log format.
+- `memory eval lab`, the session lab: six fixture tasks run by the agent
+  command you name, memory's plugin off and on, three runs per arm, each in a
+  temporary copy with its own data directory and graded by hidden tests the
+  agent is never given. Rows report pass rate, tokens, cache reads, turns,
+  memory's hook durations and the injection log. `lab/replay-agent.mjs`
+  replays transcripts with no model, as CI does; `lab/claude-agent.mjs` runs
+  real Claude Code on the owner's machine. `memory eval verdict` says whether
+  auto memory may be switched off, only when the scorecard and the lab both
+  show memory no worse, and changes no setting.
 
 ### Changed
 

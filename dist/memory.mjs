@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync as readdirSync2 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join6, normalize as normalize2 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync5, readdirSync as readdirSync3 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join7, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -456,7 +456,7 @@ function hasCasedIdentifier(text2) {
 function codeFreeViolations(text2, repoTerms = []) {
   const visible2 = visibleText(text2);
   const reasons = [];
-  for (const check of CHECKS) if (check.test(visible2)) reasons.push(check.reason);
+  for (const check2 of CHECKS) if (check2.test(visible2)) reasons.push(check2.reason);
   if (mentionsRepoTerm(visible2, repoTerms)) reasons.push("repository identifier");
   return reasons;
 }
@@ -1202,6 +1202,7 @@ function dataDirectory(env = process.env) {
 }
 var tenantFile = (data, tenant) => join3(data, "tenants", `${tenant}.sqlite`);
 var personFile = (data) => join3(data, "person.sqlite");
+var injectionLog = (data) => join3(data, "logs", "injections.jsonl");
 
 // src/recall/visible.ts
 function withTextRatio(items, matches) {
@@ -1905,7 +1906,7 @@ var row2 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []
   bar: m.bar,
   ...fields
 });
-var notRun = (version, m, note, figures, extra = {}) => ["off", "on"].map((arm) => row2(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures.map((f) => [f, "not run"])), note }));
+var notRun = (version, m, note, figures2, extra = {}) => ["off", "on"].map((arm) => row2(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures2.map((f) => [f, "not run"])), note }));
 var seededRecall = (version) => notRun(
   version,
   { measure: "review-voice-seeded-recall", on: ["memory_search"], bar: "seeded recall unchanged with memory on" },
@@ -1949,7 +1950,7 @@ var covers = (anchor, path) => path === anchor || path.startsWith(`${anchor}/`);
 function falseRecall(version, events) {
   const flagged = /* @__PURE__ */ new Set();
   const touched = /* @__PURE__ */ new Map();
-  const verdict = /* @__PURE__ */ new Map();
+  const verdict2 = /* @__PURE__ */ new Map();
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e.event === "feedback") {
@@ -1961,10 +1962,10 @@ function falseRecall(version, events) {
     } else {
       const paths = touched.get(e.session) ?? [];
       const why = flagged.has(e.item) ? "wrong or stale" : e.anchors.length > 0 && !e.anchors.some((a) => paths.some((p) => covers(a, p))) ? "untouched" : null;
-      verdict.set(JSON.stringify([e.session, e.item]), { session: e.session, via: e.via, why });
+      verdict2.set(JSON.stringify([e.session, e.item]), { session: e.session, via: e.via, why });
     }
   }
-  const all = [...verdict.values()];
+  const all = [...verdict2.values()];
   const wrong = all.filter((v) => v.why === "wrong or stale").length;
   const untouched = all.filter((v) => v.why === "untouched").length;
   const sessions = new Set(all.map((v) => v.session)).size;
@@ -2064,6 +2065,173 @@ function replay(version, pulls, since) {
   ];
 }
 
+// src/eval/lab.ts
+import { spawnSync as spawnSync3 } from "node:child_process";
+import { cpSync, existsSync as existsSync4, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync2, readFileSync as readFileSync4, readdirSync as readdirSync2, rmSync as rmSync2 } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { dirname as dirname3, join as join6 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
+var RUNS = 3;
+var ROOT = dirname3(dirname3(fileURLToPath2(import.meta.url)));
+var TASKS = join6(ROOT, "lab", "tasks");
+var BUNDLE = join6(ROOT, "dist", "memory.mjs");
+var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
+var RUN_TIMEOUT_MS = 30 * 6e4;
+var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
+var REPOSITORY_VARIABLES = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE"];
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync4(join6(TASKS, t, "task.json"))).sort();
+function cleanEnv(extra) {
+  const env = { ...process.env, ...extra };
+  for (const k of REPOSITORY_VARIABLES) delete env[k];
+  return env;
+}
+function check(what, r) {
+  if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
+}
+function fixtureRepository(task, repo) {
+  cpSync(join6(TASKS, task, "repo"), repo, { recursive: true });
+  const env = cleanEnv(GIT_ENV);
+  for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
+    check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
+  }
+}
+function seed(task, t, repo, data) {
+  const memory = (args) => check(`seed ${task}'s memory`, spawnSync3(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
+  memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
+  for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
+}
+var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
+  try {
+    const v = JSON.parse(l);
+    return typeof v === "object" && v !== null ? [v] : [];
+  } catch {
+    return [];
+  }
+});
+var readLines = (file) => existsSync4(file) ? jsonLines2(readFileSync4(file, "utf8")) : [];
+var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
+function usage(events) {
+  const result = events.findLast((e) => e.type === "result");
+  const models = result?.modelUsage;
+  if (typeof models !== "object" || models === null) return null;
+  const all = Object.values(models);
+  return {
+    input: all.reduce((s, m) => s + num(m?.inputTokens), 0),
+    cacheRead: all.reduce((s, m) => s + num(m?.cacheReadInputTokens), 0),
+    turns: num(result.num_turns)
+  };
+}
+function runOnce(task, t, arm, n, agent, model, plugin, base) {
+  const dir = mkdtempSync2(join6(base, "run-"));
+  const repo = join6(dir, "repo");
+  const data = join6(dir, "data");
+  const out = join6(dir, "out");
+  mkdirSync3(data);
+  mkdirSync3(out);
+  fixtureRepository(task, repo);
+  if (arm === "on") seed(task, t, repo, data);
+  const env = cleanEnv({
+    MEMORY_DATA_DIR: data,
+    MEMORY_LAB_TASK: task,
+    MEMORY_LAB_ARM: arm,
+    MEMORY_LAB_RUN: String(n),
+    MEMORY_LAB_MODEL: model,
+    MEMORY_LAB_OUT: out
+  });
+  if (arm === "on") env["MEMORY_LAB_PLUGIN"] = plugin;
+  else delete env["MEMORY_LAB_PLUGIN"];
+  const r = spawnSync3("/bin/sh", ["-c", agent], {
+    cwd: repo,
+    env,
+    input: t.prompt,
+    encoding: "utf8",
+    timeout: RUN_TIMEOUT_MS,
+    maxBuffer: 512 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "inherit"]
+  });
+  const agentFailed = r.error !== void 0 || r.status !== 0;
+  const hidden = join6(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join6(hidden, f));
+  const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
+  return {
+    agentFailed,
+    passed: grade?.status === 0,
+    usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
+    // Memory's own hooks only: Claude Code times every hook the session ran.
+    hooks: readLines(join6(out, "session.jsonl")).flatMap((e) => {
+      const a = e.attachment;
+      return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
+    }),
+    injected: { items: injected.length, tokens: injected.reduce((s, e) => s + num(e.tokens), 0) }
+  };
+}
+var mean = (xs) => xs.length === 0 ? null : Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
+function hookMs(runs) {
+  const by = /* @__PURE__ */ new Map();
+  for (const h of runs.flatMap((r) => r.hooks)) by.set(h.event, [...by.get(h.event) ?? [], h.ms]);
+  return Object.fromEntries([...by.keys()].sort().map((event) => {
+    const ms = by.get(event).sort((a, b) => a - b);
+    return [event, { count: ms.length, p95: ms[Math.ceil(0.95 * ms.length) - 1] }];
+  }));
+}
+function figures(runs) {
+  const used = runs.flatMap((r) => r.usage === null ? [] : [r.usage]);
+  return {
+    samples: { runs: runs.length, agent_failed: runs.filter((r) => r.agentFailed).length },
+    pass_rate: Math.round(runs.filter((r) => r.passed).length / runs.length * 1e3) / 1e3,
+    input_tokens: mean(used.map((u) => u.input)),
+    cache_read_tokens: mean(used.map((u) => u.cacheRead)),
+    turns: mean(used.map((u) => u.turns)),
+    hook_ms: hookMs(runs),
+    injected: { items: runs.reduce((s, r) => s + r.injected.items, 0), tokens: runs.reduce((s, r) => s + r.injected.tokens, 0) }
+  };
+}
+function lab(version, agent, model, only) {
+  const base = mkdtempSync2(join6(tmpdir2(), "memory-lab-"));
+  try {
+    const plugin = join6(base, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync4(join6(ROOT, part))) cpSync(join6(ROOT, part), join6(plugin, part), { recursive: true });
+    return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
+      const t = JSON.parse(readFileSync4(join6(TASKS, task, "task.json"), "utf8"));
+      const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base))));
+      const [off, on] = arms;
+      return [
+        row2(version, LAB, "off", "measured", { task, model, ...off }),
+        row2(version, LAB, "on", "measured", { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate })
+      ];
+    });
+  } finally {
+    rmSync2(base, { recursive: true, force: true });
+  }
+}
+function parseRows(text2) {
+  return text2.split("\n").flatMap((line, i) => {
+    if (line.trim() === "") return [];
+    let r = null;
+    try {
+      r = JSON.parse(line);
+    } catch {
+    }
+    if (typeof r?.measure !== "string" || typeof r.arm !== "string" || typeof r.status !== "string") throw new Error(`line ${i + 1} is not a scorecard row`);
+    return [r];
+  });
+}
+function verdict(scorecard, labRows, configDir) {
+  for (const [name, rows] of [
+    ["the scorecard", scorecard.filter((r) => r.measure !== LAB.measure)],
+    ["the lab", labRows.filter((r) => r.measure === LAB.measure)]
+  ]) {
+    const missed = rows.find((r) => r.status === "measured" && r.meets_bar === false);
+    if (missed !== void 0) {
+      return `auto memory stays on: ${missed.measure}${typeof missed.task === "string" ? ` ${missed.task}` : ""} (${missed.arm} arm) does not hold its bar, ${missed.bar}`;
+    }
+    if (!rows.some((r) => r.status === "measured" && r.meets_bar === true)) return `auto memory stays on: ${name} holds no measured row that meets its bar`;
+  }
+  return `auto memory may be switched off in ${configDir}`;
+}
+
 // src/cli.ts
 suppressSqliteExperimentalWarning();
 var USAGE = `usage: memory <command>
@@ -2093,12 +2261,17 @@ var USAGE = `usage: memory <command>
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete
-  eval [replay | false-recall | orbit] [--since <date> --pulls <file>] [--log <file>]
-      scorecard rows, memory off and on, one JSON object per line; no measure named means all three.
+  eval [replay | false-recall | orbit | lab] [--since <date> --pulls <file>] [--log <file>]
+       [--agent <command> --model <name> [--task <name>]]
+      scorecard rows, memory off and on, one JSON object per line; no measure named means all four.
       replay: memory built only from the pull requests reviewed before --since, restated owner-declined
       findings counted after it. false-recall: recalled items later marked wrong or stale, or anchored
       where nothing was touched, from the injection log. orbit: Orbit's benchmark arm, not run until it
-      has a memory switch. Calls no model, posts nothing and never opens the memory store
+      has a memory switch. lab: the session lab's fixture tasks, three runs per arm, each run by the agent
+      command you name in a temporary copy and graded by hidden tests. Calls no model itself, posts nothing and
+      never opens the memory store
+  eval verdict --scorecard <file> --lab <file>
+      whether auto memory may be switched off: only when both files of rows show memory no worse
   --version`;
 var Refusal = class extends Error {
   constructor(message, code = 1) {
@@ -2316,7 +2489,7 @@ function sessionStart(data) {
   try {
     let cwd = process.cwd();
     try {
-      const input2 = JSON.parse(readFileSync4(0, "utf8"));
+      const input2 = JSON.parse(readFileSync5(0, "utf8"));
       if (typeof input2.cwd === "string" && input2.cwd.length > 0) cwd = input2.cwd;
     } catch {
     }
@@ -2353,8 +2526,8 @@ function purge(args, data) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join6(data, "tenants");
-  const tenants = values.tenant !== void 0 ? [values.tenant] : existsSync4(tenantsDir) ? readdirSync2(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
+  const tenantsDir = join7(data, "tenants");
+  const tenants = values.tenant !== void 0 ? [values.tenant] : existsSync5(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)) : [];
   const files = tenants.filter((t) => TENANT_NAME.test(t)).map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0) files.push(personFile(data));
   const report = {};
@@ -2375,10 +2548,10 @@ function purge(args, data) {
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
   if (values.confirm !== true) console.error("Nothing was deleted. Run the same command with --confirm to delete.");
 }
-var MEASURES = ["replay", "false-recall", "orbit"];
+var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync4(file, "utf8"));
+    return parse(readFileSync5(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
@@ -2387,9 +2560,22 @@ function evalCommand(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { since: { type: "string" }, pulls: { type: "string" }, log: { type: "string" } }
+    options: {
+      since: { type: "string" },
+      pulls: { type: "string" },
+      log: { type: "string" },
+      agent: { type: "string" },
+      model: { type: "string" },
+      task: { type: "string" },
+      scorecard: { type: "string" },
+      lab: { type: "string" }
+    }
   });
   const only = positionals[0];
+  if (only === "verdict" && positionals.length === 1) {
+    if (values.scorecard === void 0 || values.lab === void 0) throw new Refusal("verdict needs --scorecard <file> and --lab <file>", 2);
+    return void console.log(verdict(input(values.scorecard, parseRows), input(values.lab, parseRows), currentConfigDir()));
+  }
   if (positionals.length > 1 || only !== void 0 && !MEASURES.includes(only)) {
     throw new Refusal(`unknown measure ${positionals.join(" ")}; give one of ${MEASURES.join(", ")}, or none for all`, 2);
   }
@@ -2410,6 +2596,14 @@ function evalCommand(args) {
     else rows.push(...notRun(version, FALSE_RECALL, "no --log given", ["false_recall"]));
   }
   if (want("orbit")) rows.push(...orbitArm(version));
+  if (want("lab")) {
+    const { agent, model, task } = values;
+    if (agent !== void 0 && model !== void 0) {
+      if (task !== void 0 && !labTasks().includes(task)) throw new Refusal(`no lab task ${task}; the tasks are ${labTasks().join(", ")}`, 2);
+      rows.push(...lab(version, agent, model, task));
+    } else if (only !== void 0 || agent !== void 0 || model !== void 0) throw new Refusal("lab needs --agent <command> and --model <name>", 2);
+    else rows.push(...notRun(version, LAB, "no --agent and --model given; the lab runs only the agent command you name", ["pass_rate", "input_tokens", "cache_read_tokens", "turns", "hook_ms", "injected"]));
+  }
   process.stdout.write(rows.map((r) => `${JSON.stringify(r)}
 `).join(""));
 }

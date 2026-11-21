@@ -1,0 +1,7 @@
+{
+  "about": "A task long enough to compact; the preference must still be followed after the compaction.",
+  "prompt": "Each function in src/units.mjs must refuse a value that is not a finite number by throwing an Error that names the function and the value. Work through the functions one at a time: for each, read the whole file again, write a test for it under test/, run node --test, and only then move to the next.",
+  "memory": [
+    { "scope": "repository", "type": "convention", "statement": "Error messages in this repository start with a lower-case letter and end without a full stop" }
+  ]
+}

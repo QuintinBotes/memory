@@ -1,0 +1,7 @@
+{
+  "about": "A task that spawns a subagent; the preference must reach the subagent.",
+  "prompt": "Use a general-purpose subagent to add parseDuration to src/time.mjs: it turns strings such as 90s, 5m or 2h into milliseconds.",
+  "memory": [
+    { "scope": "repository", "type": "convention", "statement": "Modules in this repository use named exports only; none has a default export" }
+  ]
+}

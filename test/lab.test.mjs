@@ -31,7 +31,8 @@ function evaluate(args) {
   mkdirSync(config);
   const cwd = repo(base, 'acme/api', 'https://github.com/acme/api.git');
   const r = run(['eval', ...args], { cwd, data, config, path: `${bin}:${process.env.PATH}` });
-  const rows = r.status === 0 ? r.stdout.split('\n').filter((l) => l !== '').map((l) => JSON.parse(l)) : [];
+  // The verdict prints one sentence, not rows.
+  const rows = r.status === 0 ? r.stdout.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l)) : [];
   return {
     ...r,
     base,
