@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The consent plan has a version, and each kind of data it lists the
+  version that added it. A consent covers only the kinds of data its plan
+  listed: a newer one stays off, and `memory init` lists it and asks again,
+  while the rest keep working. A consent from before the injection log
+  leaves the log off until the owner confirms the plan again.
 - An agent's `memory_feedback(id, stale)` no longer hides the item. It
   re-checks the item's citation at HEAD at once: a citation that fails makes
   the item stale, as the re-check would, and it comes back when the citation

@@ -28,7 +28,7 @@ import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { serve } from './mcp/server.ts';
 import { visibleItems } from './recall/visible.ts';
 import { PROPOSALS_LABEL, fence } from './render/rows.ts';
-import { buildConsentPlan } from './consent/plan.ts';
+import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
 import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
 import { decide, proposals, renderProposals, type Proposal } from './review/review.ts';
@@ -100,6 +100,7 @@ const NOT_SET_UP = 'memory is not set up, or its configuration changed since you
 function setUp(data: string): Config {
   const config = loadConfig(data);
   if (!consented(config)) throw new Refusal(NOT_SET_UP);
+  if (uncovered(config).length > 0) console.error('memory: this release keeps a kind of data you have not agreed to; it stays off until you run memory init and confirm');
   return config;
 }
 
@@ -127,14 +128,17 @@ function init(args: string[], data: string): void {
   }
   const plan = buildConsentPlan(config, data);
   console.log(JSON.stringify(plan, null, 2));
+  const added = config.consent === undefined ? [] : uncovered(config);
+  const when = values.confirm === true ? 'are on from now' : 'stay off until you confirm';
+  if (added.length > 0) console.error(`These kinds of data are new since you agreed, and ${when}:\n${added.map((c) => `  - ${c.text}\n`).join('')}`);
   if (values.confirm !== true) {
     console.error('Nothing was saved. Run the same command with --confirm to agree to this plan.');
     return;
   }
-  config.consent = { planHash: planHash(config), grantedAt: new Date().toISOString() };
+  config.consent = { planHash: planHash(config), grantedAt: new Date().toISOString(), version: PLAN_VERSION };
   saveConfig(data, config);
   const db = openStore(personFile(data), true)!;
-  recordAudit(db, 'consent_granted', null, { planHash: config.consent.planHash });
+  recordAudit(db, 'consent_granted', null, { planHash: config.consent.planHash, version: PLAN_VERSION });
   db.close();
   console.error('Consent recorded. Memory is on for the tenants this config is bound to.');
 }
@@ -370,6 +374,7 @@ function subagentStart(data: string): void {
     const { text, shown } = hookSlice(data, config, input, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
     if (text === '') return;
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: text } }));
+    if (!covers(config, 'injections')) return;
     const id = (v: unknown) => (typeof v === 'string' && v !== '' ? v : 'unknown');
     const lines = shown.map(
       (item) =>
