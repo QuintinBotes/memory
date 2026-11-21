@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory eval`, the evaluation harness, prints scorecard rows with memory
+  off and on: the review replay (restated owner-declined findings after a
+  cut-off, with memory built only from the pull requests before it), the
+  false-recall report from the injection log, and Orbit's benchmark arm.
+  Each row states its bar, the capabilities on in its arm and its sample
+  sizes. Orbit's arm, and Review Voice's seeded-defect recall beside the
+  replay, report `not run` with the reason, since both need a model. The
+  harness calls no model, posts nothing and never opens the memory store.
+  The README documents the pull request file and the injection log format.
+
 ### Changed
 
 - An agent's `memory_feedback(id, stale)` no longer hides the item. It
