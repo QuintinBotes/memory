@@ -61,8 +61,8 @@ export function commit(dir, files, message = 'change') {
 }
 
 /** Runs the bundle with a clean environment: only what the test names reaches it. */
-export function run(args, { cwd, data, config, input } = {}) {
-  const env = { PATH: process.env.PATH, HOME: process.env.HOME, ...gitEnv };
+export function run(args, { cwd, data, config, input, path } = {}) {
+  const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv };
   if (data) env.MEMORY_DATA_DIR = data;
   if (config) env.CLAUDE_CONFIG_DIR = config;
   const r = spawnSync(process.execPath, [bundle, ...args], { cwd, env, input, encoding: 'utf8' });

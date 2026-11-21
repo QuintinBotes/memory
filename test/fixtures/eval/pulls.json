@@ -1,0 +1,38 @@
+{
+  "pulls": [
+    {
+      "number": 101,
+      "reviewed_at": "2026-01-10",
+      "findings": [
+        { "id": "101-1", "path": "src/ledger.ts", "statement": "consume is called without the run lock held", "owner": "declined" },
+        { "id": "101-2", "path": "src/api.ts", "statement": "rename the handler to match the route", "owner": "accepted" }
+      ]
+    },
+    {
+      "number": 102,
+      "reviewed_at": "2026-02-05",
+      "findings": [
+        { "id": "102-1", "path": "src/retry.ts", "statement": "the retry loop has no upper bound on attempts", "owner": "declined" }
+      ]
+    },
+    {
+      "number": 201,
+      "reviewed_at": "2026-03-04",
+      "findings": [
+        { "id": "201-1", "path": "src/ledger.ts", "statement": "consume runs without holding the run lock", "restates": "101-1" },
+        { "id": "201-2", "path": "src/cache.ts", "statement": "the cache never evicts stale entries", "owner": "declined" },
+        { "id": "201-3", "path": "src/api.ts", "statement": "rename the handler to match its route", "restates": "101-2" }
+      ]
+    },
+    {
+      "number": 202,
+      "reviewed_at": "2026-03-20",
+      "findings": [
+        { "id": "202-1", "path": "src/cache.ts", "statement": "stale cache entries are never evicted", "restates": "201-2" },
+        { "id": "202-2", "path": "src/worker.ts", "statement": "a failing job keeps going forever", "restates": "102-1" },
+        { "id": "202-3", "path": "src/retry.ts", "statement": "retries have no upper bound", "restates": "102-1" },
+        { "id": "202-4", "path": "src/worker.ts", "statement": "the worker swallows the error it logs" }
+      ]
+    }
+  ]
+}
