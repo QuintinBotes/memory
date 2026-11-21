@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { REPOSITORY_VARIABLES } from '../context.ts';
 import { injectionLog } from '../store/paths.ts';
 import { row, type Measure, type Row } from './scorecard.ts';
 
@@ -30,7 +31,6 @@ const BUNDLE = join(ROOT, 'dist', 'memory.mjs');
 const PLUGIN_PARTS = ['.claude-plugin', 'hooks', 'dist', 'skills', '.mcp.json'];
 const RUN_TIMEOUT_MS = 30 * 60_000;
 const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'lab', GIT_AUTHOR_EMAIL: 'lab@example.com', GIT_COMMITTER_NAME: 'lab', GIT_COMMITTER_EMAIL: 'lab@example.com' };
-const REPOSITORY_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE'];
 
 interface Task {
   prompt: string;
@@ -175,7 +175,11 @@ export function lab(version: string, agent: string, model: string, only?: string
       const [off, on] = arms as [ReturnType<typeof figures>, ReturnType<typeof figures>];
       return [
         row(version, LAB, 'off', 'measured', { task, model, ...off }),
-        row(version, LAB, 'on', 'measured', { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate }),
+        // A run that failed to start counts as failed, but the bar is not judged on it: a lab whose agent never ran,
+        // or whose off arm lost runs, would otherwise show memory no worse.
+        on.samples.agent_failed + off.samples.agent_failed > 0
+          ? row(version, LAB, 'on', 'measured', { task, model, ...on, meets_bar: null, note: 'a run failed to start, so the bar is not judged; run the lab again' })
+          : row(version, LAB, 'on', 'measured', { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate }),
       ];
     });
   } finally {

@@ -242,7 +242,8 @@ it, so repeats are counted without a model:
 The false-recall report reads the injection log: one JSON object per line, in
 the order things happened. The recall hooks will write it (slice 10); until
 then a fixture stands in. It reads three events and ignores other fields and
-other events:
+other events; the session lab also sums an `injected` event's `tokens`, its
+estimated tokens, when present:
 
 ```json
 {"event": "injected", "session": "s1", "item": "m-1a2b3c4d5e", "via": "session-start", "anchors": ["src/ledger.ts"]}
@@ -256,7 +257,8 @@ Orbit's workers load no hooks, so what memory delivers through a hook is
 measured in the session lab. `memory eval lab` runs each fixture task under
 `lab/tasks` with memory's plugin off and on, three runs per arm, and grades
 each run with the task's hidden tests, run only after the agent exits and
-never placed where the agent can see them. Each run gets a temporary copy of
+never given to the agent: not in its directory, its environment or its
+plugin copy. Each run gets a temporary copy of
 the task's repository and its own empty data directory; on the on arm that
 directory is consented and holds the task's items, so no run reads or writes
 your store. The six tasks: a seeded hazard on a symbol the task must change
@@ -266,8 +268,9 @@ your store. The six tasks: a seeded hazard on a symbol the task must change
 spawns a subagent (`subagent`), and a change-reach task (`change-reach`).
 
 ```bash
-memory eval lab --model claude-sonnet-5 --agent 'node lab/claude-agent.mjs'         # real Claude Code: a login, a model, money
-memory eval lab --task hazard-change --model fixture --agent 'node lab/replay-agent.mjs test/fixtures/lab'   # no model
+# Run from a memory checkout. The agent runs in each run's copy, so its paths are absolute: $PWD expands here.
+memory eval lab --model claude-sonnet-5 --agent "node $PWD/lab/claude-agent.mjs"    # real Claude Code: a login, a model, money
+memory eval lab --task hazard-change --model fixture --agent "node $PWD/lab/replay-agent.mjs $PWD/test/fixtures/lab"   # no model
 memory eval verdict --scorecard scorecard.jsonl --lab lab.jsonl
 ```
 
@@ -279,9 +282,13 @@ environment. Its stdout is read as Claude Code's `stream-json`: tokens, cache
 reads and turns come from the `result` line's `modelUsage` and `num_turns`.
 Hook durations come from `$MEMORY_LAB_OUT/session.jsonl`, the session
 transcript Claude Code keeps, from its `hook_success` records of memory's
-own hooks. A run whose agent exits non-zero counts as failed. Each task row
+own hooks. A run whose agent exits non-zero counts as failed, and then the
+task's bar is not judged (`meets_bar` is null) until the lab runs again.
+`lab/claude-agent.mjs` removes each run's project folder from your Claude
+Code config afterwards, so nothing a run wrote there reaches `memory import`. Each task row
 reports pass rate, mean input and cache-read tokens and turns, hook counts
-and 95th percentiles, and what the injection log recorded; its bar is a pass
+and 95th percentiles, and the `injected` events memory's injection log
+recorded in the run, with their summed `tokens`; its bar is a pass
 rate with memory on no lower than off.
 
 `lab/replay-agent.mjs` stands in for Claude Code and calls no model, which is

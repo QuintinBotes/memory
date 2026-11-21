@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { repo, run, sandbox } from './helpers.mjs';
@@ -112,7 +112,44 @@ test('a run whose agent fails to start counts as a failed run, not a skipped one
       assert.equal(row.input_tokens, null);
       assert.equal(row.turns, null);
     }
+    // Nothing ran, so nothing is shown no worse: the bar is not judged, and the verdict counts the row as nothing.
+    assert.equal(r.row('hazard-change', 'on').meets_bar, null);
+    assert.match(r.row('hazard-change', 'on').note, /failed to start/);
   }
+});
+
+test('the replay agent re-roots a recorded absolute path and refuses one that leaves its working directory', () => {
+  const { base } = sandbox();
+  const dir = join(base, 'transcripts');
+  mkdirSync(join(dir, 'hazard-change'), { recursive: true });
+  const outside = join(base, 'escaped.mjs');
+  const line = (o) => `${JSON.stringify(o)}\n`;
+  const tool = (name, input) => line({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } });
+  // Recorded in /recorded/repo: the absolute Edit lands in this run's copy.
+  writeFileSync(join(dir, 'hazard-change', 'on.jsonl'), line({ type: 'system', subtype: 'init', cwd: '/recorded/repo' }) +
+    tool('Edit', { file_path: '/recorded/repo/src/ledger.mjs', old_string: '  spent += amount;', new_string: "  if (amount < 0) throw new RangeError('negative');\n  spent += amount;" }) +
+    line({ type: 'result', num_turns: 2, modelUsage: {} }));
+  writeFileSync(join(dir, 'hazard-change', 'off.jsonl'), tool('Write', { file_path: outside, content: 'export {};\n' }) + tool('Write', { file_path: '../../escaped.mjs', content: 'export {};\n' }));
+  const r = hazard(`"${process.execPath}" "${join(root, 'lab', 'replay-agent.mjs')}" "${dir}"`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.row('hazard-change', 'on').pass_rate, 1);
+  assert.equal(r.row('hazard-change', 'off').samples.agent_failed, 3);
+  assert.equal(existsSync(outside), false);
+});
+
+test("the lab's git never reaches the repository it was run from, even when GIT_DIR names it", () => {
+  const { base } = sandbox();
+  const cwd = repo(base, 'acme/api', 'https://github.com/acme/api.git');
+  const head = () => execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' });
+  const before = head();
+  const r = spawnSync(process.execPath, [join(root, 'dist', 'memory.mjs'), 'eval', 'lab', '--task', 'hazard-change', '--model', 'm', '--agent', replay], {
+    cwd, encoding: 'utf8',
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, MEMORY_DATA_DIR: join(base, 'data'), CLAUDE_CONFIG_DIR: base, GIT_DIR: join(cwd, '.git'), GIT_WORK_TREE: cwd, GIT_INDEX_FILE: join(cwd, '.git', 'index') },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(head(), before);
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' }), '');
+  assert.match(r.stdout, /"pass_rate":1/);
 });
 
 test('a full capability run, six tasks, two arms and three runs each, completes unattended', () => {

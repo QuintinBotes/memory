@@ -8,7 +8,8 @@ import { row, type Measure, type Row } from './scorecard.ts';
  *   {"event": "touched", "session": "<id>", "paths": ["<path>", ...]}
  *   {"event": "feedback", "session": "<id>", "item": "<id>", "signal": "helped" | "wrong" | "stale"}
  *
- * Paths are relative to the repository root. Other fields and other events are ignored, so a writer may add both.
+ * Paths are relative to the repository root. Other fields and other events are ignored, so a writer may add both;
+ * the session lab sums an `injected` event's `tokens`, its estimated tokens, when the writer gives it.
  */
 export type Event =
   | { event: 'injected'; session: string; item: string; via: string; anchors: string[] }

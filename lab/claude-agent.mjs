@@ -8,10 +8,10 @@
  * One headless session on $MEMORY_LAB_MODEL, the prompt on stdin, the memory plugin loaded only on the on arm. No
  * settings file is read, so the owner's own hooks and plugins stay out of both arms. The stream goes to stdout; the
  * session transcript Claude Code keeps, with its subagents' transcripts, is copied to $MEMORY_LAB_OUT/session.jsonl
- * for the hooks' durations.
+ * for the hooks' durations, and the run's project folder is then removed from the Claude Code config.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,5 +30,8 @@ for (const project of session && existsSync(projects) ? readdirSync(projects) : 
   for (const file of [main, ...(existsSync(subagents) ? readdirSync(subagents).map((f) => join(subagents, f)) : [])]) {
     appendFileSync(join(out, 'session.jsonl'), readFileSync(file));
   }
+  // The run's project folder holds only this run (its directory was new), and any auto memory Claude Code wrote there
+  // would otherwise reach the owner's store at the next memory import.
+  if (project.includes('memory-lab-')) rmSync(join(projects, project), { recursive: true, force: true });
 }
 process.exit(r.status ?? 1);

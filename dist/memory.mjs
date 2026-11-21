@@ -117,9 +117,10 @@ function organisationTerms(config, repository) {
 
 // src/context.ts
 import { spawnSync } from "node:child_process";
+var REPOSITORY_VARIABLES = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE"];
 function git(cwd, ...args) {
   const env = { ...process.env };
-  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE"]) delete env[k];
+  for (const k of REPOSITORY_VARIABLES) delete env[k];
   env["GIT_TERMINAL_PROMPT"] = "0";
   const r = spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
   if (r.error !== void 0 && r.error.code !== "ENOENT") throw r.error;
@@ -2079,7 +2080,6 @@ var BUNDLE = join6(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var REPOSITORY_VARIABLES = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE"];
 var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync4(join6(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
@@ -2199,7 +2199,9 @@ function lab(version, agent, model, only) {
       const [off, on] = arms;
       return [
         row2(version, LAB, "off", "measured", { task, model, ...off }),
-        row2(version, LAB, "on", "measured", { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate })
+        // A run that failed to start counts as failed, but the bar is not judged on it: a lab whose agent never ran,
+        // or whose off arm lost runs, would otherwise show memory no worse.
+        on.samples.agent_failed + off.samples.agent_failed > 0 ? row2(version, LAB, "on", "measured", { task, model, ...on, meets_bar: null, note: "a run failed to start, so the bar is not judged; run the lab again" }) : row2(version, LAB, "on", "measured", { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate })
       ];
     });
   } finally {
