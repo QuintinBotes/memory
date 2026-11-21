@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -46,7 +46,10 @@ function canaried() {
   const id = idOf(remember(s.acmeApi, s.data, s.configA, `The ${canary} module holds the run lock`, '--type', 'hazard',
     '--anchor', `src/${canary}.ts:1`, '--source', `https://github.com/acme/api/pull/${canary}`));
   fill(acme(s), 500);
+  // The cited line moves, so the re-check at the subagent's start records the anchor's old and new place in the audit.
+  commit(s.acmeApi, { [`src/${canary}.ts`]: '// moved\nexport const a = 1;\n' });
   assert.match(subagent(s, s.acmeApi).stdout, new RegExp(canary));
+  withDb(acme(s), (db) => assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'anchor_moved'").get().n, 1));
   assert.ok(storeBytes(s.data).includes(canary), 'the canary is on disk before the purge');
   return { ...s, canary, id };
 }
@@ -140,6 +143,8 @@ test('purge --source removes its evidence, returns an item resting only on it to
 
 test('purge --source --with-derived deletes an item resting only on that source', () => {
   const s = sourced();
+  const preview = JSON.parse(purge(s, s.acmeApi, '--source', s.pr12, '--with-derived').stdout);
+  assert.deepEqual([preview.items, preview.evidence, preview.returnedToProposed], [1, 2, 0]);
   assert.equal(purge(s, s.acmeApi, '--source', s.pr12, '--with-derived', '--confirm').status, 0);
   assert.equal(itemRow(s, s.a), undefined);
   assert.deepEqual({ ...itemRow(s, s.b) }, { status: 'active', support: 1, evidence: 1 });
@@ -152,6 +157,10 @@ test('a source that matches nothing reports zero and exits 0; --with-derived nee
   assert.equal(r.status, 0, r.stderr);
   assert.equal(JSON.parse(r.stdout).evidence, 0);
   assert.equal(purge(s, s.acmeApi, '--tenant', 'acme', '--with-derived').status, 2);
+  // Where no tenant resolves, the source reaches only the person file, and the purge says why.
+  const loose = purge(s, s.loose, '--source', s.pr12);
+  assert.equal(loose.status, 0, loose.stderr);
+  assert.match(loose.stderr, /only the person file.*matches no tenant/);
 });
 
 test('the audit entry records the scope and counts, never the purged text or the source itself', () => {
@@ -160,6 +169,7 @@ test('the audit entry records the scope and counts, never the purged text or the
   withDb(acme(s), (db) => {
     const meta = db.prepare("SELECT metadata_json FROM audit_events WHERE action = 'purge'").get().metadata_json;
     assert.doesNotMatch(meta, /pull\/12|exponential/);
+    assert.doesNotMatch(meta, new RegExp(createHash('sha256').update(s.pr12).digest('hex')), 'a hash of a guessable source names it');
     assert.match(meta, /"evidence":2/);
   });
 });
@@ -176,10 +186,15 @@ test('the injection log keeps no line of a purged item; --older-than drops lines
   const s = setup();
   const keep = idOf(remember(s.acmeApi, s.data, s.configA, 'Releases are tagged'));
   const gone = idOf(remember(s.acmeApi, s.data, s.configA, 'Retries use backoff'));
+  const beta = idOf(remember(s.betaWeb, s.data, s.configA, 'Beta deploys on Thursdays'));
   subagent(s, s.acmeApi);
+  subagent(s, s.betaWeb);
   const items = () => readFileSync(logFile(s), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l).item);
-  assert.deepEqual(items().sort(), [keep, gone].sort());
+  assert.deepEqual(items().sort(), [keep, gone, beta].sort());
   assert.equal(purge(s, s.acmeApi, '--item', gone, '--confirm').status, 0);
+  assert.deepEqual(items().sort(), [keep, beta].sort());
+  // A purge of one tenant keeps the lines of items another tenant still holds.
+  assert.equal(purge(s, s.acmeApi, '--tenant', 'beta', '--confirm').status, 0);
   assert.deepEqual(items(), [keep]);
   // A line from before lines carried a time counts as older than any cut-off.
   writeFileSync(logFile(s), `${readFileSync(logFile(s), 'utf8')}${JSON.stringify({ event: 'injected', session: 's0', agent: 'a0', item: keep, via: 'subagent-start', anchors: [], tokens: 5 })}\n`);
