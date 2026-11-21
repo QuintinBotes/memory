@@ -18,6 +18,8 @@ export type AuditAction =
   | 'import'
   | 'proposal_approved'
   | 'proposal_rejected'
+  | 'proposal_received'
+  | 'feedback'
   | 'tombstones_reduced';
 
 export function recordAudit(

@@ -1,7 +1,7 @@
 import type { Visible } from './items.ts';
+import { ITEMS_LABEL, fence, safe } from './render/rows.ts';
 
 const SCOPE_POINTS: Record<string, number> = { repository: 2, organisation: 1, person: 1, global: 0.5 };
-const HEADER = 'Memory (advisory; facts recorded earlier, with their source):\n';
 
 /** Estimated tokens: characters divided by four, rounded up. */
 export const estimate = (text: string): number => Math.ceil(text.length / 4);
@@ -16,18 +16,16 @@ export function rank(items: Visible[]): Visible[] {
   );
 }
 
-export const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
-
 export function row(item: Visible): string {
   const anchors = item.anchors
     .map((a) => a.symbol ?? (a.start === undefined ? a.path : `${a.path}:${a.start}-${a.end ?? a.start}`))
     .join(', ');
   const source = item.source !== '' && item.source !== 'remember' ? ` ${item.source}` : '';
-  return oneLine(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ''}${source}`) + '\n';
+  return safe(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ''}${source}`) + '\n';
 }
 
 function compose(rows: string[], more: number): string {
-  return HEADER + rows.join('') + (more > 0 ? `+${more} more: memory list\n` : '');
+  return fence(ITEMS_LABEL, rows.join('') + (more > 0 ? `+${more} more: memory list\n` : ''));
 }
 
 /**

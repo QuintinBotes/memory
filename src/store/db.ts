@@ -68,6 +68,27 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       set.run(statementKey(r.statement), r.id);
     }
   },
+
+  // v4 - feedback counts, the quarantine flag and the full-text index (slice 4). The index is
+  // keyed by item id, not rowid, which a VACUUM may renumber, and deletes securely (#23).
+  `
+  ALTER TABLE items ADD COLUMN helped INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE items ADD COLUMN wrong INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE items ADD COLUMN reinforced_at TEXT;
+  ALTER TABLE items ADD COLUMN quarantine TEXT;
+  CREATE VIRTUAL TABLE items_fts USING fts5 (item_id UNINDEXED, statement, rationale, tokenize = 'porter unicode61');
+  INSERT INTO items_fts (items_fts, rank) VALUES ('secure-delete', 1);
+  INSERT INTO items_fts (item_id, statement, rationale) SELECT id, statement, rationale FROM items;
+  CREATE TRIGGER items_fts_insert AFTER INSERT ON items BEGIN
+    INSERT INTO items_fts (item_id, statement, rationale) VALUES (new.id, new.statement, new.rationale);
+  END;
+  CREATE TRIGGER items_fts_delete AFTER DELETE ON items BEGIN
+    DELETE FROM items_fts WHERE item_id = old.id;
+  END;
+  CREATE TRIGGER items_fts_update AFTER UPDATE OF statement, rationale ON items BEGIN
+    UPDATE items_fts SET statement = new.statement, rationale = new.rationale WHERE item_id = old.id;
+  END;
+  `,
 ];
 
 /**

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- An MCP server with four tools for agents (#5). `memory_search(query,
+  paths?)` returns ranked rows of at most 60 estimated tokens, each with a
+  `why` listing its points; `memory_get(id)` returns the item with its
+  evidence and anchor status, as rows or JSON; `memory_propose` only
+  proposes, storing the origin's trust (agent, team, external or bot, never
+  owner); `memory_feedback(id, helped|wrong|stale)` changes only the counts
+  behind confidence, or takes an item out of recall. No tool approves,
+  rejects, purges or configures.
+- Text from a non-owner source that Orbit's authority rules read as an
+  instruction is stored as a quarantined proposal: never searched, flagged in
+  `memory review` and at approval, and counted by `memory import`.
+- Confidence is computed on read and shown as low, medium or high; an item
+  with no reinforcement for 90 days reads as expired and leaves recall.
+- A full-text index of statements, with FTS5 secure-delete on (#23).
+
 - `memory import [--dry-run]` reads the silos and stores each statement as a
   proposal, never active: the auto memory of every bound Claude Code config,
   and per repository checkout the review-standards file, the record of
@@ -35,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statement.
 - A person statement shaped like `owner/repo` is refused as not
   organisation-free, even when no tenant names that owner.
+
+### Changed
+
+- The session slice, `memory list`, `memory review` and every tool result sit
+  inside one advisory fence that item text cannot close. `memory review`
+  quotes each statement.
+- An imported notes file carries agent trust, not owner trust, because tools
+  write it.
+- The citation re-check restores only items it made stale; an agent's stale
+  report holds.
 
 ### Fixed
 

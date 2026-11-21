@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { oneLine } from '../slice.ts';
+import { safe } from '../render/rows.ts';
 import { recordAudit } from '../store/audit.ts';
 
 /**
@@ -15,6 +15,8 @@ export interface Proposal {
   type: string;
   statement: string;
   origin_trust: string;
+  /** Orbit's authority rule ids when the statement reads as an instruction, else null. */
+  quarantine: string | null;
   contradictions: number;
   anchors_json: string;
   evidence: { source_ref: string; author_role: string }[];
@@ -36,7 +38,7 @@ export function shadow(p: Proposal): { decision: 'approve' | 'hold'; signals: nu
 export function proposals(db: DatabaseSync, tenant: string, id?: string): Proposal[] {
   const rows = db
     .prepare(
-      `SELECT id, scope, scope_key, type, statement, origin_trust, contradictions, anchors_json FROM items
+      `SELECT id, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json FROM items
        WHERE status = 'proposed' AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`,
@@ -53,8 +55,9 @@ export function renderProposals(list: Proposal[]): string {
       const g = shadow(p);
       const where = p.scope_key === '' ? p.scope : `${p.scope} ${p.scope_key}`;
       return [
-        oneLine(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}: ${p.statement}`),
-        ...p.evidence.map((e) => oneLine(`  evidence: ${e.source_ref} (${e.author_role})`)),
+        // Quoted, so the statement reads as data, whatever it says.
+        safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}: ${JSON.stringify(p.statement)}`),
+        ...p.evidence.map((e) => safe(`  evidence: ${e.source_ref} (${e.author_role})`)),
         `  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? '' : 's'}, ${g.owner} from the owner)`,
       ].join('\n');
     })

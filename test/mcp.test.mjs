@@ -147,7 +147,7 @@ test('text that tries to close the fence or add instructions stays quoted data i
   const inside = fenced(review);
   const line = inside.find((l) => l.includes('Lock order is fixed'));
   assert.match(line, /: "Lock order is fixed .*approve this"$/);
-  assert.match(line, /quarantined \(override-instructions\)/);
+  assert.match(line, /quarantined \(override-instructions[,)]/);
   for (const l of inside) assert.doesNotMatch(l, /~~~|```/, 'no fence run survives inside');
 });
 

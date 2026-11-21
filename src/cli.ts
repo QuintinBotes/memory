@@ -19,13 +19,16 @@ import {
 } from './config.ts';
 import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
-import { SCOPES, TYPES, insertItem, personItems, sha256, tenantItems, type Anchor, type Scope, type Visible } from './items.ts';
+import { SCOPES, TYPES, insertItem, sha256, type Anchor, type Scope } from './items.ts';
 import { renderAll, renderSlice } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
+import { serve } from './mcp/server.ts';
+import { visibleItems } from './recall/visible.ts';
+import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { buildConsentPlan } from './consent/plan.ts';
 import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
-import { decide, proposals, renderProposals } from './review/review.ts';
+import { decide, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, personFile, tenantFile } from './store/paths.ts';
@@ -53,6 +56,8 @@ const USAGE = `usage: memory <command>
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
+  mcp
+      the MCP server over stdio: memory_search, memory_get, memory_propose, memory_feedback
   session-start
       the SessionStart hook: the slice for this repository and config, within budget
   purge (--tenant <name> | --repo <owner/repo> | --older-than <days> | --all) [--confirm]
@@ -75,32 +80,6 @@ function setUp(data: string): Config {
   const config = loadConfig(data);
   if (!consented(config)) throw new Refusal(NOT_SET_UP);
   return config;
-}
-
-/**
- * Active items this process may show here: the bound tenant's, then the person
- * file's. Anchored items are re-checked against HEAD first, so an item whose
- * citation is gone is never shown.
- */
-function visibleItems(data: string, context: Context, cwd: string): Visible[] {
-  const out: Visible[] = [];
-  if (context.tenant !== null && context.repository !== null && context.owner !== null) {
-    const db = openStore(tenantFile(data, context.tenant), false);
-    if (db !== null) {
-      try {
-        recheck(db, context.tenant, context.repository, cwd);
-        out.push(...tenantItems(db, context.tenant, context.repository, context.owner));
-      } finally {
-        db.close();
-      }
-    }
-  }
-  const person = openStore(personFile(data), false);
-  if (person !== null) {
-    out.push(...personItems(person));
-    person.close();
-  }
-  return out;
 }
 
 function init(args: string[], data: string): void {
@@ -237,18 +216,22 @@ function proposalStores(data: string, context: Context): { file: string; tenant:
 }
 
 function review(data: string, cwd: string): void {
-  let out = '';
+  const all: Proposal[] = [];
   for (const { file, tenant } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
-      out += renderProposals(proposals(db, tenant));
+      all.push(...proposals(db, tenant));
     } finally {
       db.close();
     }
   }
-  if (out === '') console.error('No proposals to review here.');
-  else process.stdout.write(`Memory proposals (statements recorded earlier, with their source; memory approve <id> or memory reject <id>):\n${out}`);
+  if (all.length === 0) return void console.error('No proposals to review here.');
+  const quarantined = all.filter((p) => p.quarantine !== null).length;
+  process.stdout.write(
+    `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction. Decide with memory approve <id> or memory reject <id>.\n` +
+      fence(PROPOSALS_LABEL, renderProposals(all)),
+  );
 }
 
 /** `memory approve <id> [--scope]` and `memory reject <id> [--reason]`: the owner's decision on one proposal. */
@@ -287,7 +270,8 @@ function decideCommand(args: string[], data: string, cwd: string, decision: 'app
       if (to === 'organisation' && p.anchors_json !== '[]') throw new Refusal('only a repository item can have an anchor');
       const scopeKey = to === 'organisation' && p.scope === 'repository' ? p.scope_key.split('/')[0]! : p.scope_key;
       decide(db, p, 'approve', { scope: to, scopeKey });
-      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})`);
+      const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
+      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}`);
       return;
     } finally {
       db.close();
@@ -417,6 +401,8 @@ function main(argv: string[]): void {
       return decideCommand(rest, data, process.cwd(), command);
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
+    case 'mcp':
+      return serve(data, process.cwd(), pluginVersion());
     case 'session-start':
       return sessionStart(data);
     case 'purge':
