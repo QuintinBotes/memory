@@ -419,7 +419,7 @@ function evalCommand(args: string[]): void {
     const { since, pulls } = values;
     if (since !== undefined && Number.isNaN(Date.parse(since))) throw new Refusal(`--since takes a date, such as 2026-03-01, not "${since}"`, 2);
     if (since !== undefined && pulls !== undefined) rows.push(...replay(version, input(pulls, parsePulls), since));
-    else if (only !== undefined) throw new Refusal('replay needs --since <date> and --pulls <file>', 2);
+    else if (only !== undefined || since !== undefined || pulls !== undefined) throw new Refusal('replay needs --since <date> and --pulls <file>', 2);
     else rows.push(...notRun(version, REPLAY, 'no --since and --pulls given', ['repeats']));
     rows.push(...seededRecall(version));
   }

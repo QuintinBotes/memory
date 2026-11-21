@@ -31,7 +31,9 @@
         { "id": "202-1", "path": "src/cache.ts", "statement": "stale cache entries are never evicted", "restates": "201-2" },
         { "id": "202-2", "path": "src/worker.ts", "statement": "a failing job keeps going forever", "restates": "102-1" },
         { "id": "202-3", "path": "src/retry.ts", "statement": "retries have no upper bound", "restates": "102-1" },
-        { "id": "202-4", "path": "src/worker.ts", "statement": "the worker swallows the error it logs" }
+        { "id": "202-4", "path": "src/worker.ts", "statement": "the worker swallows the error it logs" },
+        { "id": "202-5", "statement": "consume is called without the run lock", "restates": "101-1" },
+        { "id": "202-6", "path": "src/retry.ts", "statement": "the backoff sleeps a fixed second between tries", "restates": "102-1" }
       ]
     }
   ]

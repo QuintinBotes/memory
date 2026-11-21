@@ -31,9 +31,10 @@ function bin({ orbit = false } = {}) {
 
 function evaluate(args, options = {}) {
   const b = bin(options);
-  const r = run(['eval', ...args], { cwd: b.base, path: b.path });
+  const data = join(b.base, 'data');
+  const r = run(['eval', ...args], { cwd: b.base, data, path: b.path });
   const rows = r.status === 0 ? r.stdout.split('\n').filter((l) => l !== '').map((l) => JSON.parse(l)) : [];
-  return { ...r, rows, row: (measure, arm) => rows.find((x) => x.measure === measure && x.arm === arm), called: existsSync(b.calls) };
+  return { ...r, rows, row: (measure, arm) => rows.find((x) => x.measure === measure && x.arm === arm), called: existsSync(b.calls), stored: existsSync(data) };
 }
 
 test('the replay builds memory only from pull requests before the cut-off and counts restated owner-declined findings after it, off and on', () => {
@@ -42,21 +43,22 @@ test('the replay builds memory only from pull requests before the cut-off and co
   const off = r.row('review-replay', 'off');
   const on = r.row('review-replay', 'on');
   assert.equal(off.status, 'measured');
-  assert.deepEqual(off.samples, { pulls_before: 2, pulls_after: 2, findings_after: 7, restatements: 4, memory_items: 0 });
-  assert.deepEqual(on.samples, { pulls_before: 2, pulls_after: 2, findings_after: 7, restatements: 4, memory_items: 2 });
-  assert.equal(off.repeats, 4);
+  assert.deepEqual(off.samples, { pulls_before: 2, pulls_after: 2, findings_after: 9, restatements: 6, memory_items: 0 });
+  assert.deepEqual(on.samples, { pulls_before: 2, pulls_after: 2, findings_after: 9, restatements: 6, memory_items: 2 });
+  assert.equal(off.repeats, 6);
   assert.equal(off.held, 0);
-  // Held: the ledger and retry restatements. Repeats: the cache one, declined only after the cut-off, so memory
+  // Held: the ledger and retry restatements, which share words and a path with what they restate; 202-5, by its
+  // words alone; and 202-6, by its path alone. Repeats: the cache one, declined only after the cut-off, so memory
   // never learned it, and the worker one, which shares no word or path with what memory holds.
-  assert.equal(on.held, 2);
+  assert.equal(on.held, 4);
   assert.equal(on.repeats, 2);
   assert.equal(on.meets_bar, true);
-  // Four restatements, not five: the one of a finding the owner accepted is not a repeat of a declined one.
+  // Six restatements, not seven: the one of a finding the owner accepted is not a repeat of a declined one.
 
   // A later cut-off: the cache finding is now evidence before it, and memory holds its restatement.
   const later = evaluate(['replay', '--since', '2026-03-10', '--pulls', pulls]);
   assert.equal(later.status, 0, later.stderr);
-  assert.equal(later.row('review-replay', 'off').repeats, 3);
+  assert.equal(later.row('review-replay', 'off').repeats, 5);
   assert.equal(later.row('review-replay', 'on').samples.memory_items, 3);
   assert.equal(later.row('review-replay', 'on').repeats, 1);
 });
@@ -135,12 +137,14 @@ test('the whole harness, run twice on the same inputs, prints identical rows, an
   assert.ok(first.rows.length >= 8);
   assert.equal(first.stdout, second.stdout);
   assert.equal(first.called || second.called, false);
+  assert.equal(first.stored || second.stored, false, 'the harness opened or created the memory store');
 });
 
 test('each row states its bar and the capabilities on in its arm', () => {
   const r = evaluate(['--since', '2026-03-01', '--pulls', pulls, '--log', log]);
   for (const row of r.rows) {
     assert.ok(row.bar.length > 0, row.measure);
+    assert.ok('samples' in row, row.measure);
     assert.ok(Array.isArray(row.switches), row.measure);
     if (row.arm === 'off') assert.deepEqual(row.switches, [], row.measure);
   }
@@ -154,12 +158,16 @@ test('the harness refuses inputs it cannot read, with exit 2 and the reason', ()
   writeFileSync(bad, JSON.stringify({ pulls: [{ number: 1, reviewed_at: '2026-01-01', findings: [{ id: 'a', statement: 'x', restates: 'nope' }] }] }));
   const badLog = join(base, 'bad.jsonl');
   writeFileSync(badLog, '{"event":"injected","session":"s1"}\n');
+  const badSignal = join(base, 'signal.jsonl');
+  writeFileSync(badSignal, '{"event":"feedback","session":"s1","item":"m-a","signal":"Wrong"}\n');
   for (const [args, why] of [
     [['replay', '--pulls', pulls], /--since/],
     [['replay', '--since', 'soon', '--pulls', pulls], /--since/],
     [['replay', '--since', '2026-03-01', '--pulls', join(base, 'missing.json')], /missing\.json/],
     [['replay', '--since', '2026-03-01', '--pulls', bad], /restates/],
     [['false-recall', '--log', badLog], /line 1/],
+    [['false-recall', '--log', badSignal], /line 1/],
+    [['--since', '2026-03-01', '--log', log], /--pulls/],
     [['false-recall'], /--log/],
     [['poison'], /unknown measure/],
   ]) {

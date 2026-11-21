@@ -1905,7 +1905,7 @@ var row2 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []
   bar: m.bar,
   ...fields
 });
-var notRun = (version, m, note, figures, extra = {}) => ["off", "on"].map((arm) => row2(version, m, arm, "not run", { ...extra, ...Object.fromEntries(figures.map((f) => [f, "not run"])), note }));
+var notRun = (version, m, note, figures, extra = {}) => ["off", "on"].map((arm) => row2(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures.map((f) => [f, "not run"])), note }));
 var seededRecall = (version) => notRun(
   version,
   { measure: "review-voice-seeded-recall", on: ["memory_search"], bar: "seeded recall unchanged with memory on" },
@@ -1938,7 +1938,7 @@ function parseLog(text2) {
     } catch {
       throw new Error(`line ${i + 1} is not JSON`);
     }
-    const ok = e?.event === "injected" ? isText(e.session) && isText(e.item) && isText(e.via) && isPaths(e.anchors) : e?.event === "touched" ? isText(e.session) && isPaths(e.paths) : e?.event === "feedback" ? isText(e.session) && isText(e.item) && isText(e.signal) : null;
+    const ok = e?.event === "injected" ? isText(e.session) && isText(e.item) && isText(e.via) && isPaths(e.anchors) : e?.event === "touched" ? isText(e.session) && isPaths(e.paths) : e?.event === "feedback" ? isText(e.session) && isText(e.item) && ["helped", "wrong", "stale"].includes(e.signal) : null;
     if (ok === false) throw new Error(`line ${i + 1}: a ${String(e.event)} event lacks a field it needs`);
     if (ok === true) out.push(e);
   });
@@ -2400,7 +2400,7 @@ function evalCommand(args) {
     const { since, pulls } = values;
     if (since !== void 0 && Number.isNaN(Date.parse(since))) throw new Refusal(`--since takes a date, such as 2026-03-01, not "${since}"`, 2);
     if (since !== void 0 && pulls !== void 0) rows.push(...replay(version, input(pulls, parsePulls), since));
-    else if (only !== void 0) throw new Refusal("replay needs --since <date> and --pulls <file>", 2);
+    else if (only !== void 0 || since !== void 0 || pulls !== void 0) throw new Refusal("replay needs --since <date> and --pulls <file>", 2);
     else rows.push(...notRun(version, REPLAY, "no --since and --pulls given", ["repeats"]));
     rows.push(...seededRecall(version));
   }

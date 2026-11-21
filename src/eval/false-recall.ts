@@ -32,7 +32,7 @@ export function parseLog(text: string): Event[] {
     const ok =
       e?.event === 'injected' ? isText(e.session) && isText(e.item) && isText(e.via) && isPaths(e.anchors)
       : e?.event === 'touched' ? isText(e.session) && isPaths(e.paths)
-      : e?.event === 'feedback' ? isText(e.session) && isText(e.item) && isText(e.signal)
+      : e?.event === 'feedback' ? isText(e.session) && isText(e.item) && ['helped', 'wrong', 'stale'].includes(e.signal as string)
       : null;
     if (ok === false) throw new Error(`line ${i + 1}: a ${String(e.event)} event lacks a field it needs`);
     if (ok === true) out.push(e as Event);

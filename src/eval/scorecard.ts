@@ -36,7 +36,7 @@ export const row = (version: string, m: Measure, arm: Row['arm'], status: Row['s
 
 /** The off and on rows of a measure that did not run, every figure "not run". */
 export const notRun = (version: string, m: Measure, note: string, figures: string[], extra: Record<string, unknown> = {}): Row[] =>
-  (['off', 'on'] as const).map((arm) => row(version, m, arm, 'not run', { ...extra, ...Object.fromEntries(figures.map((f) => [f, 'not run'])), note }));
+  (['off', 'on'] as const).map((arm) => row(version, m, arm, 'not run', { samples: 'not run', ...extra, ...Object.fromEntries(figures.map((f) => [f, 'not run'])), note }));
 
 /** SC-002 of #8: reported beside the replay. It needs Review Voice's reviewer, a model, which this harness never calls. */
 export const seededRecall = (version: string): Row[] =>
