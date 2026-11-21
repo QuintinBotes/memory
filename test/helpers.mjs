@@ -112,3 +112,34 @@ export function setup() {
     noRemote: repo(s.base, 'local/none'),
   };
 }
+
+/** Runs the MCP server over stdio with these JSON-RPC messages, after the handshake; returns each response by id. */
+export function rpc(cwd, data, config, messages) {
+  const all = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    ...messages,
+  ];
+  const r = run(['mcp'], { cwd, data, config, input: all.map((m) => JSON.stringify(m)).join('\n') + '\n' });
+  const responses = r.stdout.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+  return { ...r, responses, byId: (id) => responses.find((x) => x.id === id) };
+}
+
+/** Calls tools in order; each result is `{ text, isError }`. */
+export function tools(cwd, data, config, calls) {
+  const r = rpc(cwd, data, config, calls.map(([name, args], i) => ({ jsonrpc: '2.0', id: i + 1, method: 'tools/call', params: { name, arguments: args } })));
+  return calls.map((_, i) => {
+    const res = r.byId(i + 1);
+    if (res === undefined) throw new Error(`no response to call ${i + 1}: ${r.stderr}`);
+    if (res.error) return { text: res.error.message, isError: true, rpcError: res.error };
+    return { text: res.result.content.map((c) => c.text).join(''), isError: res.result.isError === true };
+  });
+}
+
+/** The lines strictly inside the one advisory fence of `text`, or a failure if the fence is not intact. */
+export function fenced(text) {
+  const lines = text.split('\n');
+  const marks = lines.map((l, i) => (/^\s{0,3}(?:~{3,}|`{3,})/.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (marks.length !== 2) throw new Error(`expected one fence, found ${marks.length} fence lines in:\n${text}`);
+  return lines.slice(marks[0] + 1, marks[1]);
+}
