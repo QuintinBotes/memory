@@ -113,7 +113,11 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       recordAudit(db, 'item_restored', { type: 'item', id }, { reason: 'an agent stale report is now counted, not obeyed' });
     }
   },
+
+  // v6 - secure deletion (#23). Its one change to the file, rewriting a store written before it, runs in openStore.
+  () => {},
 ];
+const SECURE_DELETE = 6;
 
 /**
  * Opens one store file. Readers pass `create: false` and get null for a file
@@ -126,8 +130,12 @@ export function openStore(path: string, create: boolean): DatabaseSync | null {
   }
   const db = new DatabaseSync(path);
   chmodSync(path, 0o600);
-  db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;');
+  // Deleted content is overwritten, not left in free pages (#23); the full-text index has its own option, set in v4.
+  db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000; PRAGMA secure_delete = ON;');
   const version = (): number => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  // A store written before secure deletion is rewritten once, before the version that records it, so text deleted
+  // earlier is gone too; a rewrite that fails is tried again on the next open.
+  if (version() > 0 && version() < SECURE_DELETE) db.exec('VACUUM');
   if (version() < MIGRATIONS.length) {
     // Read the version again under the write lock: another session may have
     // migrated between the first read and the lock.

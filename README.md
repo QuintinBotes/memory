@@ -78,6 +78,17 @@ memory recheck                          # re-check anchored items, stale ones in
 memory purge --repo acme/api            # preview; add --confirm to delete
 ```
 
+A purge also takes `--item <id>`, or `--source <ref>` for everything learned
+from one source, such as a pull request URL. `--source` reaches only this
+repository's tenant and the person file: evidence from the source is
+deleted, and an item left with none returns to proposed, or with
+`--with-derived` is deleted too. The preview lists any promoted check built
+from an affected item, for you to review; memory does not edit it. Every
+store is opened with secure deletion, so what a purge deletes is overwritten
+and cannot be read back from the files memory keeps; a store written by an
+earlier version is rewritten once when it is next opened. Backups, file-system
+snapshots and swap are outside memory's reach.
+
 Scopes: `repository` (this repository), `organisation` (every repository of
 this GitHub owner), `person` (you, everywhere) and `global` (facts about the
 tools). Person and global items must name no code, path, tenant or
@@ -108,9 +119,9 @@ list them in `config.json`: `"subagentTypes": ["my-plugin:implementer"]`.
 `Explore`, `Plan` and Review Voice's agents never get it, not even in a
 session started as one with `--agent`, and naming one there is refused. Each item a subagent is shown is logged in
 `logs/injections.jsonl` in the data directory, by item id with its anchored
-file paths, the session and agent ids and its estimated tokens, never its
-text. `memory purge` does not reach this log yet; delete the file to clear
-it.
+file paths, the session and agent ids, its estimated tokens and the time,
+never its text. A purge removes the lines of the items it deletes;
+`--older-than` removes lines older than its cut-off, and `--all` the file.
 
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your

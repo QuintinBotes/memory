@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Review Voice's agents never get it, and naming one is refused. Each
   item a subagent is shown is logged in `logs/injections.jsonl` by item id,
   with its anchored file paths, the session and agent ids and its estimated
-  tokens, never its text. `memory purge` does not reach the log yet.
+  tokens, never its text.
 - `memory eval`, the evaluation harness, prints scorecard rows with memory
   off and on: the review replay (restated owner-declined findings after a
   cut-off, with memory built only from the pull requests before it), the
@@ -39,6 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A purge leaves no recoverable bytes. Every store is opened with SQLite's
+  secure deletion, so deleted text is overwritten, and a store written before
+  this release is rewritten once (`VACUUM`) on its next open. `memory purge`
+  also takes `--item <id>` and `--source <ref>`: a source reaches only this
+  repository's tenant and the person file, deletes that source's evidence,
+  and returns an item left with none to proposed, or deletes it with
+  `--with-derived`. The preview lists promoted checks built from an affected
+  item. The injection log loses the lines of purged items, lines older than
+  `--older-than`'s cut-off, and its file with `--all`; each line now carries
+  its time. A purge's audit entry never names the source, and a purged
+  item's own audit entries go with it.
 - The consent plan has a version, and each kind of data it lists the
   version that added it. A consent covers only the kinds of data its plan
   listed: a newer one stays off, and `memory init` lists it and asks again,
