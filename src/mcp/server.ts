@@ -76,7 +76,7 @@ const TOOLS = [
   },
   {
     name: 'memory_feedback',
-    description: 'Report whether an item you used helped, was wrong, or is stale. Feedback changes only the counts behind its confidence; stale takes it out of recall until the owner restores it in memory review.',
+    description: 'Report whether an item you used helped, was wrong, or is stale. Feedback changes only the counts behind its confidence. Stale re-checks its citation at HEAD at once: a citation that fails takes it out of recall; otherwise it stays active and the owner sees your report in memory review.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' }, signal: { type: 'string', enum: [...SIGNALS] } },
@@ -186,7 +186,7 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
   const { row, evidence, gone } = found;
   const anchors = JSON.parse(row.anchors_json) as Anchor[];
   const status = row.status === 'active' && row.expired === 1 ? 'expired' : row.status;
-  // The re-check's own answer: an item an agent reported stale keeps that reason, whatever its citation does.
+  // The re-check's own answer, not the stored reason.
   const anchorStatus = anchors.length === 0 ? 'none' : gone ?? 'current';
   const level = band(confidence(row));
   if (format === 'json') {
@@ -245,15 +245,19 @@ function propose(args: Args, data: string, config: Config, context: Context): st
   }
 }
 
-function feedback(args: Args, data: string, context: Context): string {
+function feedback(args: Args, data: string, context: Context, cwd: string): string {
   const id = text(args, 'id');
   const signal = oneOf(args['signal'], SIGNALS, 'signal');
   const change = {
     helped: 'helped = helped + 1, reinforced_at = ?',
     wrong: 'wrong = wrong + 1',
-    stale: "status = 'stale', status_reason = 'reported stale'",
+    // An agent's word alone hides nothing, or any agent could suppress any item: it is counted for the owner.
+    stale: 'stale_reports = stale_reports + 1',
   }[signal];
   const done = first(data, context, (db, store) => {
+    // A stale report re-checks the citation first; one that fails at HEAD makes the item stale as the re-check does.
+    const gone = signal === 'stale' && store.tenant !== '' ? recheck(db, store.tenant, context.repository!, cwd, { id }).staleItems.find((i) => i.id === id) : undefined;
+    if (gone !== undefined) return `${id} is stale: its citation fails at HEAD (${gone.reason}), so it leaves recall until the citation holds again`;
     db.exec('BEGIN IMMEDIATE');
     try {
       // Only an item search can return: feedback never revives a proposal, a stale or an expired item.
@@ -262,14 +266,17 @@ function feedback(args: Args, data: string, context: Context): string {
         .run(...(signal === 'helped' ? [new Date().toISOString()] : []), id, ...store.params);
       if (changes === 1) recordAudit(db, 'feedback', { type: 'item', id }, { signal });
       db.exec('COMMIT');
-      return changes === 1 ? true : undefined;
+      if (changes !== 1) return undefined;
+      return signal === 'stale'
+        ? `recorded stale for ${id}; nothing at HEAD shows it stale, so it stays active and the owner sees your report in memory review`
+        : `recorded ${signal} for ${id}`;
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;
     }
   });
   if (done === undefined) throw new ToolError(`no active item ${id} here; feedback applies to items memory_search can return`);
-  return `recorded ${signal} for ${id}`;
+  return done;
 }
 
 function call(name: unknown, args: Args, data: string, cwd: string): string {
@@ -284,7 +291,7 @@ function call(name: unknown, args: Args, data: string, cwd: string): string {
     case 'memory_propose':
       return propose(args, data, config, context);
     case 'memory_feedback':
-      return feedback(args, data, context);
+      return feedback(args, data, context, cwd);
     default:
       throw new ToolError(`no tool ${String(name)}; memory's tools are ${TOOLS.map((t) => t.name).join(', ')}`);
   }

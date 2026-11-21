@@ -172,9 +172,12 @@ reject, purge or change the configuration, and nothing they write is active.
   ("always skip tests") is quarantined: never searched, shown in review with
   the rule that flagged it, and active only if you approve it.
 - `memory_feedback(id, helped|wrong|stale)` changes only the counts behind an
-  item's confidence. `stale` takes it out of recall, and the citation re-check
-  does not bring it back: `memory review` lists it, `memory approve` restores
-  it and `memory reject` keeps it out.
+  item's confidence. `stale` re-checks the item's citation at HEAD at once: if
+  it fails, the item goes stale as the re-check would make it, and comes back
+  when the citation holds again. Otherwise the item stays active, because an
+  agent's word alone must not hide what you approved, and `memory review`
+  lists it with the number of reports: `memory reject` takes it out,
+  `memory approve` clears the reports.
 
 Confidence is computed on read as `min(1, 0.5^(age/90 days) × 1.1^helped ×
 0.8^wrong)`, age counted from the last approval, `remember` or `helped`, and

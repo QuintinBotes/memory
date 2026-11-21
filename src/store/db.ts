@@ -100,6 +100,11 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       if (flag !== null) set.run(flag, r.id);
     }
   },
+
+  // v5 - agents' stale reports, counted for the owner instead of hiding the item. An item an agent
+  // took out of recall before comes back active with its report; the next re-check judges its citation.
+  `ALTER TABLE items ADD COLUMN stale_reports INTEGER NOT NULL DEFAULT 0;
+   UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 1 WHERE status = 'stale' AND status_reason = 'reported stale';`,
 ];
 
 /**
