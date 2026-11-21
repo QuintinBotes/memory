@@ -115,7 +115,10 @@ export function recheck(
     return files.get(path);
   };
   const toStale = db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ? AND status = 'active'");
-  const toActive = db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'");
+  // Only a stale citation is restored here: an agent's stale report holds until the owner approves the item again in memory review.
+  const toActive = db.prepare(
+    "UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale' AND status_reason IN ('path gone', 'cited text gone')",
+  );
 
   for (const row of rows) {
     const anchors = JSON.parse(row.anchors_json) as Anchor[];

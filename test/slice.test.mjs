@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setup, remember, sessionStart, tokens } from './helpers.mjs';
+import { setup, remember, sessionStart, tokens, fenced } from './helpers.mjs';
 
 function setBudget(data, budget) {
   const path = join(data, 'config.json');
@@ -80,4 +80,15 @@ test('the hook prints nothing and exits 0 when the store cannot be read', () => 
   const out = sessionStart(s.acmeApi, s.data, s.configA);
   assert.equal(out.status, 0);
   assert.equal(out.stdout, '');
+});
+
+test('the slice sits inside one advisory fence that item text cannot close', () => {
+  const s = setup();
+  const r = remember(s.acmeApi, s.data, s.configA, 'Release notes use ~~~ and ``` blocks', '--scope', 'repository');
+  assert.equal(r.status, 0, r.stderr);
+  const out = sessionStart(s.acmeApi, s.data, s.configA).stdout;
+  const inside = fenced(out);
+  assert.equal(inside.length, 1, out);
+  assert.match(inside[0], /Release notes use/);
+  assert.doesNotMatch(inside[0], /~~~|```/);
 });

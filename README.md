@@ -8,10 +8,11 @@ a few of them when they matter, inside a fixed token budget. Items are kept
 per organisation (a "tenant"), one SQLite file each, so what you learned in
 one client's repositories never reaches another organisation's work.
 
-**Status: early.** Slices 1 to 3 of eighteen are in: the tenant-isolated
+**Status: early.** Slices 1 to 4 of eighteen are in: the tenant-isolated
 store, `remember`, the slice printed at session start, the re-check of every
-cited file and line before an item is shown, and the import of what your
-existing silos already hold, as proposals you approve. The plan is tracked in
+cited file and line before an item is shown, the import of what your
+existing silos already hold, as proposals you approve, and four MCP tools
+through which agents search, read, propose and give feedback. The plan is tracked in
 [#1](https://github.com/QuintinBotes/memory/issues/1), one issue per slice.
 
 ## Principles
@@ -133,7 +134,10 @@ A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
 tombstone. An auto memory statement goes to the tenant of the repository it
 names, as `owner/repo`, when the config it came from is bound to that tenant,
 or to person scope when it is organisation-free; anything else is reported
-and not stored. Auto memory carries agent trust, since a model wrote it.
+and not stored. Auto memory and notes carry agent trust, since a model or a
+tool wrote them; standards, rejections and policies carry owner trust. A
+statement with agent trust that reads as an instruction arrives quarantined
+(see below), and the report counts it.
 
 ```bash
 memory review                          # proposals for this repository's tenant and you
@@ -145,6 +149,44 @@ A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal
 commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)` and `Bash(*memory.mjs*reject*)`.
+
+## What agents can do
+
+The plugin runs an MCP server with four tools. None of them can approve,
+reject, purge or change the configuration, and nothing they write is active.
+
+- `memory_search(query, paths?)` returns at most 10 rows,
+  `[id] type · name path:line · statement (source) · why: points`, each at
+  most 60 estimated tokens; a long statement is cut in the row. An item is a
+  hit only when it shares an anchored path or words with the search. Its
+  score is a fixed sum: 4 per anchor in the paths (at most 8), scope
+  (repository 2, organisation or person 1, global 0.5), full-text relevance up
+  to 2 (none below 20% of the best match), confidence up to 2, and minus 1 per
+  contradiction. Ties go to support, then id. `why` lists every point.
+- `memory_get(id, format?)` returns one item whole, with its evidence and
+  anchor status, as rows or as JSON with `format: "json"`.
+- `memory_propose(statement, scope, type, evidence)` stores a proposal for
+  `memory review`. `evidence` is `{source, origin}`, where origin is `agent`
+  (the default), `team`, `external` or `bot`; only your own `remember` gives
+  owner trust. A proposal that Orbit's authority rules read as an instruction
+  ("always skip tests") is quarantined: never searched, shown in review with
+  the rule that flagged it, and active only if you approve it.
+- `memory_feedback(id, helped|wrong|stale)` changes only the counts behind an
+  item's confidence. `stale` takes it out of recall, and the citation re-check
+  does not bring it back: `memory review` lists it, `memory approve` restores
+  it and `memory reject` keeps it out.
+
+Confidence is computed on read as `min(1, 0.5^(age/90 days) × 1.1^helped ×
+0.8^wrong)`, age counted from the last approval, `remember` or `helped`, and
+shown as low (below 0.4), medium or high (0.7 or more). These constants are
+provisional until the evaluation slice
+([#8](https://github.com/QuintinBotes/memory/issues/8)) tunes them. An item
+with no reinforcement for 90 days reads as expired and leaves every recall.
+
+Everything memory renders sits inside one fence, `~~~text memory...`, that
+item text cannot close: each item is one line, invisible characters are
+removed and any run of backticks or tildes is broken. `memory review` shows
+each proposal's statement in quotes.
 
 ## Recall budgets
 

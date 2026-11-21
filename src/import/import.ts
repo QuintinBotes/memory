@@ -3,7 +3,7 @@ import { join, sep } from 'node:path';
 import { SILOS, organisationTerms, type Config } from '../config.ts';
 import { matchingTenants, resolveContext } from '../context.ts';
 import { namesOrganisation, refusal } from '../gate.ts';
-import { insertItem, reduceTombstones, statementKey, type Anchor, type NewItem } from '../items.ts';
+import { insertItem, knownItem, quarantineOf, reduceTombstones, type Anchor, type NewItem } from '../items.ts';
 import { openStore } from '../store/db.ts';
 import { recordAudit } from '../store/audit.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
@@ -21,6 +21,8 @@ export interface ImportReport {
   tombstones?: number;
   alreadyKnown?: number;
   rejectedBefore?: number;
+  /** Proposals stored quarantined: text from a non-owner source that reads as an instruction. */
+  quarantined?: number;
 }
 
 type Candidate = NewItem & { status: 'proposed' | 'rejected' };
@@ -124,7 +126,8 @@ export function importSilos(config: Config, data: string, configDir: string, dry
     }
   }
 
-  // Repository silos the owner keeps: owner trust, in the tenant the checkout resolves to.
+  // Repository silos, in the tenant the checkout resolves to. Standards, rejections and policies
+  // carry owner trust; a notes file carries agent trust, because tools write it.
   const parsers = { rejections, standards: markdown, policy, notes } as const;
   for (const [checkout, silos] of Object.entries(config.imports ?? {}).sort()) {
     const context = resolveContext(checkout, config, configDir);
@@ -147,7 +150,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
         const anchors: Anchor[] = symbol === undefined ? [] : [{ path: symbolPath(symbol), symbol }];
         candidates.push({
           tenant: context.tenant, scope: 'repository', scopeKey: context.repository, type: type ?? 'convention', statement: text,
-          rationale: null, anchors, source, trust: 'owner',
+          rationale: null, anchors, source, trust: silo === 'notes' ? 'agent' : 'owner',
           ...(silo === 'rejections'
             ? { status: 'rejected', validTo: at ?? new Date().toISOString(), statusReason: 'rejected in the retro record' }
             : { status: 'proposed' }),
@@ -157,7 +160,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   }
 
   if (dryRun) return report;
-  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0 };
+  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0 };
   // Tombstones first, so a statement rejected in one silo is not proposed from another.
   candidates.sort((a, b) => Number(b.status === 'rejected') - Number(a.status === 'rejected'));
   const byFile = new Map<string, Candidate[]>();
@@ -168,18 +171,10 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   for (const [file, list] of byFile) {
     const db = openStore(file, true)!;
     try {
-      // A tombstone blocks the statement tenant-wide; any other item only where its scope covers the candidate's.
-      const known = db.prepare(
-        `SELECT id, status FROM items WHERE tenant = ? AND statement_key = ?
-           AND (status IN ('rejected', 'expired') OR tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
-         ORDER BY status = 'rejected' DESC LIMIT 1`,
-      );
       const reject = db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'");
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list) {
-        const was = known.get(c.tenant, statementKey(c.statement), c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as
-          | { id: string; status: string }
-          | undefined;
+        const was = knownItem(db, c);
         if (was !== undefined && c.status === 'rejected' && was.status === 'proposed') {
           // Rejected in the retro after it was proposed here: the owner's no stands.
           reject.run(c.validTo ?? new Date().toISOString(), c.statusReason ?? null, was.id);
@@ -188,6 +183,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
         else {
           insertItem(db, c);
           added[c.status === 'rejected' ? 'tombstones' : 'proposed']++;
+          if (quarantineOf(c) !== null) counts.quarantined++;
         }
       }
       counts.proposed += added.proposed;
