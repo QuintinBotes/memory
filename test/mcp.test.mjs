@@ -399,4 +399,21 @@ test('an item an agent took out of recall before this change comes back active, 
   const row = items(s.data, 'tenants/acme.sqlite').find((r) => r.id === id);
   assert.equal(row.stale_reports, 1);
   assert.equal(row.status_reason, null);
+  const audit = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'), { readOnly: true });
+  assert.equal(audit.prepare("SELECT count(*) AS n FROM audit_events WHERE action = 'item_restored' AND subject_id = ?").get(id).n, 1);
+  audit.close();
+});
+
+test('an item an older install hid on an agent\'s report, in an upgraded store, is listed for the owner and approve restores it', () => {
+  const s = seeded();
+  const id = idOf(s, ROUNDING);
+  tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger' }]]);
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.prepare("UPDATE items SET status = 'stale', status_reason = 'reported stale' WHERE id = ?").run(id);
+  db.close();
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.match(fenced(review.stdout).find((l) => l.includes(id)), /hidden by an agent through an older install/);
+  assert.equal(run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger rounds units' }]]);
+  assert.match(search.text, new RegExp(id));
 });

@@ -1142,8 +1142,15 @@ var MIGRATIONS = [
   },
   // v5 - agents' stale reports, counted for the owner instead of hiding the item. An item an agent
   // took out of recall before comes back active with its report; the next re-check judges its citation.
-  `ALTER TABLE items ADD COLUMN stale_reports INTEGER NOT NULL DEFAULT 0;
-   UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 1 WHERE status = 'stale' AND status_reason = 'reported stale';`
+  (db) => {
+    db.exec("ALTER TABLE items ADD COLUMN stale_reports INTEGER NOT NULL DEFAULT 0;");
+    const hidden = db.prepare("SELECT id FROM items WHERE status = 'stale' AND status_reason = 'reported stale'").all();
+    const restore = db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 1 WHERE id = ?");
+    for (const { id } of hidden) {
+      restore.run(id);
+      recordAudit(db, "item_restored", { type: "item", id }, { reason: "an agent stale report is now counted, not obeyed" });
+    }
+  }
 ];
 function openStore(path, create) {
   if (!existsSync2(path)) {
@@ -1847,7 +1854,7 @@ function shadow(p) {
 function proposals(db, tenant, id) {
   const rows = db.prepare(
     `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports FROM items
-       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0)) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
+       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`
   ).all(tenant, ...id === void 0 ? [] : [id]);
@@ -1861,7 +1868,7 @@ function renderProposals(list2) {
     const where = p.scope_key === "" ? p.scope : `${p.scope} ${p.scope_key}`;
     return [
       // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
-      safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
+      safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? ", hidden by an agent through an older install" : p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
       ...p.evidence.map((e) => safe(`  evidence: ${e.source_ref} (${e.author_role})`)),
       ...p.status !== "proposed" ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? "" : "s"}, ${g.owner} from the owner)`]
     ].join("\n");
@@ -2064,7 +2071,7 @@ function review(data, cwd) {
   }
   if (all.length === 0) return void console.error("No proposals to review here.");
   const quarantined = all.filter((p) => p.quarantine !== null).length;
-  const stale = all.filter((p) => p.stale_reports > 0).length;
+  const stale = all.filter((p) => p.status !== "proposed").length;
   process.stdout.write(
     `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.
 ` + fence(PROPOSALS_LABEL, renderProposals(all))

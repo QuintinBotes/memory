@@ -10,7 +10,10 @@ import { recordAudit } from '../store/audit.ts';
 
 export interface Proposal {
   id: string;
-  /** `proposed`, or `active` for an item agents reported stale while its citation held. */
+  /**
+   * `proposed`; `active` for an item agents reported stale while its citation held; or `stale` for one
+   * an older install sharing this data directory hid on an agent's report, which the owner may restore.
+   */
   status: string;
   stale_reports: number;
   scope: string;
@@ -42,7 +45,7 @@ export function proposals(db: DatabaseSync, tenant: string, id?: string): Propos
   const rows = db
     .prepare(
       `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports FROM items
-       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0)) AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
+       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`,
     )
@@ -59,7 +62,7 @@ export function renderProposals(list: Proposal[]): string {
       const where = p.scope_key === '' ? p.scope : `${p.scope} ${p.scope_key}`;
       return [
         // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
-        safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}${p.stale_reports === 0 ? '' : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? '' : 's'}`}: ${JSON.stringify(safe(p.statement))}`),
+        safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}${p.status === 'stale' ? ', hidden by an agent through an older install' : p.stale_reports === 0 ? '' : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? '' : 's'}`}: ${JSON.stringify(safe(p.statement))}`),
         ...p.evidence.map((e) => safe(`  evidence: ${e.source_ref} (${e.author_role})`)),
         ...(p.status !== 'proposed' ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? '' : 's'}, ${g.owner} from the owner)`]),
       ].join('\n');

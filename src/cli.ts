@@ -228,7 +228,7 @@ function review(data: string, cwd: string): void {
   }
   if (all.length === 0) return void console.error('No proposals to review here.');
   const quarantined = all.filter((p) => p.quarantine !== null).length;
-  const stale = all.filter((p) => p.stale_reports > 0).length;
+  const stale = all.filter((p) => p.status !== 'proposed').length;
   process.stdout.write(
     `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. ` +
       'Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.\n' +

@@ -260,7 +260,7 @@ function feedback(args: Args, data: string, context: Context, cwd: string): stri
     if (gone !== undefined) return `${id} is stale: its citation fails at HEAD (${gone.reason}), so it leaves recall until the citation holds again`;
     db.exec('BEGIN IMMEDIATE');
     try {
-      // Only an item search can return: feedback never revives a proposal, a stale or an expired item.
+      // Only an item search can return. A stale report's re-check above may first restore an item whose citation holds, as a search would.
       const { changes } = db
         .prepare(`UPDATE items SET ${change} WHERE id = ? AND ${store.where} AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`)
         .run(...(signal === 'helped' ? [new Date().toISOString()] : []), id, ...store.params);
