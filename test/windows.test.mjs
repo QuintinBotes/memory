@@ -172,3 +172,35 @@ test("an anchored item's log line carries its anchored paths, for false recall t
   assert.match(context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose')), /consume runs under the run lock/);
   assert.deepEqual(logged(s.data).map((l) => l.anchors), [['src/ledger.ts']]);
 });
+
+test('an owner who agreed before the injection log existed keeps every older category, and the log stays off until they agree again', () => {
+  const s = seeded();
+  // A consent saved before the plan had a version: it covers only the categories the first plan disclosed.
+  const path = join(s.data, 'config.json');
+  const cfg = JSON.parse(readFileSync(path, 'utf8'));
+  delete cfg.consent.version;
+  writeFileSync(path, JSON.stringify(cfg));
+
+  assert.match(sessionStart(s.acmeApi, s.data, s.configA).stdout, /Releases are cut/);
+  assert.match(context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose')), /Releases are cut/);
+  assert.deepEqual(logged(s.data), [], 'the log is a category the stored consent does not cover');
+  const r = remember(s.acmeApi, s.data, s.configA, 'Tests run in parallel', '--scope', 'repository');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /memory init/, 'a command says a new category waits for the owner');
+
+  // memory init shows the new category as new, and asks again; without --confirm nothing changes.
+  const plan = run(['init'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(plan.status, 0, plan.stderr);
+  assert.ok(Number.isInteger(JSON.parse(plan.stdout).version));
+  assert.match(plan.stderr, /new since you agreed[\s\S]*logs\/injections\.jsonl[\s\S]*--confirm/);
+  assert.doesNotMatch(plan.stderr, /git origin remote/, 'only the new category is shown as new');
+  context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose'));
+  assert.deepEqual(logged(s.data), []);
+
+  const agreed = run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(agreed.status, 0, agreed.stderr);
+  context(subagent(s.acmeApi, s.data, s.configA, 'general-purpose'));
+  assert.ok(logged(s.data).length > 0, 'once agreed, the log is written');
+  assert.doesNotMatch(run(['init'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stderr, /new since you agreed/);
+  assert.doesNotMatch(remember(s.acmeApi, s.data, s.configA, 'Lint before commit', '--scope', 'repository').stderr, /memory init/);
+});
