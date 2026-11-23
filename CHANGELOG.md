@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The `memory purge --source` preview and result list `returnedToProposedIds`,
+  the id of every item returned to proposed, so a follow-up `--item` can
+  reach it.
+
 - The session slice in every context window: printed again, byte-identical,
   after a compaction (`SessionStart` with the `compact` matcher), and given
   to `general-purpose` subagents at their start (`SubagentStart`), resolved
@@ -39,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A `--source` purge cuts a rejected or expired item it touched to its hash,
+  type and scope, without waiting 30 days; its text is gone from the files.
 - A purge leaves no recoverable bytes. Every store is opened with SQLite's
   secure deletion, so deleted text is overwritten, and a store written before
   this release is rewritten once (`VACUUM`) on its next open. `memory purge`

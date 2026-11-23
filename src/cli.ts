@@ -476,7 +476,7 @@ function purge(args: string[], data: string, cwd: string): void {
   if (values.all === true || days !== undefined || values.item !== undefined || values.source !== undefined) files.push(personFile(data));
 
   const report: Record<string, ReturnType<typeof previewPurge>> = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0, checks: [] as string[] };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [] as string[], checks: [] as string[] };
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -486,6 +486,7 @@ function purge(args: string[], data: string, cwd: string): void {
       total.items += r.items;
       total.evidence += r.evidence;
       total.returnedToProposed += r.returnedToProposed;
+      total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
     } finally {
       db.close();
