@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Automatic capture (#45, decision #43). A Stop and SessionEnd hook runs
+  `memory capture`, which detaches and returns at once. A filter model, Claude
+  Haiku over the Messages API by plain `fetch` (`ANTHROPIC_API_KEY`) or a
+  deterministic `fake` for tests, reads the redacted transcript and keeps
+  lessons and decisions. Each goes through the repeat and conflict matcher and
+  is saved active with agent trust and provenance; instruction-like text is
+  quarantined; nothing is captured in a repository that matches no tenant. It
+  is consent plan version 3, so it stays off until `memory init` is confirmed
+  again, and `capture: { enabled, model, maxCandidates }` turns it off. Tokens
+  per run go to `logs/capture.jsonl`. The test harness now fails any test that
+  would call `fetch`.
+  Only one capture per session runs at a time (an exclusive lock file, taken
+  over when stale); a run that finds it held exits and the next Stop reads the
+  text. The watermark moves only after a successful run, by temp file and
+  rename, merged per session. The default filter model is `claude-haiku-5-5`.
+
 ## [0.3.0] - 2026-11-23
 
 ### Added
