@@ -36,7 +36,7 @@ export interface CaptureConfig {
   maxCandidates?: number;
   apiModel?: string;
 }
-export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-4-5' };
+export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-5-5' };
 export const captureSettings = (config: Config): typeof DEFAULT_CAPTURE => ({ ...DEFAULT_CAPTURE, ...config.capture });
 
 export const SILOS = ['rejections', 'standards', 'policy', 'notes'] as const;

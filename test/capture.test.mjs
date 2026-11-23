@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setup, run, remember, assemble } from './helpers.mjs';
+import { setup, run, runAsync, remember, assemble } from './helpers.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const LESSON = 'Retries in the ledger must be idempotent because the queue redelivers';
@@ -241,4 +242,73 @@ test('an email in the transcript is never stored, and at most maxCandidates are 
   capture(s, s.acmeApi, transcript(s, lines));
   assert.equal(items(s).length, 2);
   assert.doesNotMatch(JSON.stringify(items(s)), /example\.com/);
+});
+
+const reply = (statement) => JSON.stringify([{ kind: 'lesson', statement, evidence: 'L14' }]);
+const slow = (s, extra = {}) => ({ netLog: join(s.base, 'net.jsonl'), env: { ANTHROPIC_API_KEY: 'sk-test-key', NO_NET_DELAY_MS: '1500', ...extra } });
+const asyncCapture = (s, file, session, opts) =>
+  runAsync(['capture', '--foreground'], {
+    cwd: s.acmeApi, data: s.data, config: s.configA, ...opts,
+    input: JSON.stringify({ session_id: session, hook_event_name: 'SessionEnd', transcript_path: file, cwd: s.acmeApi }),
+  });
+const calls = (s) => (existsSync(join(s.base, 'net.jsonl')) ? readFileSync(join(s.base, 'net.jsonl'), 'utf8').trim().split('\n').length : 0);
+
+test('two overlapping captures of one session make exactly one filter call over that text', async () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = transcript(s, ['one']);
+  const opts = slow(s, { NO_NET_REPLY: reply(LESSON) });
+  const [a, b] = await Promise.all([asyncCapture(s, file, 's1', opts), asyncCapture(s, file, 's1', opts)]);
+  assert.equal(calls(s), 1);
+  assert.equal([a, b].filter((r) => /already running/.test(r.stderr)).length, 1);
+  assert.equal(items(s).length, 1);
+});
+
+test('a failed capture releases its session without moving the watermark, so the text is read again', async () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = transcript(s, ['one']);
+  const failing = await asyncCapture(s, file, 's1', slow(s));
+  assert.match(failing.stderr, /capture failed/);
+  assert.equal(existsSync(join(logs(s), 'capture-state.json')), false);
+  const again = await asyncCapture(s, file, 's1', slow(s, { NO_NET_REPLY: reply(LESSON) }));
+  assert.match(again.stderr, /captured 1/);
+  assert.equal(calls(s), 2);
+});
+
+test('a lock held by a live capture stops a run at once; one left by a dead capture is taken over once stale', () => {
+  const s = setup();
+  fakeModel(s);
+  const dir = join(logs(s), 'capture-locks');
+  mkdirSync(dir, { recursive: true });
+  const lock = join(dir, `${createHash('sha256').update('s1').digest('hex').slice(0, 16)}.lock`);
+  writeFileSync(lock, '1');
+  const file = transcript(s, [`LESSON: ${LESSON}`]);
+  assert.match(capture(s, s.acmeApi, file).stderr, /already running/);
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false);
+  const old = new Date(Date.now() - 10 * 60_000);
+  utimesSync(lock, old, old);
+  assert.match(capture(s, s.acmeApi, file).stderr, /captured 1/);
+  assert.equal(existsSync(lock), false);
+});
+
+test('two sessions captured at once both keep their watermark', async () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const one = transcript(s, ['one'], 'a.jsonl');
+  const two = transcript(s, ['two'], 'b.jsonl');
+  // Staggered so the two store writes do not collide; the watermarks still overlap in time.
+  const opts = (ms) => slow(s, { NO_NET_REPLY: reply(LESSON), NO_NET_DELAY_MS: ms });
+  await Promise.all([asyncCapture(s, one, 's1', opts('1500')), asyncCapture(s, two, 's2', opts('300'))]);
+  const state = JSON.parse(readFileSync(join(logs(s), 'capture-state.json'), 'utf8'));
+  assert.deepEqual(Object.keys(state).sort(), ['s1', 's2']);
+  assert.ok(state.s1 > 0 && state.s2 > 0);
+});
+
+test('the default filter model is claude-haiku-5-5', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const netLog = join(s.base, 'net.jsonl');
+  capture(s, s.acmeApi, transcript(s, ['x']), 's1', { net: true, netLog, env: { ANTHROPIC_API_KEY: 'sk-test-key' } });
+  assert.equal(JSON.parse(JSON.parse(readFileSync(netLog, 'utf8').trim()).body).model, 'claude-haiku-5-5');
 });

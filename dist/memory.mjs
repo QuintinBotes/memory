@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { appendFileSync as appendFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync as readdirSync3, renameSync as renameSync2, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { appendFileSync as appendFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join8, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -37,7 +37,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
-var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-4-5" };
+var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5" };
 var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
 var SILOS = ["rejections", "standards", "policy", "notes"];
 var DEFAULT_SESSION_BUDGET = 300;
@@ -2163,7 +2163,8 @@ function declineSupersession(db, p) {
 }
 
 // src/capture/capture.ts
-import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { createHash as createHash4 } from "node:crypto";
+import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, renameSync as renameSync2, statSync as statSync2, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { basename, dirname as dirname3, join as join5 } from "node:path";
 
 // src/capture/model.ts
@@ -2254,6 +2255,46 @@ var readState = (data) => {
     return {};
   }
 };
+var LOCK_STALE_MS = 5 * 6e4;
+function tryLock(file) {
+  mkdirSync3(dirname3(file), { recursive: true, mode: 448 });
+  try {
+    writeFileSync2(file, String(process.pid), { flag: "wx", mode: 384 });
+    return true;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    try {
+      if (Date.now() - statSync2(file).mtimeMs <= LOCK_STALE_MS) return false;
+      unlinkSync(file);
+    } catch {
+      return false;
+    }
+    return tryLock(file);
+  }
+}
+var unlock = (file) => {
+  try {
+    unlinkSync(file);
+  } catch {
+  }
+};
+function commitWatermark(data, session, lines2) {
+  const lock = `${stateFile(data)}.lock`;
+  const until = Date.now() + 1e4;
+  while (!tryLock(lock)) {
+    if (Date.now() > until) throw new Error("the capture state is locked");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  try {
+    const state = readState(data);
+    state[session] = Math.max(state[session] ?? 0, lines2);
+    const tmp = `${stateFile(data)}.${process.pid}.tmp`;
+    writeFileSync2(tmp, JSON.stringify(state), { mode: 384 });
+    renameSync2(tmp, stateFile(data));
+  } finally {
+    unlock(lock);
+  }
+}
 async function capture(data, input2) {
   const config = loadConfig(data);
   if (!captureWanted(config)) return "capture is off";
@@ -2263,6 +2304,15 @@ async function capture(data, input2) {
   const path = input2["transcript_path"];
   const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
   if (typeof path !== "string" || !existsSync4(path)) return "nothing captured: no transcript";
+  const lock = join5(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
+  if (!tryLock(lock)) return "nothing captured: another capture of this session is already running";
+  try {
+    return await captureLocked(data, config, { tenant: context.tenant, repository: context.repository }, path, session, input2);
+  } finally {
+    unlock(lock);
+  }
+}
+async function captureLocked(data, config, context, path, session, input2) {
   const lines2 = transcriptLines(path);
   const seen = readState(data)[session] ?? 0;
   let text2 = lines2.slice(seen).filter((l) => l !== "").join("\n");
@@ -2311,10 +2361,7 @@ async function capture(data, input2) {
 `,
     { mode: 384 }
   );
-  const state = readState(data);
-  state[session] = lines2.length;
-  mkdirSync3(dirname3(stateFile(data)), { recursive: true, mode: 448 });
-  writeFileSync2(stateFile(data), JSON.stringify(state), { mode: 384 });
+  commitWatermark(data, session, lines2.length);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }
 
@@ -3074,7 +3121,7 @@ function pruneLog(data, files, before) {
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync3(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
-  renameSync2(tmp, file);
+  renameSync3(tmp, file);
 }
 function purge(args, data, cwd) {
   const { values } = parseArgs({

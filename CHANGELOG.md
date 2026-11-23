@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-11-23
-
 ### Added
 
 - Automatic capture (#45, decision #43). A Stop and SessionEnd hook runs
@@ -22,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again, and `capture: { enabled, model, maxCandidates }` turns it off. Tokens
   per run go to `logs/capture.jsonl`. The test harness now fails any test that
   would call `fetch`.
+  Only one capture per session runs at a time (an exclusive lock file, taken
+  over when stale); a run that finds it held exits and the next Stop reads the
+  text. The watermark moves only after a successful run, by temp file and
+  rename, merged per session. The default filter model is `claude-haiku-5-5`.
+
+## [0.3.0] - 2026-11-23
+
+### Added
+
 - Repeats and conflicts (#21). A statement that repeats an active item or a
   pending proposal from a new source is merged into it as evidence, with its
   own trust; only the owner's evidence raises support, and nothing merged

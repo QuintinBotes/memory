@@ -253,7 +253,7 @@ repository that matches no tenant is skipped: no model call, nothing written.
 - **Off:** `"capture": { "enabled": false }` in `config.json`.
 
 ```json
-{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-4-5" } }
+{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }
 ```
 
 `model` is `haiku` (the Messages API by plain `fetch`, no SDK) or `fake`, the

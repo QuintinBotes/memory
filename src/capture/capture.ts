@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { captureSettings, consented, loadConfig, type Config } from '../config.ts';
 import { covers } from '../consent/plan.ts';
@@ -58,10 +59,57 @@ const readState = (data: string): Record<string, number> => {
   }
 };
 
+/** A capture holds its session for a model call (60 s) and the store writes; past this a lock is taken to be dead. */
+const LOCK_STALE_MS = 5 * 60_000;
+
+/** Takes an exclusive-create lock file; false when a live holder has it. shortcut: two takers of one stale lock can race; the same-source check keeps that to one item. */
+function tryLock(file: string): boolean {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  try {
+    writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    try {
+      if (Date.now() - statSync(file).mtimeMs <= LOCK_STALE_MS) return false;
+      unlinkSync(file);
+    } catch {
+      return false;
+    }
+    return tryLock(file);
+  }
+}
+
+const unlock = (file: string): void => {
+  try {
+    unlinkSync(file);
+  } catch {
+    // Already gone: a stale lock another run took over.
+  }
+};
+
+/** Sets one session's watermark, never lower, under a short lock and by temp file and rename, so no session's mark is lost or torn. */
+function commitWatermark(data: string, session: string, lines: number): void {
+  const lock = `${stateFile(data)}.lock`;
+  const until = Date.now() + 10_000;
+  while (!tryLock(lock)) {
+    if (Date.now() > until) throw new Error('the capture state is locked');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  try {
+    const state = readState(data);
+    state[session] = Math.max(state[session] ?? 0, lines);
+    const tmp = `${stateFile(data)}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+    renameSync(tmp, stateFile(data));
+  } finally {
+    unlock(lock);
+  }
+}
+
 /**
  * Runs one capture for a Stop or SessionEnd hook's input and says what it did. Throws when the filter fails, so
  * the caller can report it; nothing is stored then and the same text is read again next time.
- * shortcut: two captures of one session at once can both read the same lines; the same-source check keeps that to one item.
  */
 export async function capture(data: string, input: Record<string, unknown>): Promise<string> {
   const config = loadConfig(data);
@@ -73,6 +121,24 @@ export async function capture(data: string, input: Record<string, unknown>): Pro
   const session = typeof input['session_id'] === 'string' && input['session_id'] !== '' ? input['session_id'] : 'unknown';
   if (typeof path !== 'string' || !existsSync(path)) return 'nothing captured: no transcript';
 
+  // The lock reserves the session's unread range for this run; a run that finds it held leaves the text to the next Stop.
+  const lock = join(data, 'logs', 'capture-locks', `${createHash('sha256').update(session).digest('hex').slice(0, 16)}.lock`);
+  if (!tryLock(lock)) return 'nothing captured: another capture of this session is already running';
+  try {
+    return await captureLocked(data, config, { tenant: context.tenant, repository: context.repository }, path, session, input);
+  } finally {
+    unlock(lock);
+  }
+}
+
+async function captureLocked(
+  data: string,
+  config: Config,
+  context: { tenant: string; repository: string },
+  path: string,
+  session: string,
+  input: Record<string, unknown>,
+): Promise<string> {
   const lines = transcriptLines(path);
   const seen = readState(data)[session] ?? 0;
   let text = lines.slice(seen).filter((l) => l !== '').join('\n');
@@ -123,9 +189,6 @@ export async function capture(data: string, input: Record<string, unknown>): Pro
     `${JSON.stringify({ at: new Date().toISOString(), session, model: settings.model === 'haiku' ? settings.apiModel : settings.model, inputTokens: usage.input, outputTokens: usage.output, candidates: candidates.length, saved, merged })}\n`,
     { mode: 0o600 },
   );
-  const state = readState(data);
-  state[session] = lines.length;
-  mkdirSync(dirname(stateFile(data)), { recursive: true, mode: 0o700 });
-  writeFileSync(stateFile(data), JSON.stringify(state), { mode: 0o600 });
+  commitWatermark(data, session, lines.length);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }
