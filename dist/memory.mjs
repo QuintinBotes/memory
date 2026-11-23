@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { appendFileSync, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync3, renameSync as renameSync2, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute3, join as join7, normalize as normalize2 } from "node:path";
+import { spawn } from "node:child_process";
+import { appendFileSync as appendFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync as readdirSync3, renameSync as renameSync2, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname5, isAbsolute as isAbsolute3, join as join8, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -36,6 +37,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
+var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-4-5" };
+var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
 var SILOS = ["rejections", "standards", "policy", "notes"];
 var DEFAULT_SESSION_BUDGET = 300;
 var SUBAGENT_BUDGET = 300;
@@ -87,6 +90,14 @@ function loadConfig(data) {
   ))) {
     throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(", ")}`);
   }
+  const capture2 = c.capture;
+  if (capture2 !== void 0) {
+    const ok = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
+    const { enabled, model, maxCandidates, apiModel } = ok ? capture2 : {};
+    if (!ok || enabled !== void 0 && typeof enabled !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) {
+      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias }');
+    }
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -94,7 +105,8 @@ function loadConfig(data) {
     ...budget !== void 0 ? { sessionBudget: budget } : {},
     ...types !== void 0 ? { subagentTypes: types } : {},
     ...imports !== void 0 ? { imports } : {},
-    ...c.consent !== void 0 ? { consent: c.consent } : {}
+    ...c.consent !== void 0 ? { consent: c.consent } : {},
+    ...capture2 !== void 0 ? { capture: capture2 } : {}
   };
 }
 function saveConfig(data, config) {
@@ -483,6 +495,9 @@ function mentionsRepoTerm(text2, repoTerms) {
 
 // src/gate.ts
 var MAX_STATEMENT = 300;
+var EMAIL = /[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/;
+var HANDLE = /(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/;
+var WEBHOOK = /hooks\.slack\.com\/(?:services|workflows|triggers)\/\S*|discord(?:app)?\.com\/api\/webhooks\/\S*/i;
 function namesOrganisation(text2, terms) {
   const visible2 = visibleText(text2);
   return terms.some(
@@ -496,11 +511,11 @@ function refusal(text2, organisationTerms2) {
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text2)) return "it carries a private key";
   const labels = Object.keys(redact(text2).counts);
   if (labels.length > 0) return `it carries a secret (${labels.sort().join(", ")})`;
-  if (/hooks\.slack\.com\/(?:services|workflows|triggers)\/|discord(?:app)?\.com\/api\/webhooks\//i.test(text2)) {
+  if (WEBHOOK.test(text2)) {
     return "it carries a webhook URL, which is a credential";
   }
-  if (/[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/.test(text2)) return "it carries an email address";
-  if (/(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/.test(text2)) {
+  if (EMAIL.test(text2)) return "it carries an email address";
+  if (HANDLE.test(text2)) {
     return "it carries a person's handle";
   }
   if (organisationTerms2 !== void 0) {
@@ -1713,7 +1728,8 @@ var DATA_CATEGORIES = [
   { id: "anchors", since: 1, text: "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves" },
   { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
   { id: "injections", since: 2, text: "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
-  { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval" }
+  { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
+  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -2146,6 +2162,162 @@ function declineSupersession(db, p) {
   }
 }
 
+// src/capture/capture.ts
+import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { basename, dirname as dirname3, join as join5 } from "node:path";
+
+// src/capture/model.ts
+var PROMPT = `You read a redacted coding-session transcript. Each line is "L<number> <role>: <text>".
+Keep only lessons (something learned that will matter again) and decisions (a choice made, with its reason).
+Skip chatter, progress reports, plans, questions and anything one-off.
+Answer with a JSON array only, no prose. Each element: {"kind":"lesson"|"decision","statement":"one sentence","evidence":"the transcript line, as L<number>, or file:line"}.
+Answer [] when nothing qualifies.`;
+function parseCandidates(text2) {
+  const start = text2.indexOf("[");
+  const end = text2.lastIndexOf("]");
+  if (start < 0 || end < start) return [];
+  let raw;
+  try {
+    raw = JSON.parse(text2.slice(start, end + 1));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap(
+    (e) => (e?.["kind"] === "lesson" || e?.["kind"] === "decision") && typeof e["statement"] === "string" && typeof e["evidence"] === "string" ? [{ kind: e["kind"], statement: e["statement"], evidence: e["evidence"] }] : []
+  );
+}
+function haiku(apiModel, env = process.env) {
+  const model = {
+    async extract(text2) {
+      const key = env["ANTHROPIC_API_KEY"];
+      if (key === void 0 || key === "") throw new Error("ANTHROPIC_API_KEY is not set; capture needs it for the haiku filter");
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: apiModel, max_tokens: 1024, system: PROMPT, messages: [{ role: "user", content: text2 }] }),
+        signal: AbortSignal.timeout(6e4)
+      });
+      if (!res.ok) throw new Error(`the Anthropic API answered ${res.status}`);
+      const body = await res.json();
+      model.usage = { input: body.usage?.input_tokens ?? 0, output: body.usage?.output_tokens ?? 0 };
+      return parseCandidates((body.content ?? []).map((c) => c.type === "text" ? c.text ?? "" : "").join(""));
+    }
+  };
+  return model;
+}
+function fake() {
+  const model = {
+    async extract(text2) {
+      model.usage = { input: Math.ceil(text2.length / 4), output: 0 };
+      return [...text2.matchAll(/^L(\d+) \w+: (LESSON|DECISION): (.+)$/gm)].map((m) => ({
+        kind: m[2] === "LESSON" ? "lesson" : "decision",
+        statement: m[3],
+        evidence: `L${m[1]}`
+      }));
+    }
+  };
+  return model;
+}
+function filterModel(settings, env = process.env) {
+  if (settings.model === "haiku") return haiku(settings.apiModel, env);
+  if (settings.model === "fake") return fake();
+  throw new Error(`capture.model "${settings.model}" is not a filter; use haiku or fake`);
+}
+
+// src/capture/capture.ts
+var MAX_TRANSCRIPT_CHARS = 48e3;
+var STOP_MIN_CHARS = 4e3;
+var captureWanted = (config) => consented(config) && covers(config, "capture") && captureSettings(config).enabled;
+function scrub(text2) {
+  return redact(text2).text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, "[REDACTED:PRIVATE_KEY]").replace(new RegExp(WEBHOOK.source, "gi"), "[REDACTED:WEBHOOK]").replace(new RegExp(EMAIL.source, "g"), "[REDACTED:EMAIL]").replace(new RegExp(HANDLE.source, "g"), "[REDACTED:HANDLE]");
+}
+function transcriptLines(file) {
+  return readFileSync4(file, "utf8").split("\n").map((line, i) => {
+    try {
+      const o = JSON.parse(line);
+      if (o.type !== "user" && o.type !== "assistant") return "";
+      const c = o.message?.content;
+      const text2 = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b?.type === "text" ? b.text ?? "" : "").join(" ") : "";
+      const flat = text2.replace(/\s+/g, " ").trim();
+      return flat === "" ? "" : `L${i + 1} ${o.type}: ${flat}`;
+    } catch {
+      return "";
+    }
+  });
+}
+var stateFile = (data) => join5(data, "logs", "capture-state.json");
+var readState = (data) => {
+  try {
+    return JSON.parse(readFileSync4(stateFile(data), "utf8"));
+  } catch {
+    return {};
+  }
+};
+async function capture(data, input2) {
+  const config = loadConfig(data);
+  if (!captureWanted(config)) return "capture is off";
+  const cwd = typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd();
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null) return `nothing captured: ${context.reason}`;
+  const path = input2["transcript_path"];
+  const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
+  if (typeof path !== "string" || !existsSync4(path)) return "nothing captured: no transcript";
+  const lines2 = transcriptLines(path);
+  const seen = readState(data)[session] ?? 0;
+  let text2 = lines2.slice(seen).filter((l) => l !== "").join("\n");
+  if (text2.length > MAX_TRANSCRIPT_CHARS) text2 = text2.slice(text2.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, "");
+  if (text2 === "" || input2["hook_event_name"] === "Stop" && text2.length < STOP_MIN_CHARS) return "nothing new to read";
+  const settings = captureSettings(config);
+  const model = filterModel(settings);
+  const candidates = (await model.extract(scrub(text2))).slice(0, settings.maxCandidates);
+  const db = openStore(tenantFile(data, context.tenant), true);
+  let saved = 0;
+  let merged = 0;
+  let queued = 0;
+  try {
+    for (const c of candidates) {
+      const statement = c.statement.replace(/\s+/g, " ").trim();
+      if (refusal(statement) !== null) continue;
+      const evidence = `Evidence: ${c.evidence.replace(/\s+/g, " ").trim()}`.slice(0, 200);
+      const item = {
+        tenant: context.tenant,
+        scope: "repository",
+        scopeKey: context.repository,
+        type: c.kind === "decision" ? "decision" : "precedent",
+        statement,
+        rationale: refusal(evidence) === null ? evidence : null,
+        anchors: [],
+        source: `capture:claude-code:${session}:${basename(path)}`,
+        trust: "agent"
+      };
+      const status = quarantineOf({ ...item, status: "proposed" }) === null ? "active" : "proposed";
+      const stored = addItem(db, { ...item, status });
+      if (stored.kind === "merged") merged++;
+      else if (stored.kind === "inserted") {
+        saved++;
+        if (status === "proposed") queued++;
+        recordAudit(db, "item_captured", { type: "item", id: stored.id }, { session, agent: "claude-code", status });
+      }
+    }
+  } finally {
+    db.close();
+  }
+  const usage2 = model.usage ?? { input: 0, output: 0 };
+  mkdirSync3(join5(data, "logs"), { recursive: true, mode: 448 });
+  appendFileSync(
+    join5(data, "logs", "capture.jsonl"),
+    `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), session, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, candidates: candidates.length, saved, merged })}
+`,
+    { mode: 384 }
+  );
+  const state = readState(data);
+  state[session] = lines2.length;
+  mkdirSync3(dirname3(stateFile(data)), { recursive: true, mode: 448 });
+  writeFileSync2(stateFile(data), JSON.stringify(state), { mode: 384 });
+  return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
+}
+
 // src/eval/scorecard.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
 var row2 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
@@ -2236,7 +2408,7 @@ function falseRecall(version, events) {
 // src/eval/replay.ts
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text2) {
   const doc = JSON.parse(text2);
@@ -2263,9 +2435,9 @@ var TENANT = "replay";
 var REPOSITORY = "replay/replay";
 function held(learned, repeats) {
   if (learned.length === 0 || repeats.length === 0) return 0;
-  const dir = mkdtempSync(join5(tmpdir(), "memory-replay-"));
+  const dir = mkdtempSync(join6(tmpdir(), "memory-replay-"));
   try {
-    const db = openStore(join5(dir, "replay.sqlite"), true);
+    const db = openStore(join6(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -2318,19 +2490,19 @@ function replay(version, pulls, since) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync4, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync2, readFileSync as readFileSync4, readdirSync as readdirSync2, rmSync as rmSync2 } from "node:fs";
+import { cpSync, existsSync as existsSync5, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync2, readFileSync as readFileSync5, readdirSync as readdirSync2, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { dirname as dirname4, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
-var ROOT = dirname3(dirname3(fileURLToPath2(import.meta.url)));
-var TASKS = join6(ROOT, "lab", "tasks");
-var BUNDLE = join6(ROOT, "dist", "memory.mjs");
+var ROOT = dirname4(dirname4(fileURLToPath2(import.meta.url)));
+var TASKS = join7(ROOT, "lab", "tasks");
+var BUNDLE = join7(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync4(join6(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync5(join7(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -2340,7 +2512,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join6(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join7(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -2359,7 +2531,7 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync4(file) ? jsonLines2(readFileSync4(file, "utf8")) : [];
+var readLines = (file) => existsSync5(file) ? jsonLines2(readFileSync5(file, "utf8")) : [];
 var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -2373,12 +2545,12 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base) {
-  const dir = mkdtempSync2(join6(base, "run-"));
-  const repo = join6(dir, "repo");
-  const data = join6(dir, "data");
-  const out = join6(dir, "out");
-  mkdirSync3(data);
-  mkdirSync3(out);
+  const dir = mkdtempSync2(join7(base, "run-"));
+  const repo = join7(dir, "repo");
+  const data = join7(dir, "data");
+  const out = join7(dir, "out");
+  mkdirSync4(data);
+  mkdirSync4(out);
   fixtureRepository(task, repo);
   if (arm === "on") seed(task, t, repo, data);
   const env = cleanEnv({
@@ -2401,8 +2573,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join6(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join6(hidden, f));
+  const hidden = join7(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join7(hidden, f));
   const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -2410,7 +2582,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base) {
     passed: grade?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join6(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join7(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
@@ -2439,12 +2611,12 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base = mkdtempSync2(join6(tmpdir2(), "memory-lab-"));
+  const base = mkdtempSync2(join7(tmpdir2(), "memory-lab-"));
   try {
-    const plugin = join6(base, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync4(join6(ROOT, part))) cpSync(join6(ROOT, part), join6(plugin, part), { recursive: true });
+    const plugin = join7(base, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync5(join7(ROOT, part))) cpSync(join7(ROOT, part), join7(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync4(join6(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync5(join7(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base))));
       const [off, on] = arms;
       return [
@@ -2519,6 +2691,9 @@ var USAGE = `usage: memory <command>
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
+  capture [--foreground]
+      the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
+      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
   purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --source reaches this repository's tenant and the
       person file: an item left without evidence returns to proposed, or with --with-derived is deleted
@@ -2807,7 +2982,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync5(0, "utf8"));
+    const v = JSON.parse(readFileSync6(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -2847,14 +3022,35 @@ function subagentStart(data) {
 `
     );
     const file = injectionLog(data);
-    mkdirSync4(dirname4(file), { recursive: true, mode: 448 });
-    appendFileSync(file, lines2.join(""), { mode: 384 });
+    mkdirSync5(dirname5(file), { recursive: true, mode: 448 });
+    appendFileSync2(file, lines2.join(""), { mode: 384 });
+  } catch {
+  }
+}
+async function captureCommand(args, data) {
+  const { values } = parseArgs({ args, options: { foreground: { type: "boolean" } } });
+  const input2 = hookInput();
+  if (values.foreground === true) {
+    try {
+      console.error(`memory capture: ${await capture(data, input2)}`);
+    } catch (error) {
+      console.error(`memory capture failed: ${error.message}`);
+    }
+    return;
+  }
+  try {
+    if (!captureWanted(loadConfig(data))) return;
+    const child = spawn(process.execPath, [process.argv[1], "capture", "--foreground"], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+    child.on("error", () => void 0);
+    child.stdin.on("error", () => void 0);
+    child.stdin.end(JSON.stringify(input2));
+    child.unref();
   } catch {
   }
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync5(file)) return;
+  if (!existsSync6(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -2865,7 +3061,7 @@ function pruneLog(data, files, before) {
       db.close();
     }
   }
-  const kept = readFileSync5(file, "utf8").split("\n").filter((line) => {
+  const kept = readFileSync6(file, "utf8").split("\n").filter((line) => {
     if (line.trim() === "") return false;
     try {
       const e = JSON.parse(line);
@@ -2876,7 +3072,7 @@ function pruneLog(data, files, before) {
     }
   });
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync2(tmp, kept.map((l) => `${l}
+  writeFileSync3(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
   renameSync2(tmp, file);
 }
@@ -2915,8 +3111,8 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join7(data, "tenants");
-  const every = existsSync5(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const tenantsDir = join8(data, "tenants");
+  const every = existsSync6(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -2954,7 +3150,7 @@ function purge(args, data, cwd) {
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync5(file, "utf8"));
+    return parse(readFileSync6(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
@@ -3010,7 +3206,7 @@ function evalCommand(args) {
   process.stdout.write(rows.map((r) => `${JSON.stringify(r)}
 `).join(""));
 }
-function main(argv) {
+async function main(argv) {
   const [command, ...rest] = argv;
   const data = dataDirectory();
   switch (command) {
@@ -3042,6 +3238,8 @@ function main(argv) {
       return sessionStart(data);
     case "subagent-start":
       return subagentStart(data);
+    case "capture":
+      return captureCommand(rest, data);
     case "purge":
       return purge(rest, data, process.cwd());
     case "eval":
@@ -3058,7 +3256,7 @@ ${USAGE}`, 2);
   }
 }
 try {
-  main(process.argv.slice(2));
+  await main(process.argv.slice(2));
 } catch (error) {
   if (error instanceof Refusal) {
     console.error(error.message);

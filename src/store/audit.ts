@@ -11,6 +11,7 @@ import type { DatabaseSync } from 'node:sqlite';
 export type AuditAction =
   | 'consent_granted'
   | 'item_remembered'
+  | 'item_captured'
   | 'item_stale'
   | 'item_restored'
   | 'anchor_moved'

@@ -1,18 +1,48 @@
 {
-  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget.",
+  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget. At Stop and SessionEnd it captures lessons and decisions from the session, in a detached process.",
   "hooks": {
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" session-start", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" session-start",
+            "timeout": 10
+          }
         ]
       }
     ],
     "SubagentStart": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" subagent-start", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" subagent-start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" capture",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" capture",
+            "timeout": 10
+          }
         ]
       }
     ]
