@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Repeats and conflicts (#21). A statement that repeats an active item or a
+  pending proposal from a new source is merged into it as evidence, with its
+  own trust; only the owner's evidence raises support, and nothing merged
+  activates a proposal. A statement that conflicts with an active item
+  becomes a supersession the owner approves in `memory review`: the older
+  item gets `valid_to` and the `superseded` status, keeps its text and
+  evidence, and is no longer recalled. `memory remember --supersedes <id>`
+  supersedes at once, and `memory undo <audit-id>` reverses a merge or a
+  supersession. Notes may carry `at`, the time of their evidence, which
+  decides which conflicting statement is newer. The import report counts
+  `merged` and `supersessions`. No item is rewritten or deleted.
+- `memory sweep`, and the same sweep at session start at most once a day per
+  store: of two active items that repeat each other, the newer is queued as a
+  supersession of the older in `memory review`. Nothing is applied. A
+  conflict between items of different scopes supersedes nothing, and recall
+  shows only the narrower scope's item when the two repeat or conflict, never
+  when their numbers differ. A store above 1,000 active items is left to
+  `memory sweep` at session start, which prints its slice first. A 200-statement labelled fixture
+  checks the repeat and conflict bars of #21 offline.
 - The `memory purge --source` preview and result list `returnedToProposedIds`,
   the id of every item returned to proposed, so a follow-up `--item` can
   reach it.

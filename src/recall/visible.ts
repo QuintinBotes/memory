@@ -1,4 +1,5 @@
 import { recheck } from '../anchors.ts';
+import { narrowerWins } from '../consolidate.ts';
 import type { Context } from '../context.ts';
 import { personItems, tenantItems, textMatches, type Visible } from '../items.ts';
 import { openStore } from '../store/db.ts';
@@ -41,5 +42,5 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
       person.close();
     }
   }
-  return out;
+  return narrowerWins(out);
 }

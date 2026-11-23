@@ -660,10 +660,10 @@ function isNegated(text2, index) {
   const before = text2.slice(0, index);
   let clauseStart = -1;
   for (const mark of [".", ";", ":", "!", "?", "\n", ","]) clauseStart = Math.max(clauseStart, before.lastIndexOf(mark));
-  const words = before.slice(clauseStart + 1).toLowerCase().split(/\s+/).map((w) => w.replace(/^[^\p{L}']+|[^\p{L}']+$/gu, "")).filter(Boolean).slice(-NEGATION_REACH);
-  for (let i = words.length - 1; i >= 0; i--) {
-    if (isNegation(words[i], words[i - 1])) return true;
-    if (!NEGATION_FILLER.has(words[i])) return false;
+  const words2 = before.slice(clauseStart + 1).toLowerCase().split(/\s+/).map((w) => w.replace(/^[^\p{L}']+|[^\p{L}']+$/gu, "")).filter(Boolean).slice(-NEGATION_REACH);
+  for (let i = words2.length - 1; i >= 0; i--) {
+    if (isNegation(words2[i], words2[i - 1])) return true;
+    if (!NEGATION_FILLER.has(words2[i])) return false;
   }
   return false;
 }
@@ -812,8 +812,8 @@ function insertItem(db, item) {
   try {
     db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
-         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?)`
+         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       item.tenant,
@@ -830,12 +830,13 @@ function insertItem(db, item) {
       JSON.stringify(item.anchors),
       now,
       item.validTo ?? null,
-      now
+      now,
+      item.supersedes ?? null
     );
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`
-    ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, trust, sha256(item.statement), now);
+    ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -1063,6 +1064,168 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
 import { isAbsolute, relative } from "node:path";
 import { createInterface } from "node:readline";
 
+// src/consolidate.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+var REPEAT = 0.8;
+var CONFLICT = 0.5;
+var words = (text2) => new Set(visibleText(text2).toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []);
+function similarity(a, b) {
+  let shared = 0;
+  for (const w of a) if (b.has(w)) shared++;
+  const union = a.size + b.size - shared;
+  return union === 0 ? 0 : shared / union;
+}
+var sameNumbers = (a, b) => {
+  const n = (s) => [...s].filter((w) => /\d/.test(w)).sort().join(" ");
+  return n(a) === n(b);
+};
+var anchorsOverlap = (a, b) => a.length === 0 || b.length === 0 || a.some((x) => b.some((y) => x.path === y.path));
+function addItem(db, c) {
+  const was = knownItem(db, c);
+  if (c.status !== "active" && was !== void 0 && (was.status === "rejected" || was.status === "expired")) return { kind: "rejected", id: was.id };
+  if (was !== void 0 && !["active", "proposed", "rejected", "expired"].includes(was.status)) return { kind: "known", id: was.id };
+  const key = statementKey(c.statement);
+  const mine = words(c.statement);
+  const rows = db.prepare(
+    `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json FROM items
+       WHERE tenant = ? AND status IN ('active', 'proposed') AND statement != ''
+         AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
+       ORDER BY created_at, id`
+  ).all(c.tenant, c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
+  let conflict;
+  for (const r of rows) {
+    if (!anchorsOverlap(c.anchors, JSON.parse(r.anchors_json))) continue;
+    if (r.statement_key === key) return mergeEvidence(db, r.id, c);
+    if (r.type !== c.type) continue;
+    const theirs = words(r.statement);
+    const sim = similarity(mine, theirs);
+    if (sim >= REPEAT && sameNumbers(mine, theirs)) return mergeEvidence(db, r.id, c);
+    if (sim >= CONFLICT && r.status === "active" && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (conflict?.sim ?? 0)) conflict = { row: r, sim };
+  }
+  if (conflict === void 0) return { kind: "inserted", id: insertItem(db, c) };
+  const older = db.prepare("SELECT min(captured_at) AS at FROM evidence WHERE item_id = ?").get(conflict.row.id).at;
+  if (c.evidenceAt !== void 0 && older !== null && c.evidenceAt < older) {
+    const id = insertItem(db, { ...c, status: "superseded", validTo: older, statusReason: `superseded by ${conflict.row.id}` });
+    return { kind: "superseded-on-arrival", id, by: conflict.row.id };
+  }
+  return { kind: "inserted", id: insertItem(db, { ...c, supersedes: conflict.row.id }), supersedes: conflict.row.id };
+}
+function mergeEvidence(db, id, c) {
+  if (db.prepare("SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?").get(id, c.source) !== void 0) return { kind: "known", id };
+  const trust = c.trust ?? "owner";
+  const delta = trust === "owner" ? 1 : 0;
+  const evidenceId = `e-${randomBytes2(5).toString("hex")}`;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(
+      `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
+       VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`
+    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? (/* @__PURE__ */ new Date()).toISOString());
+    db.prepare("UPDATE items SET support = support + ? WHERE id = ?").run(delta, id);
+    const audit = recordAudit(db, "evidence_merged", { type: "item", id }, { evidenceId, supportDelta: delta, trust });
+    const { support } = db.prepare("SELECT support FROM items WHERE id = ?").get(id);
+    db.exec("COMMIT");
+    return { kind: "merged", id, audit, support };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+function applySupersession(db, newerId, olderId, newerWas, pending) {
+  const { changes } = db.prepare("UPDATE items SET status = 'superseded', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'active'").run((/* @__PURE__ */ new Date()).toISOString(), `superseded by ${newerId}`, olderId);
+  if (changes !== 1) return null;
+  db.prepare("UPDATE items SET supersedes = ? WHERE id = ?").run(olderId, newerId);
+  return recordAudit(db, "supersession_applied", { type: "item", id: newerId }, { older: olderId, newerWas, pending });
+}
+function supersedeNow(db, c, olderId) {
+  if (db.prepare("SELECT 1 FROM items WHERE id = ? AND tenant = ? AND status = 'active'").get(olderId, c.tenant) === void 0) return null;
+  const id = insertItem(db, c);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const audit = applySupersession(db, id, olderId, "active", false);
+    db.exec("COMMIT");
+    return audit === null ? null : { id, audit };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+function undo(db, auditId) {
+  const e = db.prepare("SELECT action, subject_id, metadata_json FROM audit_events WHERE audit_id = ?").get(auditId);
+  if (e === void 0 || e.action !== "evidence_merged" && e.action !== "supersession_applied") return false;
+  const m = JSON.parse(e.metadata_json);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let what;
+    if (e.action === "evidence_merged") {
+      const gone = db.prepare("DELETE FROM evidence WHERE id = ? AND item_id = ?").run(m["evidenceId"], e.subject_id);
+      if (gone.changes === 1) db.prepare("UPDATE items SET support = support - ? WHERE id = ?").run(m["supportDelta"], e.subject_id);
+      what = gone.changes === 1 ? `removed the merged evidence from ${e.subject_id}` : false;
+    } else {
+      const older = m["older"];
+      const back = db.prepare("UPDATE items SET status = 'active', valid_to = NULL, status_reason = NULL WHERE id = ? AND status = 'superseded' AND status_reason = ?").run(older, `superseded by ${e.subject_id}`);
+      if (back.changes === 1) {
+        db.prepare("UPDATE items SET supersedes = ?, status = ? WHERE id = ?").run(m["pending"] === true ? older : null, m["newerWas"], e.subject_id);
+      }
+      what = back.changes === 1 ? `${older} is active again` : false;
+    }
+    if (what !== false) recordAudit(db, "undone", { type: "audit", id: auditId }, { action: e.action });
+    db.exec("COMMIT");
+    return what;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+var NARROWNESS = ["person", "repository", "organisation", "global"];
+function narrowerWins(items) {
+  const w = items.map((i) => words(i.statement));
+  return items.filter(
+    (a, i) => !items.some((b, j) => {
+      if (i === j || a.type !== b.type || a.scope === b.scope || NARROWNESS.indexOf(b.scope) >= NARROWNESS.indexOf(a.scope)) return false;
+      return anchorsOverlap(a.anchors, b.anchors) && sameNumbers(w[i], w[j]) && similarity(w[i], w[j]) >= CONFLICT;
+    })
+  );
+}
+var DAY = 864e5;
+function sweep(db) {
+  const rows = db.prepare(
+    `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
+         WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
+  ).all().map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) }));
+  const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
+  let proposed = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [j, newer] of rows.entries()) {
+      if (newer.supersedes !== null) continue;
+      const older = rows.slice(0, j).find((r) => {
+        if (taken.has(r.id) || r.type !== newer.type || r.scope !== newer.scope || r.scope_key !== newer.scope_key) return false;
+        if (!anchorsOverlap(r.anchors, newer.anchors)) return false;
+        return r.statement_key === newer.statement_key || similarity(newer.w, r.w) >= REPEAT && sameNumbers(newer.w, r.w);
+      });
+      if (older === void 0) continue;
+      db.prepare("UPDATE items SET supersedes = ? WHERE id = ?").run(older.id, newer.id);
+      recordAudit(db, "merge_proposed", { type: "item", id: newer.id }, { older: older.id });
+      taken.add(older.id);
+      proposed++;
+    }
+    recordAudit(db, "sweep", null, { proposed });
+    db.exec("COMMIT");
+    return proposed;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+var START_SWEEP_MAX = 1e3;
+function sweepIfDue(db, now = Date.now()) {
+  const last = db.prepare("SELECT max(created_at) AS at FROM audit_events WHERE action = 'sweep'").get().at;
+  if (last !== null && now - Date.parse(last) < DAY) return null;
+  const { n } = db.prepare("SELECT count(*) AS n FROM items WHERE status = 'active' AND statement != ''").get();
+  return n > START_SWEEP_MAX ? null : sweep(db);
+}
+
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync as existsSync2, mkdirSync as mkdirSync2 } from "node:fs";
@@ -1251,7 +1414,7 @@ function visibleItems(data, context, cwd, terms = []) {
       person.close();
     }
   }
-  return out;
+  return narrowerWins(out);
 }
 
 // src/mcp/server.ts
@@ -1439,15 +1602,15 @@ function propose(args, data, config, context) {
   const candidate = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: "proposed", trust: origin };
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true);
   try {
-    const was = knownItem(db, candidate);
-    if (was !== void 0) {
-      return was.status === "rejected" ? "not proposed: the owner rejected this statement before" : `not proposed: memory already holds this statement as ${was.id}`;
-    }
-    const id = insertItem(db, candidate);
+    const stored = addItem(db, candidate);
+    if (stored.kind === "rejected") return "not proposed: the owner rejected this statement before";
+    if (stored.kind === "known") return `not proposed: memory already holds this statement as ${stored.id}`;
+    if (stored.kind === "merged") return `merged into ${stored.id} as ${origin} evidence; it is not a new proposal, and only the owner's evidence raises support`;
+    const id = stored.id;
     const flag = quarantineOf(candidate);
     recordAudit(db, "proposal_received", { type: "item", id }, { origin, ...flag === null ? {} : { quarantined: flag } });
     const where = `${scope}${scopeKey === "" ? "" : ` ${scopeKey}`}, trust ${origin}`;
-    return flag === null ? `proposed ${id} (${where}); it waits for the owner in memory review and is not active until approved` : `proposed ${id} (${where}), quarantined: it reads as an instruction (${flag}), so it is never searched; the owner sees the flag in memory review`;
+    return flag === null ? `proposed ${id} (${where})${stored.kind === "inserted" && stored.supersedes !== void 0 ? `, as a supersession of ${stored.supersedes}` : ""}; it waits for the owner in memory review and is not active until approved` : `proposed ${id} (${where}), quarantined: it reads as an instruction (${flag}), so it is never searched; the owner sees the flag in memory review`;
   } finally {
     db.close();
   }
@@ -1739,7 +1902,8 @@ function notes(text2) {
       skippedNotes++;
       return true;
     }
-    statements.push({ line, text: body.trim(), type, ...symbol !== void 0 ? { symbol } : {} });
+    const at2 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? new Date(e["at"]).toISOString() : void 0;
+    statements.push({ line, text: body.trim(), type, ...symbol !== void 0 ? { symbol } : {}, ...at2 !== void 0 ? { at: at2 } : {} });
     return true;
   });
   return parsed(statements, { unreadable, skippedNotes });
@@ -1856,13 +2020,14 @@ function importSilos(config, data, configDir, dryRun) {
           anchors,
           source,
           trust: silo === "notes" ? "agent" : "owner",
+          ...silo === "notes" && at2 !== void 0 ? { evidenceAt: at2 } : {},
           ...silo === "rejections" ? { status: "rejected", validTo: at2 ?? (/* @__PURE__ */ new Date()).toISOString(), statusReason: "rejected in the retro record" } : { status: "proposed" }
         });
       }
     }
   }
   if (dryRun) return report;
-  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0 };
+  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0, merged: 0, supersessions: 0 };
   candidates.sort((a, b) => Number(b.status === "rejected") - Number(a.status === "rejected"));
   const byFile = /* @__PURE__ */ new Map();
   for (const c of candidates) {
@@ -1876,13 +2041,24 @@ function importSilos(config, data, configDir, dryRun) {
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list2) {
         const was = knownItem(db, c);
-        if (was !== void 0 && c.status === "rejected" && was.status === "proposed") {
-          reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
-          added.tombstones++;
-        } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
+        if (c.status === "rejected") {
+          if (was !== void 0 && was.status === "proposed") {
+            reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
+            added.tombstones++;
+          } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
+          else {
+            insertItem(db, c);
+            added.tombstones++;
+          }
+          continue;
+        }
+        const stored = addItem(db, c);
+        if (stored.kind === "rejected") counts.rejectedBefore++;
+        else if (stored.kind === "known") counts.alreadyKnown++;
+        else if (stored.kind === "merged") counts.merged++;
         else {
-          insertItem(db, c);
-          added[c.status === "rejected" ? "tombstones" : "proposed"]++;
+          if (stored.kind === "inserted") added.proposed++;
+          if (stored.kind === "inserted" && stored.supersedes !== void 0) counts.supersessions++;
           if (quarantineOf(c) !== null) counts.quarantined++;
         }
       }
@@ -1906,13 +2082,19 @@ function shadow(p) {
 }
 function proposals(db, tenant, id) {
   const rows = db.prepare(
-    `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports FROM items
-       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
+    `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports, supersedes FROM items
+       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0)
+              OR (status = 'active' AND EXISTS (SELECT 1 FROM items o WHERE o.id = items.supersedes AND o.status = 'active')) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`
   ).all(tenant, ...id === void 0 ? [] : [id]);
   const evidence = db.prepare("SELECT source_ref, author_role FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
-  for (const r of rows) r.evidence = evidence.all(r.id);
+  const older = db.prepare("SELECT id, type, statement FROM items WHERE id = ? AND status = 'active'");
+  for (const r of rows) {
+    r.evidence = evidence.all(r.id);
+    const o = r.supersedes === null ? void 0 : older.get(r.supersedes);
+    r.older = o === void 0 ? null : { ...o, evidence: evidence.all(o.id) };
+  }
   return rows;
 }
 function renderProposals(list2) {
@@ -1923,6 +2105,10 @@ function renderProposals(list2) {
       // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
       safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? ", hidden by an agent through an older install" : p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
       ...p.evidence.map((e) => safe(`  evidence: ${e.source_ref} (${e.author_role})`)),
+      ...p.older === null ? [] : [
+        safe(`  supersedes [${p.older.id}] ${p.older.type}: ${JSON.stringify(safe(p.older.statement))}`),
+        ...p.older.evidence.map((e) => safe(`    evidence: ${e.source_ref} (${e.author_role})`))
+      ],
       ...p.status !== "proposed" ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? "" : "s"}, ${g.owner} from the owner)`]
     ].join("\n");
   }).map((block) => `${block}
@@ -1934,11 +2120,25 @@ function decide(db, p, decision, change) {
   try {
     const { changes } = "scope" in change ? db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 0, scope = ?, scope_key = ?, valid_from = ? WHERE id = ? AND status = ?").run(change.scope, change.scopeKey, now, p.id, p.status) : db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = ?").run(now, change.reason, p.id, p.status);
     if (changes !== 1) throw new Error(`proposal ${p.id} changed while it was being decided`);
+    const superseded = "scope" in change && p.older !== null ? applySupersession(db, p.id, p.older.id, p.status, true) : null;
     recordAudit(db, decision === "approve" ? "proposal_approved" : "proposal_rejected", { type: "item", id: p.id }, {
       decision,
       shadow: shadow(p).decision,
       ..."scope" in change ? { scope: change.scope } : {}
     });
+    db.exec("COMMIT");
+    return superseded;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+var isPendingSupersession = (p) => p.status === "active" && p.stale_reports === 0 && p.older !== null;
+function declineSupersession(db, p) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE items SET supersedes = NULL WHERE id = ?").run(p.id);
+    recordAudit(db, "proposal_rejected", { type: "item", id: p.id }, { decision: "reject", supersession: p.older?.id });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -2291,8 +2491,9 @@ var USAGE = `usage: memory <command>
   init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--confirm]
       show the consent plan; with --confirm, save it. --bind binds this Claude Code config.
   remember [--scope repository|organisation|person|global] [--type <type>]
-           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] -- <statement>
-      remember one statement, active at once
+           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
+      remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
+      conflicts with one queues a supersession in review; --supersedes replaces that item at once
   list
       every item visible here
   import [--dry-run]
@@ -2304,6 +2505,11 @@ var USAGE = `usage: memory <command>
       make a proposal active
   reject <id> [--reason <text>]
       keep a proposal as a tombstone, so the same statement is never proposed again
+  undo <audit-id>
+      reverse one merge or supersession, by the audit id its command printed
+  sweep
+      the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
+      older in review. Applies nothing. The session start runs it at most once a day
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -2409,7 +2615,8 @@ function remember(args, data, cwd) {
       type: { type: "string", default: "preference" },
       anchor: { type: "string" },
       rationale: { type: "string" },
-      source: { type: "string" }
+      source: { type: "string" },
+      supersedes: { type: "string" }
     }
   });
   const scope = values.scope;
@@ -2440,7 +2647,7 @@ function remember(args, data, cwd) {
   const scopeKey = scope === "repository" ? context.repository : scope === "organisation" ? context.owner : "";
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true);
   try {
-    const id = insertItem(db, {
+    const candidate = {
       tenant,
       scope,
       scopeKey,
@@ -2449,9 +2656,26 @@ function remember(args, data, cwd) {
       rationale: values.rationale?.trim() ?? null,
       anchors,
       source: values.source?.trim() || "remember"
-    });
-    recordAudit(db, "item_remembered", { type: "item", id }, { scope });
-    console.log(`remembered ${id} (${scope}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""})`);
+    };
+    const where = `${scope}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""}`;
+    if (values.supersedes !== void 0) {
+      const done = supersedeNow(db, candidate, values.supersedes);
+      if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
+      recordAudit(db, "item_remembered", { type: "item", id: done.id }, { scope });
+      console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      return;
+    }
+    const stored = addItem(db, { ...candidate, status: "active" });
+    if (stored.kind === "merged") {
+      console.log(`merged into ${stored.id} as evidence (support ${stored.support}); undo with memory undo ${stored.audit}`);
+    } else if (stored.kind === "known") {
+      console.log(`${stored.id} already holds this statement from this source`);
+    } else if (stored.kind === "inserted") {
+      recordAudit(db, "item_remembered", { type: "item", id: stored.id }, { scope });
+      console.log(`remembered ${stored.id} (${where})${stored.supersedes === void 0 ? "" : `; it conflicts with ${stored.supersedes}, and the supersession waits in memory review`}`);
+    } else {
+      throw new Refusal("this statement was already placed as superseded");
+    }
   } finally {
     db.close();
   }
@@ -2510,6 +2734,11 @@ function decideCommand(args, data, cwd, decision) {
       if (decision === "reject") {
         const why = reason === "" ? null : refusal(reason, tenant === "" ? organisationTerms(config, context.repository) : void 0);
         if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
+        if (isPendingSupersession(p)) {
+          declineSupersession(db, p);
+          console.log(`declined: ${id} stays active and ${p.older.id} stays active`);
+          return;
+        }
         decide(db, p, "reject", { reason: reason === "" ? null : reason });
         console.log(`rejected ${id}; the same statement will not be proposed again`);
         return;
@@ -2519,15 +2748,31 @@ function decideCommand(args, data, cwd, decision) {
       if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(" or ")} only`);
       if (to === "organisation" && p.anchors_json !== "[]") throw new Refusal("only a repository item can have an anchor");
       const scopeKey = to === "organisation" && p.scope === "repository" ? p.scope_key.split("/")[0] : p.scope_key;
-      decide(db, p, "approve", { scope: to, scopeKey });
+      const superseded = decide(db, p, "approve", { scope: to, scopeKey });
       const flag = p.quarantine === null ? "" : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
-      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""})${flag}`);
+      const replaced = superseded === null ? "" : `; it supersedes ${p.older.id}, which stays on record; undo with memory undo ${superseded}`;
+      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""})${flag}${replaced}`);
       return;
     } finally {
       db.close();
     }
   }
   throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+}
+function undoCommand(args, data, cwd) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length !== 1) throw new Refusal("give one audit id", 2);
+  for (const { file } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      const done = undo(db, positionals[0]);
+      if (done !== false) return void console.log(`undone: ${done}`);
+    } finally {
+      db.close();
+    }
+  }
+  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge or supersession here, or it was already undone`);
 }
 function recheckCommand(args, data, cwd) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
@@ -2545,6 +2790,20 @@ function recheckCommand(args, data, cwd) {
   } finally {
     db.close();
   }
+}
+function sweepCommand(data, cwd, due) {
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  let proposed = 0;
+  for (const { file } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
+    } finally {
+      db.close();
+    }
+  }
+  if (!due) console.log(`proposed ${proposed} merge${proposed === 1 ? "" : "s"}; they wait in memory review`);
 }
 function hookInput() {
   try {
@@ -2565,6 +2824,10 @@ function sessionStart(data) {
     const config = loadConfig(data);
     if (!consented(config)) return;
     process.stdout.write(hookSlice(data, config, input2, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
+    try {
+      sweepCommand(data, typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), true);
+    } catch {
+    }
   } catch {
   }
 }
@@ -2764,9 +3027,13 @@ function main(argv) {
       return importCommand(rest, data);
     case "review":
       return review(data, process.cwd());
+    case "undo":
+      return undoCommand(rest, data, process.cwd());
     case "approve":
     case "reject":
       return decideCommand(rest, data, process.cwd(), command);
+    case "sweep":
+      return sweepCommand(data, process.cwd(), false);
     case "recheck":
       return recheckCommand(rest, data, process.cwd());
     case "mcp":

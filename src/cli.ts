@@ -22,7 +22,7 @@ import {
 } from './config.ts';
 import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
-import { SCOPES, TYPES, insertItem, sha256, type Anchor, type Scope } from './items.ts';
+import { SCOPES, TYPES, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { serve } from './mcp/server.ts';
@@ -31,7 +31,8 @@ import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
 import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
-import { decide, proposals, renderProposals, type Proposal } from './review/review.ts';
+import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
+import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
@@ -47,8 +48,9 @@ const USAGE = `usage: memory <command>
   init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--confirm]
       show the consent plan; with --confirm, save it. --bind binds this Claude Code config.
   remember [--scope repository|organisation|person|global] [--type <type>]
-           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] -- <statement>
-      remember one statement, active at once
+           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
+      remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
+      conflicts with one queues a supersession in review; --supersedes replaces that item at once
   list
       every item visible here
   import [--dry-run]
@@ -60,6 +62,11 @@ const USAGE = `usage: memory <command>
       make a proposal active
   reject <id> [--reason <text>]
       keep a proposal as a tombstone, so the same statement is never proposed again
+  undo <audit-id>
+      reverse one merge or supersession, by the audit id its command printed
+  sweep
+      the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
+      older in review. Applies nothing. The session start runs it at most once a day
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -173,6 +180,7 @@ function remember(args: string[], data: string, cwd: string): void {
       anchor: { type: 'string' },
       rationale: { type: 'string' },
       source: { type: 'string' },
+      supersedes: { type: 'string' },
     },
   });
   const scope = values.scope as Scope;
@@ -206,7 +214,7 @@ function remember(args: string[], data: string, cwd: string): void {
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true)!;
   try {
-    const id = insertItem(db, {
+    const candidate = {
       tenant,
       scope,
       scopeKey,
@@ -215,9 +223,26 @@ function remember(args: string[], data: string, cwd: string): void {
       rationale: values.rationale?.trim() ?? null,
       anchors,
       source: values.source?.trim() || 'remember',
-    });
-    recordAudit(db, 'item_remembered', { type: 'item', id }, { scope });
-    console.log(`remembered ${id} (${scope}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})`);
+    };
+    const where = `${scope}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''}`;
+    if (values.supersedes !== undefined) {
+      const done = supersedeNow(db, candidate, values.supersedes);
+      if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
+      recordAudit(db, 'item_remembered', { type: 'item', id: done.id }, { scope });
+      console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      return;
+    }
+    const stored = addItem(db, { ...candidate, status: 'active' });
+    if (stored.kind === 'merged') {
+      console.log(`merged into ${stored.id} as evidence (support ${stored.support}); undo with memory undo ${stored.audit}`);
+    } else if (stored.kind === 'known') {
+      console.log(`${stored.id} already holds this statement from this source`);
+    } else if (stored.kind === 'inserted') {
+      recordAudit(db, 'item_remembered', { type: 'item', id: stored.id }, { scope });
+      console.log(`remembered ${stored.id} (${where})${stored.supersedes === undefined ? '' : `; it conflicts with ${stored.supersedes}, and the supersession waits in memory review`}`);
+    } else {
+      throw new Refusal('this statement was already placed as superseded');
+    }
   } finally {
     db.close();
   }
@@ -286,6 +311,11 @@ function decideCommand(args: string[], data: string, cwd: string, decision: 'app
         // A reason kept in the person file follows the owner into every organisation, as the statement does.
         const why = reason === '' ? null : refusal(reason, tenant === '' ? organisationTerms(config, context.repository) : undefined);
         if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
+        if (isPendingSupersession(p)) {
+          declineSupersession(db, p);
+          console.log(`declined: ${id} stays active and ${p.older!.id} stays active`);
+          return;
+        }
         decide(db, p, 'reject', { reason: reason === '' ? null : reason });
         console.log(`rejected ${id}; the same statement will not be proposed again`);
         return;
@@ -296,15 +326,33 @@ function decideCommand(args: string[], data: string, cwd: string, decision: 'app
       if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(' or ')} only`);
       if (to === 'organisation' && p.anchors_json !== '[]') throw new Refusal('only a repository item can have an anchor');
       const scopeKey = to === 'organisation' && p.scope === 'repository' ? p.scope_key.split('/')[0]! : p.scope_key;
-      decide(db, p, 'approve', { scope: to, scopeKey });
+      const superseded = decide(db, p, 'approve', { scope: to, scopeKey });
       const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
-      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}`);
+      const replaced = superseded === null ? '' : `; it supersedes ${p.older!.id}, which stays on record; undo with memory undo ${superseded}`;
+      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}${replaced}`);
       return;
     } finally {
       db.close();
     }
   }
   throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+}
+
+/** `memory undo <audit-id>`: reverses a merge or a supersession in whichever store holds the event. */
+function undoCommand(args: string[], data: string, cwd: string): void {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length !== 1) throw new Refusal('give one audit id', 2);
+  for (const { file } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      const done = undo(db, positionals[0]!);
+      if (done !== false) return void console.log(`undone: ${done}`);
+    } finally {
+      db.close();
+    }
+  }
+  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge or supersession here, or it was already undone`);
 }
 
 /** `memory recheck [<id>]`: check this repository's anchored items, stale ones included, and restore what holds. */
@@ -324,6 +372,22 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   } finally {
     db.close();
   }
+}
+
+/** `memory sweep`, or with `due` the session start's: each store this repository may see, once a day. */
+function sweepCommand(data: string, cwd: string, due: boolean): void {
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  let proposed = 0;
+  for (const { file } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
+    } finally {
+      db.close();
+    }
+  }
+  if (!due) console.log(`proposed ${proposed} merge${proposed === 1 ? '' : 's'}; they wait in memory review`);
 }
 
 /** The JSON a hook is given on stdin, or nothing when there is none or it is not an object. */
@@ -355,6 +419,12 @@ function sessionStart(data: string): void {
     const config = loadConfig(data);
     if (!consented(config)) return;
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
+    // After the slice, in its own try: a slow or failing sweep never costs the session its slice.
+    try {
+      sweepCommand(data, typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd(), true);
+    } catch {
+      // The sweep is housekeeping; `memory sweep` shows its errors.
+    }
   } catch {
     // Silent by design; see above.
   }
@@ -576,9 +646,13 @@ function main(argv: string[]): void {
       return importCommand(rest, data);
     case 'review':
       return review(data, process.cwd());
+    case 'undo':
+      return undoCommand(rest, data, process.cwd());
     case 'approve':
     case 'reject':
       return decideCommand(rest, data, process.cwd(), command);
+    case 'sweep':
+      return sweepCommand(data, process.cwd(), false);
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
     case 'mcp':

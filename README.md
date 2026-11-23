@@ -75,6 +75,7 @@ memory remember --scope repository --type convention -- 'Releases are cut from t
 memory remember --scope person --type preference -- 'Explain changes in plain English'
 memory list
 memory recheck                          # re-check anchored items, stale ones included
+memory sweep                            # queue merges of active repeats for review
 memory purge --repo acme/api            # preview; add --confirm to delete
 ```
 
@@ -178,6 +179,45 @@ A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal
 commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)` and `Bash(*memory.mjs*reject*)`.
+
+## Repeats and conflicts
+
+Nothing is stored twice, and nothing is rewritten or deleted. When a statement
+arrives (`remember`, an import, `memory_propose`) it is compared with the
+active items and pending proposals of the same type and scope, by its
+normalised text, word overlap and cited files:
+
+- **A repeat** (same words, same file or no file) from a new source is merged
+  into the item or proposal as evidence, and the owner is not asked again.
+  Evidence keeps its own trust (`owner`, `agent`, `external`, `bot`); only
+  your own evidence raises `support`, and merged evidence never activates a
+  proposal. The same words anchored in different files are a new statement.
+  A repeat of a rejected statement is still dropped.
+- **A conflict** (mostly the same subject, different words) becomes a
+  supersession: an agent's or an import's statement is a proposal that names
+  the older item, and `memory review` shows both statements with their
+  evidence. `memory approve` makes the new one active and ends the older
+  item's validity: it gets `valid_to` and the `superseded` status, is no
+  longer recalled, and `memory_get` names its successor. Its text and evidence
+  stay. `memory reject` on a supersession of an active item keeps both.
+- `memory remember --supersedes <id> -- <statement>` replaces an item at
+  once. `remember` without it, on a conflict, is active and queues the
+  supersession.
+- An imported note's `at` (when the evidence happened) decides which of two
+  conflicting statements is newer, not when memory captured it: older
+  evidence arrives already superseded by the active item.
+- A conflict across scopes (a repository decision against an organisation
+  one, a person preference against a repository one) supersedes nothing: both
+  stay, and recall shows only the narrower scope's item, unless the two
+  differ in a number ("Step 1" and "Step 2" are different rules).
+- `memory sweep` runs the same matching over the active items of this
+  repository's tenant and the person file, and queues the newer of two
+  repeats as a supersession of the older, which `memory review` shows. It
+  applies nothing. The session start runs it after printing the slice, at most once a day
+  per store and only for a store of up to 1,000 active items; there is no
+  background process.
+- Each merge and supersession prints an audit id; `memory undo <audit-id>`
+  reverses it.
 
 ## What agents can do
 

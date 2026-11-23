@@ -12,7 +12,7 @@ export interface Statement {
   /** Notes: the item type its kind maps to, and its symbol key. */
   type?: string;
   symbol?: string;
-  /** Rejections: when it was rejected. */
+  /** Rejections: when it was rejected. Notes: when the evidence happened. */
   at?: string;
 }
 
@@ -120,7 +120,7 @@ export function rejections(text: string): Parsed {
 const NOTE_TYPES: Record<string, string> = { gotcha: 'hazard', invariant: 'convention', decision: 'decision' };
 const SYMBOL_KEY = /^([^#\s]+)#[^#\n]+#[^#\s]+$/;
 
-/** Memory's notes import format: `{kind, text, symbol?}` per line, the symbol key as `path#qualified_name#kind`. */
+/** Memory's notes import format: `{kind, text, symbol?, at?}` per line, `at` being when the evidence happened, the symbol key as `path#qualified_name#kind`. */
 export function notes(text: string): Parsed {
   const statements: Statement[] = [];
   let skippedNotes = 0;
@@ -133,7 +133,8 @@ export function notes(text: string): Parsed {
       skippedNotes++;
       return true;
     }
-    statements.push({ line, text: body.trim(), type, ...(symbol !== undefined ? { symbol } : {}) });
+    const at = typeof e['at'] === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e['at']) && !Number.isNaN(Date.parse(e['at'])) ? new Date(e['at']).toISOString() : undefined;
+    statements.push({ line, text: body.trim(), type, ...(symbol !== undefined ? { symbol } : {}), ...(at !== undefined ? { at } : {}) });
     return true;
   });
   return parsed(statements, { unreadable, skippedNotes });
