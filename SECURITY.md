@@ -28,9 +28,9 @@ no tenant, or in a Claude Code config not bound to that tenant.
   heuristic; names of one character are not matched.
 - **Advisory only.** Items are printed as cited facts. Memory never blocks a
   tool call or grants a permission.
-- **Local.** The store is never uploaded. Files are created with mode 0600 in
-  a 0700 directory.
-- **Embeddings: the one thing that leaves the machine.** With the default
+- **Local store.** Nothing else is uploaded. Files are created with mode 0600 in a 0700
+  directory.
+- **Embeddings send text out.** With the default
   provider (Voyage AI, `voyage-4`) and `VOYAGE_API_KEY` set, memory sends to
   `api.voyageai.com` over HTTPS: the statement of each active item when you
   `remember` or `approve` it or run `memory embed --backfill`, and the words of
@@ -45,3 +45,15 @@ no tenant, or in a Claude Code config not bound to that tenant.
   needs your consent to the plan's embeddings category, and the owner picks the
   provider in `config.json`. Voyage's own retention terms apply to what it
   receives.
+- **Capture sends text out.** Automatic capture (on by default once you confirm
+  the consent plan that lists it, off with `capture.enabled: false`) sends the
+  session transcript's user and assistant text, at most 48,000 characters per
+  run, to `api.anthropic.com` with your `ANTHROPIC_API_KEY`. Credentials, emails,
+  handles and webhook URLs are replaced before it leaves; pattern matching
+  cannot catch a secret that does not look like one, such as a password in
+  prose, and the transcript can hold your code. Nothing is sent from a
+  repository that matches no tenant. The tokens used per run are logged to
+  `logs/capture.jsonl`, never the text. What the model keeps is saved as active
+  items with agent trust; text that reads as an instruction is quarantined.
+  A model's output is data, never a command: it is refused if it carries a
+  credential, an email or a handle, and it is shown as a cited fact in the fence.

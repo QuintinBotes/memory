@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -36,6 +37,7 @@ import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts'
 import { importSilos } from './import/import.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
+import { capture, captureWanted } from './capture/capture.ts';
 import { openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
@@ -82,6 +84,9 @@ const USAGE = `usage: memory <command>
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
+  capture [--foreground]
+      the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
+      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
   purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --source reaches this repository's tenant and the
       person file: an item left without evidence returns to proposed, or with --with-derived is deleted
@@ -505,6 +510,30 @@ function subagentStart(data: string): void {
   }
 }
 
+/** The Stop and SessionEnd hook. Never fails the session: it hands the work to a detached process and returns. */
+async function captureCommand(args: string[], data: string): Promise<void> {
+  const { values } = parseArgs({ args, options: { foreground: { type: 'boolean' } } });
+  const input = hookInput();
+  if (values.foreground === true) {
+    try {
+      console.error(`memory capture: ${await capture(data, input)}`);
+    } catch (error) {
+      console.error(`memory capture failed: ${(error as Error).message}`);
+    }
+    return;
+  }
+  try {
+    if (!captureWanted(loadConfig(data))) return;
+    const child = spawn(process.execPath, [process.argv[1]!, 'capture', '--foreground'], { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    child.on('error', () => undefined);
+    child.stdin.on('error', () => undefined);
+    child.stdin.end(JSON.stringify(input));
+    child.unref();
+  } catch {
+    // Silent by design: a failed capture never costs the session anything.
+  }
+}
+
 /**
  * The injection log after a purge: no line of an item that no store holds any more, and with a cut-off no line older
  * than it, or of unknown age. Rewritten whole, so no purged line is left in the file.
@@ -709,6 +738,8 @@ async function main(argv: string[]): Promise<void> {
       return sessionStart(data);
     case 'subagent-start':
       return subagentStart(data);
+    case 'capture':
+      return captureCommand(rest, data);
     case 'purge':
       return purge(rest, data, process.cwd());
     case 'eval':

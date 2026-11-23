@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { setup, run, runAsync, remember, tools, fenced, commit } from './helpers.mjs';
+import { setup, run, runAsync, remember, tools, fenced, commit, assemble } from './helpers.mjs';
 
 const TARGET = 'Subscription payments belong to billing';
 // Organisation scope scores one point below the repository's, so the decision has to earn its place by meaning.
@@ -228,6 +228,73 @@ test('a provider that does not answer cannot hold recall up: it falls back in ab
   }
 });
 
+/** Backfills the seeded items' voyage vectors through the stub, then clears the request log. */
+async function voyageSeeded() {
+  const s = seeded(null);
+  const stub = await voyageStub((res, body) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ data: body.input.map((_, index) => ({ index, embedding: [1, 0.05, 0.05] })) }));
+  });
+  const env = { VOYAGE_API_KEY: 'test-key-123', VOYAGE_BASE_URL: stub.url };
+  const filled = await runAsync(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA, env });
+  assert.equal(filled.status, 0, filled.stderr);
+  stub.requests.length = 0;
+  return { s, stub, env };
+}
+const searched = async (s, env, query) => textOf((await runAsync(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, env, input: searchCall(query) })).stdout);
+
+test('a query that carries a key or an email never reaches the embedding provider, and recall falls back to words', async () => {
+  const { s, stub, env } = await voyageSeeded();
+  try {
+    for (const secret of [assemble('ghp_', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'), 'bob.smith@example.com']) {
+      const text = await searched(s, env, `customers pay ${secret}`);
+      assert.match(text, /Embeddings not used \(the query .*(secret|email)/);
+      assert.ok(rowsOf(text).length >= 3, 'lexical results are still returned');
+    }
+    assert.deepEqual(stub.requests, [], 'nothing was sent');
+    // a clean query is still embedded
+    assert.doesNotMatch(await searched(s, env, QUESTION), NOTE);
+    assert.deepEqual(stub.requests.map((q) => q.body.input), [[QUESTION]]);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('with no vectors to compare against, a search sends no request at all', async () => {
+  const s = seeded(null);
+  const stub = await voyageStub((res) => res.end('{}'));
+  try {
+    const text = await searched(s, { VOYAGE_API_KEY: 'k', VOYAGE_BASE_URL: stub.url }, QUESTION);
+    assert.match(text, /Embeddings not used \(no vectors from voyage-4/);
+    assert.deepEqual(stub.requests, []);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a consent that covers capture only keeps embeddings off until memory init is confirmed again; version 4 covers both', () => {
+  const s = seeded();
+  const path = join(s.data, 'config.json');
+  const version = (n) => writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), consent: { ...JSON.parse(readFileSync(path, 'utf8')).consent, version: n } }));
+  const embedded = () => vectors('tenants/acme.sqlite', s.data).length;
+  assert.equal(embedded(), 4);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 4);
+
+  version(3);
+  assert.match(search(s, QUESTION).text, /Embeddings not used \(your consent does not cover them yet/);
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Refunds go through billing', '--scope', 'repository').status, 0);
+  assert.equal(embedded(), 4, 'a new item is not embedded');
+  const backfill = run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.notEqual(backfill.status, 0);
+  assert.match(backfill.stderr, /consent does not cover embeddings/);
+
+  assert.equal(run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 4);
+  assert.doesNotMatch(search(s, QUESTION).text, NOTE);
+  assert.equal(run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.equal(embedded(), 5);
+});
+
 test('the test guard fails a test that would reach the network', () => {
   const dir = mkdtempSync(join(tmpdir(), 'memory-guard-'));
   const log = join(dir, 'net.log');
@@ -235,7 +302,7 @@ test('the test guard fails a test that would reach the network', () => {
   writeFileSync(script, "await fetch('https://api.voyageai.com/v1/embeddings').catch(() => {});\n");
   const guard = pathToFileURL(join(import.meta.dirname, 'no-network.mjs')).href;
   writeFileSync(log, '');
-  spawnSync(process.execPath, [`--import=${guard}`, script], { env: { ...process.env, MEMORY_TEST_NETLOG: log } });
+  spawnSync(process.execPath, [`--import=${guard}`, script], { env: { ...process.env, NO_NET_LOG: log } });
   assert.match(readFileSync(log, 'utf8'), /api\.voyageai\.com/);
   // and a bundle run that reaches out makes run() throw: a configured voyage with a key set tries the network.
   const s = seeded(null);

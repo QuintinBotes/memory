@@ -27,9 +27,21 @@ export interface Config {
   embeddings?: { provider: (typeof EMBEDDING_PROVIDERS)[number]; model?: string };
   /** `version` is the consent plan's version agreed to; absent in a consent saved before plans had one. */
   consent?: { planHash: string; grantedAt: string; version?: number };
+  /** Automatic capture at the end of a session; on unless `enabled` is false, and only once the owner has confirmed the plan that lists it. */
+  capture?: CaptureConfig;
 }
 
 export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
+/** `model` names the filter ('haiku' or 'fake'); `apiModel` is the Anthropic model alias the haiku filter calls. */
+export interface CaptureConfig {
+  enabled?: boolean;
+  model?: string;
+  maxCandidates?: number;
+  apiModel?: string;
+}
+export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-5-5' };
+export const captureSettings = (config: Config): typeof DEFAULT_CAPTURE => ({ ...DEFAULT_CAPTURE, ...config.capture });
+
 export const SILOS = ['rejections', 'standards', 'policy', 'notes'] as const;
 export type RepositorySilos = Partial<Record<(typeof SILOS)[number], string>>;
 
@@ -116,6 +128,20 @@ export function loadConfig(data: string): Config | null {
   ) {
     throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(' or ')}, "model"?: a name}`);
   }
+  const capture = c.capture;
+  if (capture !== undefined) {
+    const ok = typeof capture === 'object' && capture !== null && !Array.isArray(capture);
+    const { enabled, model, maxCandidates, apiModel } = ok ? capture : ({} as CaptureConfig);
+    if (
+      !ok ||
+      (enabled !== undefined && typeof enabled !== 'boolean') ||
+      (model !== undefined && typeof model !== 'string') ||
+      (apiModel !== undefined && typeof apiModel !== 'string') ||
+      (maxCandidates !== undefined && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20))
+    ) {
+      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias }');
+    }
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -125,6 +151,7 @@ export function loadConfig(data: string): Config | null {
     ...(imports !== undefined ? { imports } : {}),
     ...(emb !== undefined ? { embeddings: emb } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
+    ...(capture !== undefined ? { capture } : {}),
   };
 }
 

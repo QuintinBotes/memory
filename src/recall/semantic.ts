@@ -1,6 +1,8 @@
 import type { Config } from '../config.ts';
+import { scrub } from '../capture/capture.ts';
 import { covers } from '../consent/plan.ts';
 import type { Context } from '../context.ts';
+import { refusal } from '../gate.ts';
 import { READ_TIMEOUT_MS, EmbedError, providerFor } from '../embed/provider.ts';
 import { cosine, loadVectors } from '../embed/vectors.ts';
 import type { Visible } from '../items.ts';
@@ -27,25 +29,30 @@ export async function similarities(
 ): Promise<{ similarity: Map<string, number> } | { note: string }> {
   const unused = (reason: string): { note: string } => ({ note: `Embeddings not used (${reason}); items are ranked by words and paths only.` });
   if (!covers(config, 'embeddings')) return unused('your consent does not cover them yet; run memory init and confirm');
+  // The query leaves the machine as the statements do: one that carries a secret or an email is not sent at all.
+  const refused = refusal(query);
+  if (refused !== null) return unused(`the query cannot be sent: ${refused}`);
   const provider = providerFor(config, READ_TIMEOUT_MS);
-  let q: Float32Array;
-  try {
-    q = (await provider.embed([query], 'query'))[0]!;
-  } catch (error) {
-    if (error instanceof EmbedError) return unused(error.message);
-    throw error;
-  }
   const wanted = new Set(items.map((i) => i.id));
-  const similarity = new Map<string, number>();
+  const stored = new Map<string, Float32Array>();
   for (const file of storeFiles(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
-      // shortcut: brute-force cosine, move to an index above ~50k items
-      for (const [id, v] of loadVectors(db, provider.model)) if (wanted.has(id)) similarity.set(id, cosine(q, v));
+      for (const [id, v] of loadVectors(db, provider.model)) if (wanted.has(id)) stored.set(id, v);
     } finally {
       db.close();
     }
   }
-  return similarity.size === 0 ? unused(`no vectors from ${provider.model}; memory embed --backfill stores them`) : { similarity };
+  let q: Float32Array | undefined;
+  try {
+    // With nothing to compare against no request is made; embedding no text still reports a missing key.
+    q = (await provider.embed(stored.size === 0 ? [] : [scrub(query)], 'query'))[0];
+  } catch (error) {
+    if (error instanceof EmbedError) return unused(error.message);
+    throw error;
+  }
+  if (q === undefined) return unused(`no vectors from ${provider.model}; memory embed --backfill stores them`);
+  // shortcut: brute-force cosine, move to an index above ~50k items
+  return { similarity: new Map([...stored].map(([id, v]) => [id, cosine(q, v)])) };
 }

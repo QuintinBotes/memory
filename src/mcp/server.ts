@@ -351,9 +351,20 @@ export function serve(data: string, cwd: string, version: string): void {
   let queue: Promise<void> = Promise.resolve();
   createInterface({ input: process.stdin, terminal: false }).on('line', (line) => {
     if (line.trim() === '') return;
-    queue = queue.then(async () => {
-      const reply = await handle(line, data, cwd, version);
-      if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}\n`);
-    });
+    queue = queue
+      .then(async () => {
+        const reply = await handle(line, data, cwd, version);
+        if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}\n`);
+      })
+      // A throw outside handle's own catches answers this request and leaves the queue alive for the next.
+      .catch((error: unknown) => {
+        console.error(`memory: ${error instanceof Error ? error.message : 'unexpected failure'}`);
+        try {
+          const id = (JSON.parse(line) as { id?: unknown }).id;
+          if (id !== undefined && id !== null) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: 'internal error' } })}\n`);
+        } catch {
+          // an unparsable line was already answered by handle
+        }
+      });
   });
 }

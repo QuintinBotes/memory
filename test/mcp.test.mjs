@@ -417,3 +417,15 @@ test('an item an older install hid on an agent\'s report, in an upgraded store, 
   const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger rounds units' }]]);
   assert.match(search.text, new RegExp(id));
 });
+
+test('a request whose handling throws is answered with an internal error, and the next request is still served', () => {
+  const s = setup();
+  // String() of a method nested this deep overflows the stack, outside handle's try/catch around the tools.
+  const deep = `${'['.repeat(40_000)}${']'.repeat(40_000)}`;
+  const input = [`{"jsonrpc":"2.0","id":1,"method":${deep}}`, '{"jsonrpc":"2.0","id":2,"method":"ping"}'].join('\n') + '\n';
+  const r = run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input });
+  const replies = r.stdout.trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(replies.find((m) => m.id === 1)?.error?.code, -32603, r.stderr);
+  assert.deepEqual(replies.find((m) => m.id === 2)?.result, {});
+  assert.equal(r.status, 0);
+});

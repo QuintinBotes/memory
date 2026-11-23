@@ -18,9 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `memory embed --backfill` fills the rest. `memory_search` adds a `semantic`
   and a `graph` part to the fixed sum, with their points in `why`; with no
   key, no network or no vectors it ranks as before and says so once, and its
-  one network call times out after 1.5 s. Embeddings are a new consent
-  category: they stay off until `memory init` is confirmed again. The tests
+  one network call times out after 1.5 s. Embeddings are consent plan
+  version 4 (capture is 3): they stay off until `memory init` is confirmed again. The tests
   call no host but this machine, and a guard fails a test that does.
+- Automatic capture (#45, decision #43). A Stop and SessionEnd hook runs
+  `memory capture`, which detaches and returns at once. A filter model, Claude
+  Haiku over the Messages API by plain `fetch` (`ANTHROPIC_API_KEY`) or a
+  deterministic `fake` for tests, reads the redacted transcript and keeps
+  lessons and decisions. Each goes through the repeat and conflict matcher and
+  is saved active with agent trust and provenance; instruction-like text is
+  quarantined; nothing is captured in a repository that matches no tenant. It
+  is consent plan version 3, so it stays off until `memory init` is confirmed
+  again, and `capture: { enabled, model, maxCandidates }` turns it off. Tokens
+  per run go to `logs/capture.jsonl`. The test harness now fails any test that
+  would call `fetch`.
+  Only one capture per session runs at a time (an exclusive lock file, taken
+  over when stale); a run that finds it held exits and the next Stop reads the
+  text. The watermark moves only after a successful run, by temp file and
+  rename, merged per session. The default filter model is `claude-haiku-5-5`.
+
+## [0.3.0] - 2026-11-23
+
+### Added
 
 - Repeats and conflicts (#21). A statement that repeats an active item or a
   pending proposal from a new source is merged into it as evidence, with its

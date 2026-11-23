@@ -60,52 +60,55 @@ export function commit(dir, files, message = 'change') {
   git('commit', '-q', '-m', message);
 }
 
-const netLog = join(tmpdir(), `memory-netlog-${process.pid}.log`);
-writeFileSync(netLog, '');
+// Requests no test asked to see land here; the helper that started the bundle fails the test when any did.
+const netDefault = join(tmpdir(), `memory-netlog-${process.pid}.log`);
+writeFileSync(netDefault, '');
 
-/** A clean environment: only what the test names reaches the bundle, and the guard refuses any host but this machine. */
-function bundleEnv({ data, config, path, env: extra }) {
-  const env = {
-    PATH: path ?? process.env.PATH,
-    HOME: process.env.HOME,
-    ...gitEnv,
-    NODE_OPTIONS: `--import=${pathToFileURL(join(root, 'test/no-network.mjs')).href}`,
-    MEMORY_TEST_NETLOG: netLog,
-    ...extra,
-  };
+/** Fails a test that made the bundle reach a host outside this machine, unless `net` says the test is about exactly that. */
+function assertNoNetwork({ net, netLog }) {
+  if (net === true || netLog !== undefined) return;
+  const reached = readFileSync(netDefault, 'utf8');
+  writeFileSync(netDefault, '');
+  if (reached !== '') throw new Error(`a test reached the network: ${reached}`);
+}
+
+/**
+ * Runs the bundle with a clean environment: only what the test names reaches it. `fetch` is replaced in the child
+ * (test/no-network.mjs): a call to a host but this machine is refused, and fails the test unless `net` says the test
+ * is about exactly that attempt, when `netLog` names the file that receives each request's URL and body.
+ */
+function childEnv({ data, config, path, env: extra, netLog }) {
+  const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv, ...extra };
+  env.NODE_OPTIONS = `--import ${pathToFileURL(join(root, 'test', 'no-network.mjs')).href}`;
+  env.NO_NET_LOG = netLog ?? netDefault;
   if (data) env.MEMORY_DATA_DIR = data;
   if (config) env.CLAUDE_CONFIG_DIR = config;
   return env;
 }
 
-/** Fails a test that made the bundle reach a host outside this machine. */
-function assertNoNetwork() {
-  const reached = readFileSync(netLog, 'utf8');
-  writeFileSync(netLog, '');
-  if (reached !== '') throw new Error(`a test reached the network: ${reached}`);
-}
-
-/** Runs the bundle with a clean environment: only what the test names reaches it. */
-export function run(args, { cwd, data, config, input, path, env } = {}) {
-  const r = spawnSync(process.execPath, [bundle, ...args], { cwd, env: bundleEnv({ data, config, path, env }), input, encoding: 'utf8' });
-  assertNoNetwork();
+export function run(args, { cwd, data, config, input, path, env: extra, net, netLog } = {}) {
+  const env = childEnv({ data, config, path, env: extra, netLog });
+  const r = spawnSync(process.execPath, [bundle, ...args], { cwd, env, input, encoding: 'utf8' });
+  assertNoNetwork({ net, netLog });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
-/** As run, without blocking this process, so a server in the test can answer the bundle. */
-export function runAsync(args, { cwd, data, config, input, path, env } = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [bundle, ...args], { cwd, env: bundleEnv({ data, config, path, env }) });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d));
-    child.stderr.on('data', (d) => (stderr += d));
-    child.on('close', (status) => {
-      assertNoNetwork();
-      resolve({ status, stdout, stderr });
-    });
-    child.stdin.end(input ?? '');
-  });
+/** Like run, but does not wait: resolves with the same shape when the child exits, so runs can overlap. */
+export function runAsync(args, { cwd, data, config, input, path, env: extra, net, netLog } = {}) {
+  const child = spawn(process.execPath, [bundle, ...args], { cwd, env: childEnv({ data, config, path, env: extra, netLog }) });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => (stdout += d));
+  child.stderr.on('data', (d) => (stderr += d));
+  child.stdin.end(input ?? '');
+  return new Promise((ok, fail) => child.on('close', (status) => {
+    try {
+      assertNoNetwork({ net, netLog });
+    } catch (error) {
+      return fail(error);
+    }
+    ok({ status, stdout, stderr });
+  }));
 }
 
 /** The SessionStart hook as Claude Code calls it. */

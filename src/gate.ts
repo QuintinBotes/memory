@@ -2,6 +2,9 @@ import { redact } from './redact/redact.ts';
 import { codeFreeViolations, visibleText } from './codefree.ts';
 
 export const MAX_STATEMENT = 300;
+export const EMAIL = /[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/;
+export const HANDLE = /(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/;
+export const WEBHOOK = /hooks\.slack\.com\/(?:services|workflows|triggers)\/\S*|discord(?:app)?\.com\/api\/webhooks\/\S*/i;
 
 /** Whether `text` names one of `terms` of two or more characters, as a whole word. */
 export function namesOrganisation(text: string, terms: readonly string[]): boolean {
@@ -30,14 +33,14 @@ export function refusal(text: string, organisationTerms?: readonly string[]): st
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text)) return 'it carries a private key';
   const labels = Object.keys(redact(text).counts);
   if (labels.length > 0) return `it carries a secret (${labels.sort().join(', ')})`;
-  if (/hooks\.slack\.com\/(?:services|workflows|triggers)\/|discord(?:app)?\.com\/api\/webhooks\//i.test(text)) {
+  if (WEBHOOK.test(text)) {
     return 'it carries a webhook URL, which is a credential';
   }
-  if (/[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/.test(text)) return 'it carries an email address';
+  if (EMAIL.test(text)) return 'it carries an email address';
   // An @handle in any case, in code spans too, but not a package scope
   // (@types/node), a decorator call or a dotted name. An annotation such as
   // @Override is refused as well: refusing is the safe direction.
-  if (/(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/.test(text)) {
+  if (HANDLE.test(text)) {
     return "it carries a person's handle";
   }
 

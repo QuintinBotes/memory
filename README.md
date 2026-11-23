@@ -31,26 +31,25 @@ through which agents search, read, propose and give feedback. The plan is tracke
 - **Advisory only.** Items are shown as cited facts inside a fence their text
   cannot close. Memory never blocks a tool call, grants a permission or skips
   a check.
-- **You approve.** Only "remember this" is active at once. Everything memory
-  proposes on its own waits for your yes in a terminal. Changes that lower an
+- **You approve.** "Remember this" is active at once, and so is what automatic
+  capture keeps from a session (see below); everything else memory proposes
+  on its own, and any captured text that reads as an instruction, waits for
+  your yes in a terminal. Changes that lower an
   item's influence (stale, contradicted, expired) happen on their own.
 - **Small and cache-friendly.** Every recall has a budget, whole items are
   dropped rather than cut, and the session slice is byte-identical for the
   same store, so it never breaks the prompt cache.
-- **Active capture, measured.** Automatic capture is on by default
-  ([#43](https://github.com/QuintinBotes/memory/issues/43), which supersedes
-  #28): at Stop and SessionEnd a small model keeps only lessons and decisions
-  and saves the relevant ones as active items with agent trust and provenance
-  (the capture hook is its own follow-up issue). Other capabilities still ship off until their on/off measurement shows they
-  are no worse.
+- **Off until measured.** Each capability ships off and is turned on only when
+  its on/off measurement shows it is no worse.
 - **Hybrid recall.** Recall is lexical, vector and graph, behind a provider
   interface; the default provider is voyage-4. Vectors are kept in the
   tenant's own file. Without a key or a network, recall falls back to words
   and paths and says so.
-- **Local where it counts.** The store never leaves this machine. The one
-  thing that does is the text sent to the embedding provider, listed in
-  [SECURITY.md](SECURITY.md). No runtime dependencies: the Voyage call is a
-  plain `fetch`. Node 22.13 or newer, where `node:sqlite` needs no flag.
+- **Local where it counts.** The store never leaves this machine. What does
+  leave is listed in [SECURITY.md](SECURITY.md): the text sent to the embedding
+  provider, and, at the end of a session, the redacted transcript sent to the
+  capture model. No runtime dependencies: both calls are a plain `fetch`. Node
+  22.13 or newer, where `node:sqlite` needs no flag.
 
 ## Using it
 
@@ -229,6 +228,43 @@ normalised text, word overlap and cited files:
   background process.
 - Each merge and supersession prints an audit id; `memory undo <audit-id>`
   reverses it.
+
+## Automatic capture
+
+At Stop and SessionEnd a hook runs `memory capture`. It hands the work to a
+detached process and returns at once, and it never fails the session. The
+process reads the session transcript (user and assistant text, newest 48,000
+characters, and at a Stop only once 4,000 new characters have come in), takes
+credentials, emails, handles and webhook URLs out of it, and asks a small model
+for lessons and decisions only: one sentence each, with the transcript line
+that shows it. At most `maxCandidates` (5) are kept per run.
+
+Each kept statement goes through the repeat and conflict matcher above: a
+repeat adds evidence (agent evidence never raises support), a conflict becomes
+a supersession proposal, and a new one is saved active with agent trust and
+the session, agent `claude-code` and transcript name as its source. Text that
+reads as an instruction is quarantined as any non-owner proposal is. A
+repository that matches no tenant is skipped: no model call, nothing written.
+
+- **What leaves the machine:** the redacted transcript text, to
+  `api.anthropic.com`, and nothing else. Redaction is pattern based, so a
+  secret that does not look like one (a password in prose) is not caught.
+- **The key:** `ANTHROPIC_API_KEY` in the environment of Claude Code. Without
+  it capture reports the missing key and does nothing.
+- **Cost:** one call per SessionEnd and per Stop with enough new text; each
+  run's tokens go to `logs/capture.jsonl` in the data directory (never the
+  transcript). Read it to see what capture costs you.
+- **Consent:** capture is a data category of the consent plan. `memory init`
+  proposes it on, but a consent given before it stays off for it until you run
+  `memory init` and confirm.
+- **Off:** `"capture": { "enabled": false }` in `config.json`.
+
+```json
+{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }
+```
+
+`model` is `haiku` (the Messages API by plain `fetch`, no SDK) or `fake`, the
+deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
 
 ## What agents can do
 
