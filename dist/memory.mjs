@@ -1599,17 +1599,19 @@ function previewPurge(db, scope) {
   const e = evidenceClause(scope);
   let items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${i.where}`, ...i.params);
   let evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${i.where})`, ...i.params);
-  let returnedToProposed = 0;
+  let returnedToProposedIds = [];
   let reached = i;
   if (e !== null) {
     const o = orphaned(e);
     evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE ${e.where}`, ...e.params);
     if (scope.withDerived === true) items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${o.where}`, ...o.params);
-    else returnedToProposed = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${SHOWN} AND ${o.where}`, ...o.params);
+    else {
+      returnedToProposedIds = db.prepare(`SELECT id FROM items WHERE ${SHOWN} AND ${o.where} ORDER BY id`).all(...o.params).map((r) => r.id);
+    }
     reached = touched(e);
   }
   const checks = db.prepare(`SELECT DISTINCT promoted_to AS c FROM items WHERE promoted_to IS NOT NULL AND ${reached.where} ORDER BY c`).all(...reached.params).map((r) => r.c);
-  return { items, evidence, returnedToProposed, checks };
+  return { items, evidence, returnedToProposed: returnedToProposedIds.length, returnedToProposedIds, checks };
 }
 function executePurge(db, scope) {
   const preview = previewPurge(db, scope);
@@ -1626,11 +1628,18 @@ function executePurge(db, scope) {
       ).run(...e.params, ...t.params);
       if (scope.withDerived === true) db.prepare(`DELETE FROM items WHERE ${o.where}`).run(...o.params);
       else db.prepare(`UPDATE items SET status = 'proposed' WHERE ${SHOWN} AND ${o.where}`).run(...o.params);
+      if (scope.source !== void 0) {
+        db.prepare(
+          `UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE status IN ('rejected', 'expired') AND statement != '' AND ${t.where}`
+        ).run(...t.params);
+        db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE status IN ('rejected', 'expired') AND ${t.where})`).run(...t.params);
+      }
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     const audited = scope.source === void 0 ? scope : { ...scope, source: "withheld" };
-    recordAudit(db, "purge", null, { scope: audited, removed: preview });
+    const { returnedToProposedIds: _ids, ...counts } = preview;
+    recordAudit(db, "purge", null, { scope: audited, removed: counts });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -2655,7 +2664,7 @@ function purge(args, data, cwd) {
   const files = tenants.map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0) files.push(personFile(data));
   const report = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0, checks: [] };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [] };
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -2665,6 +2674,7 @@ function purge(args, data, cwd) {
       total.items += r.items;
       total.evidence += r.evidence;
       total.returnedToProposed += r.returnedToProposed;
+      total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
     } finally {
       db.close();

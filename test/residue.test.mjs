@@ -215,3 +215,32 @@ test('purging one item from a 10,000-item tenant takes under 2 seconds', () => {
   assert.equal(purge(s, s.acmeApi, '--item', id, '--confirm').status, 0);
   assert.ok(Date.now() - start < 2000, `${Date.now() - start} ms`);
 });
+
+test('purge --source previews the id of every item it would return to proposed', () => {
+  const s = sourced();
+  const preview = JSON.parse(purge(s, s.acmeApi, '--source', s.pr12).stdout);
+  assert.deepEqual(preview.returnedToProposedIds, [s.a]);
+  const withDerived = JSON.parse(purge(s, s.acmeApi, '--source', s.pr12, '--with-derived').stdout);
+  assert.deepEqual(withDerived.returnedToProposedIds, []);
+  // Confirming reports the same ids, and `--item` reaches the returned item afterwards.
+  const done = JSON.parse(purge(s, s.acmeApi, '--source', s.pr12, '--confirm').stdout);
+  assert.deepEqual(done.returnedToProposedIds, [s.a]);
+  assert.equal(purge(s, s.acmeApi, '--item', s.a, '--confirm').status, 0);
+  assert.equal(itemRow(s, s.a), undefined);
+});
+
+test('purge --source cuts a tombstone it touched to its hash, type and scope, and the text is not on disk', () => {
+  const s = sourced();
+  const text = `Tombstone ${randomBytes(6).toString('hex')} text about backoff`;
+  const t = idOf(remember(s.acmeApi, s.data, s.configA, text, '--source', s.pr12));
+  withDb(acme(s), (db) => db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = 'too broad' WHERE id = ?").run(new Date().toISOString(), t));
+  assert.ok(storeBytes(s.data).includes(text));
+  assert.equal(purge(s, s.acmeApi, '--source', s.pr12, '--confirm').status, 0);
+  const row = withDb(acme(s), (db) => db.prepare('SELECT status, statement, rationale, status_reason, anchors_json, statement_key, type, scope, scope_key FROM items WHERE id = ?').get(t));
+  assert.equal(row.status, 'rejected');
+  assert.deepEqual([row.statement, row.rationale, row.status_reason, row.anchors_json], ['', null, null, '[]']);
+  assert.match(row.statement_key, /^[0-9a-f]{64}$/);
+  assert.deepEqual([row.type, row.scope, row.scope_key], ['preference', 'repository', 'acme/api']);
+  assert.equal(storeBytes(s.data).includes(text), false);
+  withDb(acme(s), (db) => assert.equal(db.prepare('SELECT COUNT(*) AS n FROM evidence WHERE item_id = ?').get(t).n, 0));
+});
