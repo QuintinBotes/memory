@@ -418,8 +418,13 @@ function sessionStart(data: string): void {
     if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
-    sweepCommand(data, typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd(), true);
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
+    // After the slice, in its own try: a slow or failing sweep never costs the session its slice.
+    try {
+      sweepCommand(data, typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd(), true);
+    } catch {
+      // The sweep is housekeeping; `memory sweep` shows its errors.
+    }
   } catch {
     // Silent by design; see above.
   }

@@ -1183,8 +1183,7 @@ function narrowerWins(items) {
   return items.filter(
     (a, i) => !items.some((b, j) => {
       if (i === j || a.type !== b.type || a.scope === b.scope || NARROWNESS.indexOf(b.scope) >= NARROWNESS.indexOf(a.scope)) return false;
-      const sim = similarity(w[i], w[j]);
-      return anchorsOverlap(a.anchors, b.anchors) && sim >= CONFLICT && sim < REPEAT;
+      return anchorsOverlap(a.anchors, b.anchors) && sameNumbers(w[i], w[j]) && similarity(w[i], w[j]) >= CONFLICT;
     })
   );
 }
@@ -1192,20 +1191,18 @@ var DAY = 864e5;
 function sweep(db) {
   const rows = db.prepare(
     `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
-       WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
-  ).all();
+         WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
+  ).all().map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) }));
   const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
   let proposed = 0;
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const [j, newer] of rows.entries()) {
       if (newer.supersedes !== null) continue;
-      const mine = words(newer.statement);
       const older = rows.slice(0, j).find((r) => {
         if (taken.has(r.id) || r.type !== newer.type || r.scope !== newer.scope || r.scope_key !== newer.scope_key) return false;
-        if (!anchorsOverlap(JSON.parse(r.anchors_json), JSON.parse(newer.anchors_json))) return false;
-        const theirs = words(r.statement);
-        return r.statement_key === newer.statement_key || similarity(mine, theirs) >= REPEAT && sameNumbers(mine, theirs);
+        if (!anchorsOverlap(r.anchors, newer.anchors)) return false;
+        return r.statement_key === newer.statement_key || similarity(newer.w, r.w) >= REPEAT && sameNumbers(newer.w, r.w);
       });
       if (older === void 0) continue;
       db.prepare("UPDATE items SET supersedes = ? WHERE id = ?").run(older.id, newer.id);
@@ -1221,9 +1218,12 @@ function sweep(db) {
     throw error;
   }
 }
+var START_SWEEP_MAX = 1e3;
 function sweepIfDue(db, now = Date.now()) {
   const last = db.prepare("SELECT max(created_at) AS at FROM audit_events WHERE action = 'sweep'").get().at;
-  return last !== null && now - Date.parse(last) < DAY ? null : sweep(db);
+  if (last !== null && now - Date.parse(last) < DAY) return null;
+  const { n } = db.prepare("SELECT count(*) AS n FROM items WHERE status = 'active' AND statement != ''").get();
+  return n > START_SWEEP_MAX ? null : sweep(db);
 }
 
 // src/store/db.ts
@@ -2823,8 +2823,11 @@ function sessionStart(data) {
     if (typeof input2["agent_type"] === "string" && neverSubagent(input2["agent_type"])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
-    sweepCommand(data, typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), true);
     process.stdout.write(hookSlice(data, config, input2, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
+    try {
+      sweepCommand(data, typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), true);
+    } catch {
+    }
   } catch {
   }
 }

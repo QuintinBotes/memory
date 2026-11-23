@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store: of two active items that repeat each other, the newer is queued as a
   supersession of the older in `memory review`. Nothing is applied. A
   conflict between items of different scopes supersedes nothing, and recall
-  shows only the narrower scope's item. A 200-statement labelled fixture
+  shows only the narrower scope's item when the two repeat or conflict, never
+  when their numbers differ. A store above 1,000 active items is left to
+  `memory sweep` at session start, which prints its slice first. A 200-statement labelled fixture
   checks the repeat and conflict bars of #21 offline.
 - The `memory purge --source` preview and result list `returnedToProposedIds`,
   the id of every item returned to proposed, so a follow-up `--item` can

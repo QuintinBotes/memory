@@ -320,3 +320,63 @@ test('SC-001 and SC-002 consolidation on the 200-statement labelled fixture meet
   // Nothing is rewritten or lost.
   assert.equal(rows(s, 'SELECT 1 FROM items WHERE statement IN (' + fixture.store.map(() => '?').join(',') + ')', ...fixture.store).length, 100);
 });
+
+// Review fixes on #50: narrower-wins hides the broader item only for a repeat or a conflict by the consolidation matcher.
+const org = (s, text) => idOf(run(['remember', '--scope', 'organisation', '--type', 'decision', '--', text], { cwd: s.acmeApi, data: s.data, config: s.configA }));
+const crossScope = (s, broader, narrower) => {
+  const o = org(s, broader);
+  // Added with an unrelated text, as arrival would merge a cross-scope repeat; the pair a store holds from before is made by hand.
+  const r = idOf(rem(s, 'Placeholder statement about something else entirely', '--type', 'decision'));
+  const db = open(s);
+  db.prepare('UPDATE items SET statement = ? WHERE id = ?').run(narrower, r);
+  db.close();
+  const shown = list(s);
+  return { o, r, shown: (id) => new RegExp(`\\[${id}\\]`).test(shown) };
+};
+
+test('FR-006 narrower wins: numbered rules that differ stay visible in both scopes', () => {
+  for (const [broad, narrow] of [
+    ['Step 2: run lint', 'Step 1: run lint'],
+    ['Rule 5: tests must pass before release', 'Rule 4: tests must pass before merge'],
+  ]) {
+    const x = crossScope(setup(), broad, narrow);
+    assert.ok(x.shown(x.o) && x.shown(x.r), `${broad} / ${narrow}`);
+  }
+});
+
+test('FR-006 narrower wins: a long cross-scope conflict and an identical cross-scope repeat hide the broader item', () => {
+  const long = (day) => `The release train departs every ${day} after the staging verification and the changelog review are both complete`;
+  let x = crossScope(setup(), long('Tuesday'), long('Thursday'));
+  assert.ok(x.shown(x.r) && !x.shown(x.o), 'conflict');
+  x = crossScope(setup(), 'Handlers log the request id before returning', 'Handlers log the request id before returning');
+  assert.ok(x.shown(x.r) && !x.shown(x.o), 'repeat');
+});
+
+test('FR-006 a sweep that throws leaves the session start slice printed', () => {
+  const s = setup();
+  rem(s, 'Handlers log the request id before returning to the caller', '--type', 'decision');
+  const before = sessionStart(s.acmeApi, s.data, s.configA).stdout;
+  assert.ok(before.includes('request id'));
+  const db = open(s);
+  db.prepare("UPDATE audit_events SET created_at = '2020-01-01T00:00:00.000Z' WHERE action = 'sweep'").run();
+  db.exec("CREATE TRIGGER no_sweep BEFORE INSERT ON audit_events WHEN NEW.action = 'sweep' BEGIN SELECT RAISE(ABORT, 'boom'); END");
+  db.close();
+  const r = sessionStart(s.acmeApi, s.data, s.configA);
+  assert.equal(r.stdout, before);
+  assert.equal(sweepRuns(s), 1, 'the throwing sweep recorded nothing new');
+});
+
+test('FR-006 the session start leaves a large store to memory sweep, which still runs it', () => {
+  const s = setup();
+  rem(s, 'Handlers log the request id before returning to the caller', '--type', 'decision');
+  const db = open(s);
+  db.exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1100)
+    INSERT INTO items (id, tenant, scope, scope_key, type, statement, status, origin_trust, valid_from, created_at)
+    SELECT 'bulk-' || i, tenant, scope, scope_key, 'decision', 'filler statement number ' || i, 'active', origin_trust, valid_from, created_at FROM items, n LIMIT 1100`);
+  db.close();
+  const r = sessionStart(s.acmeApi, s.data, s.configA);
+  assert.ok(r.stdout.length > 0);
+  assert.equal(sweepRuns(s), 0, 'no sweep at start above the cap');
+  assert.equal(run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.equal(sweepRuns(s), 1);
+});

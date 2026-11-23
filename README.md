@@ -208,12 +208,14 @@ normalised text, word overlap and cited files:
   evidence arrives already superseded by the active item.
 - A conflict across scopes (a repository decision against an organisation
   one, a person preference against a repository one) supersedes nothing: both
-  stay, and recall shows only the narrower scope's item.
+  stay, and recall shows only the narrower scope's item, unless the two
+  differ in a number ("Step 1" and "Step 2" are different rules).
 - `memory sweep` runs the same matching over the active items of this
   repository's tenant and the person file, and queues the newer of two
   repeats as a supersession of the older, which `memory review` shows. It
-  applies nothing. The session start runs it at most once a day per store;
-  there is no background process.
+  applies nothing. The session start runs it after printing the slice, at most once a day
+  per store and only for a store of up to 1,000 active items; there is no
+  background process.
 - Each merge and supersession prints an audit id; `memory undo <audit-id>`
   reverses it.
 
