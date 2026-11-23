@@ -392,7 +392,7 @@ test('an item an agent took out of recall before this change comes back active, 
   // Take the store back to the schema before stale reports were counted, as an earlier version left it.
   const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
   db.prepare("UPDATE items SET status = 'stale', status_reason = 'reported stale' WHERE id = ?").run(id);
-  db.exec('ALTER TABLE items DROP COLUMN stale_reports; PRAGMA user_version = 4;');
+  db.exec('ALTER TABLE items DROP COLUMN stale_reports; DROP TABLE item_vectors; PRAGMA user_version = 4;');
   db.close();
   const [search] = tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: 'ledger rounds units' }]]);
   assert.match(search.text, new RegExp(id));

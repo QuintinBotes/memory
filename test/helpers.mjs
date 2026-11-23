@@ -1,8 +1,8 @@
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 export const bundle = join(root, 'dist/memory.mjs');
@@ -60,13 +60,52 @@ export function commit(dir, files, message = 'change') {
   git('commit', '-q', '-m', message);
 }
 
-/** Runs the bundle with a clean environment: only what the test names reaches it. */
-export function run(args, { cwd, data, config, input, path } = {}) {
-  const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv };
+const netLog = join(tmpdir(), `memory-netlog-${process.pid}.log`);
+writeFileSync(netLog, '');
+
+/** A clean environment: only what the test names reaches the bundle, and the guard refuses any host but this machine. */
+function bundleEnv({ data, config, path, env: extra }) {
+  const env = {
+    PATH: path ?? process.env.PATH,
+    HOME: process.env.HOME,
+    ...gitEnv,
+    NODE_OPTIONS: `--import=${pathToFileURL(join(root, 'test/no-network.mjs')).href}`,
+    MEMORY_TEST_NETLOG: netLog,
+    ...extra,
+  };
   if (data) env.MEMORY_DATA_DIR = data;
   if (config) env.CLAUDE_CONFIG_DIR = config;
-  const r = spawnSync(process.execPath, [bundle, ...args], { cwd, env, input, encoding: 'utf8' });
+  return env;
+}
+
+/** Fails a test that made the bundle reach a host outside this machine. */
+function assertNoNetwork() {
+  const reached = readFileSync(netLog, 'utf8');
+  writeFileSync(netLog, '');
+  if (reached !== '') throw new Error(`a test reached the network: ${reached}`);
+}
+
+/** Runs the bundle with a clean environment: only what the test names reaches it. */
+export function run(args, { cwd, data, config, input, path, env } = {}) {
+  const r = spawnSync(process.execPath, [bundle, ...args], { cwd, env: bundleEnv({ data, config, path, env }), input, encoding: 'utf8' });
+  assertNoNetwork();
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+/** As run, without blocking this process, so a server in the test can answer the bundle. */
+export function runAsync(args, { cwd, data, config, input, path, env } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [bundle, ...args], { cwd, env: bundleEnv({ data, config, path, env }) });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('close', (status) => {
+      assertNoNetwork();
+      resolve({ status, stdout, stderr });
+    });
+    child.stdin.end(input ?? '');
+  });
 }
 
 /** The SessionStart hook as Claude Code calls it. */

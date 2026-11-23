@@ -33,6 +33,12 @@ export const RANKING = {
   minTextRatio: 0.2,
   confidence: 2,
   contradiction: 1,
+  /** Provisional, like the confidence constants: a vector match scores 0 at this cosine and `semantic` points at 1. */
+  minSimilarity: 0.35,
+  semantic: 4,
+  /** An item sharing an anchored path with one of the `graphTop` best hits. */
+  graph: 1,
+  graphTop: 3,
   /** Most rows one search returns. */
   limit: 10,
 } as const;
@@ -40,7 +46,7 @@ export const RANKING = {
 export interface Hit {
   item: Visible;
   score: number;
-  /** Every point, in order: anchor, scope, text, confidence, contradictions. */
+  /** Every point, in order: anchor, scope, text, semantic, graph, confidence, contradictions. */
   why: string;
 }
 
@@ -50,33 +56,51 @@ const tenth = (n: number): number => Math.round(n * 10) / 10;
  * A fixed, explainable sum (Orbit's retrieve.ts style): only an item that
  * overlaps a path in play or matches the query is a hit, then scope,
  * confidence and contradictions adjust it. Ties break on support, then id.
+ *
+ * With `similarity` (the cosine of each item's vector with the query's), an item whose
+ * vector is close enough is a hit too, and items sharing an anchored path with one of the
+ * best hits get a small bonus and may enter. Without it the sum is the lexical one, exactly.
  */
-export function rank(items: Visible[], paths: string[], now = Date.now()): Hit[] {
+export function rank(items: Visible[], paths: string[], now = Date.now(), similarity?: Map<string, number>): Hit[] {
   // The repository root, '.' or './', normalises to '' and holds every anchored path.
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\/?$|^\.\//, '').replace(/\/+$/, ''));
-  const hits: Hit[] = [];
-  for (const item of items) {
+  const score = (item: Visible, near: boolean): Hit | null => {
     const parts: string[] = [];
-    let score = 0;
+    let total = 0;
     const add = (label: string, points: number): void => {
-      score += points;
+      total += points;
       parts.push(`${label} ${points}`);
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === '' || a.path === p || a.path.startsWith(`${p}/`))).length;
     if (overlap > 0) add('anchor', Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
     const ratio = item.textRatio ?? 0;
     const text = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
-    if (overlap === 0 && text === 0) continue;
+    const cos = similarity?.get(item.id) ?? 0;
+    const semantic = cos >= RANKING.minSimilarity ? tenth((RANKING.semantic * (cos - RANKING.minSimilarity)) / (1 - RANKING.minSimilarity)) : 0;
+    if (overlap === 0 && text === 0 && semantic === 0 && !near) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text > 0) add('text', text);
+    if (semantic > 0) add('semantic', semantic);
+    if (near) add('graph', RANKING.graph);
     const c = confidence(item, now);
     add(`confidence ${band(c)}`, tenth(RANKING.confidence * c));
     if (item.contradictions > 0) add('contradicted', -item.contradictions * RANKING.contradiction);
-    hits.push({ item, score: tenth(score), why: parts.join(', ') });
+    return { item, score: tenth(total), why: parts.join(', ') };
+  };
+  const byScore = (a: Hit, b: Hit): number =>
+    b.score - a.score || b.item.support - a.item.support || (a.item.id < b.item.id ? -1 : a.item.id > b.item.id ? 1 : 0);
+  let hits = items.map((i) => score(i, false)).filter((h): h is Hit => h !== null);
+  if (similarity !== undefined) {
+    const top = hits.sort(byScore).slice(0, RANKING.graphTop);
+    const topPaths = (id: string): Set<string> => new Set(top.filter((h) => h.item.id !== id).flatMap((h) => h.item.anchors.map((a) => a.path)));
+    hits = items
+      .map((i) => {
+        const shared = topPaths(i.id);
+        return score(i, i.anchors.some((a) => shared.has(a.path)));
+      })
+      .filter((h): h is Hit => h !== null);
   }
-  return hits
-    .sort((a, b) => b.score - a.score || b.item.support - a.item.support || (a.item.id < b.item.id ? -1 : a.item.id > b.item.id ? 1 : 0))
-    .slice(0, RANKING.limit);
+  return hits.sort(byScore).slice(0, RANKING.limit);
 }
 
 // searchTerms and its stopwords are copied from Orbit, src/knowledge/text.ts at 9b484a2 on branch next

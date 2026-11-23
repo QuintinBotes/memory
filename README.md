@@ -37,10 +37,20 @@ through which agents search, read, propose and give feedback. The plan is tracke
 - **Small and cache-friendly.** Every recall has a budget, whole items are
   dropped rather than cut, and the session slice is byte-identical for the
   same store, so it never breaks the prompt cache.
-- **Off until measured.** Each capability ships off and is turned on only when
-  its on/off measurement shows it is no worse.
-- **Local.** No network calls at read time, no model at read time, no runtime
-  dependencies. Node 22.13 or newer, where `node:sqlite` needs no flag.
+- **Active capture, measured.** Automatic capture is on by default
+  ([#43](https://github.com/QuintinBotes/memory/issues/43), which supersedes
+  #28): at Stop and SessionEnd a small model keeps only lessons and decisions
+  and saves the relevant ones as active items with agent trust and provenance
+  (the capture hook is its own follow-up issue). Other capabilities still ship off until their on/off measurement shows they
+  are no worse.
+- **Hybrid recall.** Recall is lexical, vector and graph, behind a provider
+  interface; the default provider is voyage-4. Vectors are kept in the
+  tenant's own file. Without a key or a network, recall falls back to words
+  and paths and says so.
+- **Local where it counts.** The store never leaves this machine. The one
+  thing that does is the text sent to the embedding provider, listed in
+  [SECURITY.md](SECURITY.md). No runtime dependencies: the Voyage call is a
+  plain `fetch`. Node 22.13 or newer, where `node:sqlite` needs no flag.
 
 ## Using it
 
@@ -75,6 +85,7 @@ memory remember --scope repository --type convention -- 'Releases are cut from t
 memory remember --scope person --type preference -- 'Explain changes in plain English'
 memory list
 memory recheck                          # re-check anchored items, stale ones included
+memory embed --backfill                 # embed active items that have no vector
 memory sweep                            # queue merges of active repeats for review
 memory purge --repo acme/api            # preview; add --confirm to delete
 ```
@@ -232,6 +243,12 @@ reject, purge or change the configuration, and nothing they write is active.
   (repository 2, organisation or person 1, global 0.5), full-text relevance up
   to 2 (none below 20% of the best match), confidence up to 2, and minus 1 per
   contradiction. Ties go to support, then id. `why` lists every point.
+  With embeddings (below) the sum gains two parts: `semantic`, up to 4 points
+  for the cosine of the item's vector with the query's (nothing under 0.35, so
+  a close vector alone makes an item a hit), and `graph`, 1 point for an item
+  sharing an anchored path with one of the three best hits, which may enter
+  the results that way. Both are provisional until the evaluation slice
+  tunes them. Budgets, the 10-row limit and the advisory fence do not change.
 - `memory_get(id, format?)` returns one item whole, with its evidence and
   anchor status, as rows or as JSON with `format: "json"`.
 - `memory_propose(statement, scope, type, evidence)` stores a proposal for
@@ -247,6 +264,33 @@ reject, purge or change the configuration, and nothing they write is active.
   agent's word alone must not hide what you approved, and `memory review`
   lists it with the number of reports: `memory reject` takes it out,
   `memory approve` clears the reports.
+
+## Embeddings
+
+`memory_search` embeds its query and compares it with the vectors of the
+items it may see. Embeddings come from a provider named in `config.json`:
+
+```json
+"embeddings": { "provider": "voyage", "model": "voyage-4" }
+```
+
+`voyage` (the default) calls Voyage AI's embeddings endpoint with
+`VOYAGE_API_KEY` from the environment of the process; `fake` is a
+deterministic offline provider for tests. Changing the key swaps the provider
+with no code change; a vector from another model is not used until
+`memory embed --backfill` embeds the item again. Each vector sits in the
+same SQLite file as its item, with its model and size, and a purge deletes it
+with the item. `remember` and `memory approve` embed the item they make
+active; a proposal is embedded only when approved, and an item flagged as
+reading like an instruction never is. `memory embed --backfill` embeds every
+active item that has no vector.
+
+Embeddings are part of the consent plan: they stay off until you run
+`memory init` and confirm it. With no key, no network, or no vectors, search
+ranks by words and paths as before and prints one line saying embeddings were
+not used and why. A search waits at most 1.5 seconds for the provider. The
+session-start slice has no query and never calls it. Similarity is computed in
+memory over the tenant's vectors, which is fine to about 50,000 items.
 
 Confidence is computed on read as `min(1, 0.5^(age/90 days) × 1.1^helped ×
 0.8^wrong)`, age counted from the last approval, `remember` or `helped`, and

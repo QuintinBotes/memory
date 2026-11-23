@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
+var EMBEDDING_PROVIDERS = ["voyage", "fake"];
 var SILOS = ["rejections", "standards", "policy", "notes"];
 var DEFAULT_SESSION_BUDGET = 300;
 var SUBAGENT_BUDGET = 300;
@@ -87,6 +88,10 @@ function loadConfig(data) {
   ))) {
     throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(", ")}`);
   }
+  const emb = c.embeddings;
+  if (emb !== void 0 && !(typeof emb === "object" && emb !== null && !Array.isArray(emb) && EMBEDDING_PROVIDERS.includes(emb.provider) && (emb.model === void 0 || typeof emb.model === "string" && emb.model !== ""))) {
+    throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(" or ")}, "model"?: a name}`);
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -94,6 +99,7 @@ function loadConfig(data) {
     ...budget !== void 0 ? { sessionBudget: budget } : {},
     ...types !== void 0 ? { subagentTypes: types } : {},
     ...imports !== void 0 ? { imports } : {},
+    ...emb !== void 0 ? { embeddings: emb } : {},
     ...c.consent !== void 0 ? { consent: c.consent } : {}
   };
 }
@@ -701,33 +707,52 @@ var RANKING = {
   minTextRatio: 0.2,
   confidence: 2,
   contradiction: 1,
+  /** Provisional, like the confidence constants: a vector match scores 0 at this cosine and `semantic` points at 1. */
+  minSimilarity: 0.35,
+  semantic: 4,
+  /** An item sharing an anchored path with one of the `graphTop` best hits. */
+  graph: 1,
+  graphTop: 3,
   /** Most rows one search returns. */
   limit: 10
 };
 var tenth = (n) => Math.round(n * 10) / 10;
-function rank(items, paths, now = Date.now()) {
+function rank(items, paths, now = Date.now(), similarity2) {
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\/?$|^\.\//, "").replace(/\/+$/, ""));
-  const hits = [];
-  for (const item of items) {
+  const score = (item, near) => {
     const parts = [];
-    let score = 0;
+    let total = 0;
     const add = (label, points) => {
-      score += points;
+      total += points;
       parts.push(`${label} ${points}`);
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === "" || a.path === p || a.path.startsWith(`${p}/`))).length;
     if (overlap > 0) add("anchor", Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
     const ratio = item.textRatio ?? 0;
     const text2 = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
-    if (overlap === 0 && text2 === 0) continue;
+    const cos = similarity2?.get(item.id) ?? 0;
+    const semantic = cos >= RANKING.minSimilarity ? tenth(RANKING.semantic * (cos - RANKING.minSimilarity) / (1 - RANKING.minSimilarity)) : 0;
+    if (overlap === 0 && text2 === 0 && semantic === 0 && !near) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text2 > 0) add("text", text2);
+    if (semantic > 0) add("semantic", semantic);
+    if (near) add("graph", RANKING.graph);
     const c = confidence(item, now);
     add(`confidence ${band(c)}`, tenth(RANKING.confidence * c));
     if (item.contradictions > 0) add("contradicted", -item.contradictions * RANKING.contradiction);
-    hits.push({ item, score: tenth(score), why: parts.join(", ") });
+    return { item, score: tenth(total), why: parts.join(", ") };
+  };
+  const byScore = (a, b) => b.score - a.score || b.item.support - a.item.support || (a.item.id < b.item.id ? -1 : a.item.id > b.item.id ? 1 : 0);
+  let hits = items.map((i) => score(i, false)).filter((h) => h !== null);
+  if (similarity2 !== void 0) {
+    const top = hits.sort(byScore).slice(0, RANKING.graphTop);
+    const topPaths = (id) => new Set(top.filter((h) => h.item.id !== id).flatMap((h) => h.item.anchors.map((a) => a.path)));
+    hits = items.map((i) => {
+      const shared = topPaths(i.id);
+      return score(i, i.anchors.some((a) => shared.has(a.path)));
+    }).filter((h) => h !== null);
   }
-  return hits.sort((a, b) => b.score - a.score || b.item.support - a.item.support || (a.item.id < b.item.id ? -1 : a.item.id > b.item.id ? 1 : 0)).slice(0, RANKING.limit);
+  return hits.sort(byScore).slice(0, RANKING.limit);
 }
 var STOPWORDS = /* @__PURE__ */ new Set([
   "a",
@@ -889,6 +914,7 @@ function reduceTombstones(db) {
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff);
+    db.prepare(`DELETE FROM item_vectors WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff);
     const { changes } = db.prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE ${due}`).run(cutoff);
     recordAudit(db, "tombstones_reduced", null, { count: Number(changes) });
     db.exec("COMMIT");
@@ -1226,6 +1252,149 @@ function sweepIfDue(db, now = Date.now()) {
   return n > START_SWEEP_MAX ? null : sweep(db);
 }
 
+// src/consent/plan.ts
+var DATA_CATEGORIES = [
+  { id: "statements", since: 1, text: "Statements you ask memory to remember, each with its scope, type and an optional source reference" },
+  { id: "anchors", since: 1, text: "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves" },
+  { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
+  { id: "injections", since: 2, text: "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
+  { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
+  { id: "embeddings", since: 3, text: "Embeddings, with the provider in config.json (voyage-4 by default, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query, are sent to the provider's servers and the vectors that come back are kept in the item's own file. Quarantined text is never sent. Without a key or a network, nothing is sent and recall uses words and paths only" }
+];
+var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
+var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
+var covers = (config, id) => !uncovered(config).some((c) => c.id === id);
+function buildConsentPlan(config, storageLocation) {
+  return {
+    version: PLAN_VERSION,
+    tenants: config.tenants,
+    configs: config.configs,
+    dataCategories: DATA_CATEGORIES.map((c) => c.text),
+    optIns: { ...config.optIns },
+    storageLocation,
+    retention: [
+      "Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored",
+      "Person and global statements are refused unless they name no code, path, tenant or repository",
+      "Items are kept until you purge them with memory purge --tenant, --repo, --item, --source or --all; a purge overwrites what it deletes, so it cannot be read back from the files memory keeps. Backups, file-system snapshots and swap are outside its reach",
+      "A rejected item is kept as a tombstone, reduced to a hash of its statement, its type and its scope 30 days after rejection, so the statement is never proposed again",
+      "memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown",
+      "Each tenant has its own file; a session opens only the tenant its repository and config allow",
+      "The store never leaves this machine; the only text that does is what the embeddings category above lists, and only when a provider key is set"
+    ]
+  };
+}
+
+// src/embed/provider.ts
+var EmbedError = class extends Error {
+  constructor(message, noKey = false) {
+    super(message);
+    this.noKey = noKey;
+  }
+  noKey;
+};
+var READ_TIMEOUT_MS = 1500;
+var WRITE_TIMEOUT_MS = 2e4;
+var VOYAGE_BATCH = 64;
+function voyage(model, timeoutMs, env) {
+  return {
+    name: "voyage",
+    model,
+    dims: 1024,
+    async embed(texts, kind = "document") {
+      const key = env["VOYAGE_API_KEY"];
+      if (key === void 0 || key === "") throw new EmbedError("VOYAGE_API_KEY is not set", true);
+      const url = `${env["VOYAGE_BASE_URL"] ?? "https://api.voyageai.com"}/v1/embeddings`;
+      const out = [];
+      for (let i = 0; i < texts.length; i += VOYAGE_BATCH) {
+        const input2 = texts.slice(i, i + VOYAGE_BATCH);
+        let data;
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+            body: JSON.stringify({ input: input2, model, input_type: kind }),
+            signal: AbortSignal.timeout(timeoutMs)
+          });
+          if (!res.ok) throw new EmbedError(`Voyage answered ${res.status}`);
+          data = (await res.json()).data;
+        } catch (error) {
+          if (error instanceof EmbedError) throw error;
+          throw new EmbedError("Voyage is unreachable or too slow");
+        }
+        if (!Array.isArray(data) || data.length !== input2.length) throw new EmbedError("Voyage returned an unexpected answer");
+        for (const d of [...data].sort((a, b) => a.index - b.index)) out.push(Float32Array.from(d.embedding));
+      }
+      return out;
+    }
+  };
+}
+var fnv1a = (s) => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+};
+function fake(model) {
+  const dims = 256;
+  return {
+    name: "fake",
+    model,
+    dims,
+    embed: async (texts) => texts.map((text2) => {
+      const v = new Float32Array(dims);
+      for (const word of searchTerms(text2, 1e3)) v[fnv1a(word.slice(0, 3)) % dims] += 1;
+      const norm = Math.hypot(...v) || 1;
+      return v.map((x) => x / norm);
+    })
+  };
+}
+function providerFor(config, timeoutMs, env = process.env) {
+  const { provider = "voyage", model } = config.embeddings ?? {};
+  return provider === "fake" ? fake(model ?? "fake-prefix-1") : voyage(model ?? "voyage-4", timeoutMs, env);
+}
+
+// src/embed/vectors.ts
+var toBlob = (v) => new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+var fromBlob = (b) => new Float32Array(new Uint8Array(b).buffer);
+function cosine(a, b) {
+  if (a.length !== b.length) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
+}
+async function embedPending(db, provider) {
+  const pending = db.prepare(
+    `SELECT id, statement FROM items WHERE status = 'active' AND quarantine IS NULL AND statement != ''
+         AND id NOT IN (SELECT item_id FROM item_vectors WHERE model = ?) ORDER BY id`
+  ).all(provider.model);
+  if (pending.length === 0) return 0;
+  const vectors = await provider.embed(pending.map((p) => p.statement), "document");
+  if (vectors.length !== pending.length) throw new EmbedError("the provider returned the wrong number of vectors");
+  const put = db.prepare(
+    `INSERT OR REPLACE INTO item_vectors (item_id, model, dims, vector, created_at)
+     SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM items WHERE id = ? AND status = 'active' AND quarantine IS NULL)`
+  );
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    pending.forEach((p, i) => put.run(p.id, provider.model, vectors[i].length, toBlob(vectors[i]), now, p.id));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return pending.length;
+}
+function loadVectors(db, model) {
+  const rows = db.prepare("SELECT item_id, vector FROM item_vectors WHERE model = ?").all(model);
+  return new Map(rows.map((r) => [r.item_id, fromBlob(r.vector)]));
+}
+
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync as existsSync2, mkdirSync as mkdirSync2 } from "node:fs";
@@ -1328,7 +1497,18 @@ var MIGRATIONS = [
   },
   // v6 - secure deletion (#23). Its one change to the file, rewriting a store written before it, runs in openStore.
   () => {
-  }
+  },
+  // v7 - embeddings (#44): one vector per item, kept in the item's own file and deleted with it. The model and
+  // dims say what produced it, so a vector from another model is never compared with a query from this one.
+  `
+  CREATE TABLE item_vectors (
+    item_id TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    dims INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  `
 ];
 var SECURE_DELETE = 6;
 function openStore(path, create) {
@@ -1383,6 +1563,36 @@ function dataDirectory(env = process.env) {
 var tenantFile = (data, tenant) => join3(data, "tenants", `${tenant}.sqlite`);
 var personFile = (data) => join3(data, "person.sqlite");
 var injectionLog = (data) => join3(data, "logs", "injections.jsonl");
+
+// src/recall/semantic.ts
+function storeFiles(data, context) {
+  const tenant = context.tenant !== null && context.repository !== null && context.owner !== null ? [tenantFile(data, context.tenant)] : [];
+  return [...tenant, personFile(data)];
+}
+async function similarities(data, context, config, query, items) {
+  const unused = (reason) => ({ note: `Embeddings not used (${reason}); items are ranked by words and paths only.` });
+  if (!covers(config, "embeddings")) return unused("your consent does not cover them yet; run memory init and confirm");
+  const provider = providerFor(config, READ_TIMEOUT_MS);
+  let q;
+  try {
+    q = (await provider.embed([query], "query"))[0];
+  } catch (error) {
+    if (error instanceof EmbedError) return unused(error.message);
+    throw error;
+  }
+  const wanted = new Set(items.map((i) => i.id));
+  const similarity2 = /* @__PURE__ */ new Map();
+  for (const file of storeFiles(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      for (const [id, v] of loadVectors(db, provider.model)) if (wanted.has(id)) similarity2.set(id, cosine(q, v));
+    } finally {
+      db.close();
+    }
+  }
+  return similarity2.size === 0 ? unused(`no vectors from ${provider.model}; memory embed --backfill stores them`) : { similarity: similarity2 };
+}
 
 // src/recall/visible.ts
 function withTextRatio(items, matches) {
@@ -1517,15 +1727,19 @@ function first(data, context, use) {
   }
   return void 0;
 }
-function search(args, data, context, cwd) {
+async function search(args, data, config, context, cwd) {
   const query = text(args, "query");
   const paths = args["paths"] ?? [];
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string")) throw new ToolError("paths is a list of strings");
   const top = paths.some((p) => isAbsolute(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
   const relativePaths = paths.map((p) => isAbsolute(p) && top !== void 0 ? relative(top, p) : p);
-  const hits = rank(visibleItems(data, context, cwd, searchTerms(query)), relativePaths);
-  if (hits.length === 0) return "No memory item matches.";
-  return fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
+  const items = visibleItems(data, context, cwd, searchTerms(query));
+  const semantic = await similarities(data, context, config, query, items);
+  const hits = rank(items, relativePaths, Date.now(), "similarity" in semantic ? semantic.similarity : void 0);
+  const note = "note" in semantic ? `${semantic.note}
+` : "";
+  if (hits.length === 0) return `${note}No memory item matches.`;
+  return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
 `).join(""));
 }
 function get(args, data, context, cwd) {
@@ -1642,13 +1856,13 @@ function feedback(args, data, context, cwd) {
   if (done === void 0) throw new ToolError(`no active item ${id} here; feedback applies to items memory_search can return`);
   return done;
 }
-function call(name, args, data, cwd) {
+async function call(name, args, data, cwd) {
   const config = loadConfig(data);
   if (!consented(config)) throw new ToolError("memory is not set up, or its configuration changed since the owner agreed to it");
   const context = resolveContext(cwd, config, currentConfigDir());
   switch (name) {
     case "memory_search":
-      return search(args, data, context, cwd);
+      return search(args, data, config, context, cwd);
     case "memory_get":
       return get(args, data, context, cwd);
     case "memory_propose":
@@ -1659,7 +1873,7 @@ function call(name, args, data, cwd) {
       throw new ToolError(`no tool ${String(name)}; memory's tools are ${TOOLS.map((t) => t.name).join(", ")}`);
   }
 }
-function handle(line, data, cwd, version) {
+async function handle(line, data, cwd, version) {
   let message;
   try {
     message = JSON.parse(line);
@@ -1687,7 +1901,7 @@ function handle(line, data, cwd, version) {
       const args = params?.["arguments"] ?? {};
       try {
         if (typeof args !== "object" || args === null || Array.isArray(args)) throw new ToolError("arguments is an object");
-        return ok({ content: [{ type: "text", text: call(params?.["name"], args, data, cwd) }] });
+        return ok({ content: [{ type: "text", text: await call(params?.["name"], args, data, cwd) }] });
       } catch (error) {
         const known = error instanceof ToolError || error instanceof ConfigError;
         if (!known) console.error(`memory: ${error.message}`);
@@ -1699,43 +1913,15 @@ function handle(line, data, cwd, version) {
   }
 }
 function serve(data, cwd, version) {
+  let queue = Promise.resolve();
   createInterface({ input: process.stdin, terminal: false }).on("line", (line) => {
     if (line.trim() === "") return;
-    const reply = handle(line, data, cwd, version);
-    if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}
+    queue = queue.then(async () => {
+      const reply = await handle(line, data, cwd, version);
+      if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}
 `);
+    });
   });
-}
-
-// src/consent/plan.ts
-var DATA_CATEGORIES = [
-  { id: "statements", since: 1, text: "Statements you ask memory to remember, each with its scope, type and an optional source reference" },
-  { id: "anchors", since: 1, text: "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves" },
-  { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
-  { id: "injections", since: 2, text: "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
-  { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files listed under imports in config.json; each statement is stored as a proposal that waits for your approval" }
-];
-var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
-var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
-var covers = (config, id) => !uncovered(config).some((c) => c.id === id);
-function buildConsentPlan(config, storageLocation) {
-  return {
-    version: PLAN_VERSION,
-    tenants: config.tenants,
-    configs: config.configs,
-    dataCategories: DATA_CATEGORIES.map((c) => c.text),
-    optIns: { ...config.optIns },
-    storageLocation,
-    retention: [
-      "Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored",
-      "Person and global statements are refused unless they name no code, path, tenant or repository",
-      "Items are kept until you purge them with memory purge --tenant, --repo, --item, --source or --all; a purge overwrites what it deletes, so it cannot be read back from the files memory keeps. Backups, file-system snapshots and swap are outside its reach",
-      "A rejected item is kept as a tombstone, reduced to a hash of its statement, its type and its scope 30 days after rejection, so the statement is never proposed again",
-      "memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown",
-      "Each tenant has its own file; a session opens only the tenant its repository and config allow",
-      "Nothing is uploaded; the store never leaves this machine"
-    ]
-  };
 }
 
 // src/consent/purge.ts
@@ -1799,6 +1985,7 @@ function executePurge(db, scope) {
       }
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
+    db.prepare("DELETE FROM item_vectors WHERE item_id NOT IN (SELECT id FROM items WHERE status = 'active')").run();
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     const audited = scope.source === void 0 ? scope : { ...scope, source: "withheld" };
     const { returnedToProposedIds: _ids, ...counts } = preview;
@@ -2510,6 +2697,9 @@ var USAGE = `usage: memory <command>
   sweep
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
+  embed --backfill
+      embed every active item here that has no vector from the configured provider (voyage-4 unless config.json says
+      otherwise; needs VOYAGE_API_KEY). Remember and approve embed the item they make active
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -2588,6 +2778,36 @@ ${added.map((c) => `  - ${c.text}
   db.close();
   console.error("Consent recorded. Memory is on for the tenants this config is bound to.");
 }
+async function embedAfterWrite(db, config) {
+  if (!covers(config, "embeddings")) return;
+  try {
+    await embedPending(db, providerFor(config, WRITE_TIMEOUT_MS));
+  } catch (error) {
+    if (!(error instanceof EmbedError)) throw error;
+    if (!error.noKey) console.error(`memory: not embedded (${error.message}); memory embed --backfill fills it later`);
+  }
+}
+async function embedCommand(args, data, cwd) {
+  const { values } = parseArgs({ args, options: { backfill: { type: "boolean" } } });
+  if (values.backfill !== true) throw new Refusal("memory embed needs --backfill", 2);
+  const config = setUp(data);
+  if (!covers(config, "embeddings")) throw new Refusal("your consent does not cover embeddings yet; run memory init and confirm");
+  const provider = providerFor(config, WRITE_TIMEOUT_MS);
+  let total = 0;
+  for (const { file } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      total += await embedPending(db, provider);
+    } catch (error) {
+      if (error instanceof EmbedError) throw new Refusal(`not embedded: ${error.message}`);
+      throw error;
+    } finally {
+      db.close();
+    }
+  }
+  console.log(`embedded ${total} item${total === 1 ? "" : "s"} with ${provider.model}`);
+}
 function anchorAt(cwd, spec) {
   const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(spec);
   const path = m?.[1] ?? "";
@@ -2606,7 +2826,7 @@ function anchorAt(cwd, spec) {
   if (start < 1 || end < start || end > lines2.length) throw new Refusal(`${clean} has ${lines2.length} lines; ${start}-${end} is outside it`);
   return { path: clean, start, end, commit, citedHash: rangeHash(lines2, start, end) };
 }
-function remember(args, data, cwd) {
+async function remember(args, data, cwd) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -2663,6 +2883,7 @@ function remember(args, data, cwd) {
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, "item_remembered", { type: "item", id: done.id }, { scope });
       console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      await embedAfterWrite(db, config);
       return;
     }
     const stored = addItem(db, { ...candidate, status: "active" });
@@ -2676,6 +2897,7 @@ function remember(args, data, cwd) {
     } else {
       throw new Refusal("this statement was already placed as superseded");
     }
+    await embedAfterWrite(db, config);
   } finally {
     db.close();
   }
@@ -2712,7 +2934,7 @@ function review(data, cwd) {
 ` + fence(PROPOSALS_LABEL, renderProposals(all))
   );
 }
-function decideCommand(args, data, cwd, decision) {
+async function decideCommand(args, data, cwd, decision) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -2752,6 +2974,7 @@ function decideCommand(args, data, cwd, decision) {
       const flag = p.quarantine === null ? "" : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
       const replaced = superseded === null ? "" : `; it supersedes ${p.older.id}, which stays on record; undo with memory undo ${superseded}`;
       console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""})${flag}${replaced}`);
+      await embedAfterWrite(db, config);
       return;
     } finally {
       db.close();
@@ -3010,7 +3233,7 @@ function evalCommand(args) {
   process.stdout.write(rows.map((r) => `${JSON.stringify(r)}
 `).join(""));
 }
-function main(argv) {
+async function main(argv) {
   const [command, ...rest] = argv;
   const data = dataDirectory();
   switch (command) {
@@ -3019,6 +3242,8 @@ function main(argv) {
       return;
     case "init":
       return init(rest, data);
+    case "embed":
+      return embedCommand(rest, data, process.cwd());
     case "remember":
       return remember(rest, data, process.cwd());
     case "list":
@@ -3058,7 +3283,7 @@ ${USAGE}`, 2);
   }
 }
 try {
-  main(process.argv.slice(2));
+  await main(process.argv.slice(2));
 } catch (error) {
   if (error instanceof Refusal) {
     console.error(error.message);

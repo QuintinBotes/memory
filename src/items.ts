@@ -198,6 +198,7 @@ export function reduceTombstones(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff);
+    db.prepare(`DELETE FROM item_vectors WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff);
     const { changes } = db
       .prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE ${due}`)
       .run(cutoff);

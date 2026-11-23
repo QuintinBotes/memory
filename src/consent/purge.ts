@@ -116,6 +116,8 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
       }
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
+    // A vector is derived from an active item's text: an item that went back to proposed, or became a tombstone, keeps none.
+    db.prepare("DELETE FROM item_vectors WHERE item_id NOT IN (SELECT id FROM items WHERE status = 'active')").run();
     // A deleted item's audit trail goes with it: an anchor_moved entry names its cited file.
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     // In the same transaction: a purge that cannot be audited does not happen.

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { setup, run, remember, sessionStart } from './helpers.mjs';
 
 function seeded() {
@@ -79,4 +80,20 @@ test('purge without a scope is a usage error', () => {
   const s = seeded();
   assert.equal(purge(s).status, 2);
   assert.equal(purge(s, '--older-than', 'soon').status, 2);
+});
+
+test('purge deletes an item\'s vector with it, from the same file', () => {
+  const s = seeded();
+  const cfgPath = join(s.data, 'config.json');
+  writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(readFileSync(cfgPath, 'utf8')), embeddings: { provider: 'fake' } }));
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Api rate limits are per key', '--scope', 'repository').status, 0);
+  const count = () => {
+    const db = new DatabaseSync(join(s.data, 'tenants', 'acme.sqlite'), { readOnly: true });
+    const n = db.prepare('SELECT COUNT(*) AS n FROM item_vectors').get().n;
+    db.close();
+    return n;
+  };
+  assert.equal(count(), 3, 'the new item and the two stored before it, which a write embeds as well');
+  assert.equal(purge(s, '--repo', 'acme/api', '--confirm').status, 0);
+  assert.equal(count(), 1, 'only the acme/web item keeps its vector');
 });

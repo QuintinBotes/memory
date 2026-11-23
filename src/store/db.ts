@@ -116,6 +116,18 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
 
   // v6 - secure deletion (#23). Its one change to the file, rewriting a store written before it, runs in openStore.
   () => {},
+
+  // v7 - embeddings (#44): one vector per item, kept in the item's own file and deleted with it. The model and
+  // dims say what produced it, so a vector from another model is never compared with a query from this one.
+  `
+  CREATE TABLE item_vectors (
+    item_id TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    dims INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  `,
 ];
 const SECURE_DELETE = 6;
 

@@ -23,10 +23,13 @@ export interface Config {
   /** Subagent types, beyond general-purpose, that get the slice at their start. */
   subagentTypes?: string[];
   imports?: Record<string, RepositorySilos>;
+  /** Which embedding provider and model recall uses; absent means voyage-4. */
+  embeddings?: { provider: (typeof EMBEDDING_PROVIDERS)[number]; model?: string };
   /** `version` is the consent plan's version agreed to; absent in a consent saved before plans had one. */
   consent?: { planHash: string; grantedAt: string; version?: number };
 }
 
+export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
 export const SILOS = ['rejections', 'standards', 'policy', 'notes'] as const;
 export type RepositorySilos = Partial<Record<(typeof SILOS)[number], string>>;
 
@@ -102,6 +105,17 @@ export function loadConfig(data: string): Config | null {
   ) {
     throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(', ')}`);
   }
+  const emb = c.embeddings;
+  if (
+    emb !== undefined &&
+    !(
+      typeof emb === 'object' && emb !== null && !Array.isArray(emb) &&
+      (EMBEDDING_PROVIDERS as readonly string[]).includes(emb.provider) &&
+      (emb.model === undefined || (typeof emb.model === 'string' && emb.model !== ''))
+    )
+  ) {
+    throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(' or ')}, "model"?: a name}`);
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -109,6 +123,7 @@ export function loadConfig(data: string): Config | null {
     ...(budget !== undefined ? { sessionBudget: budget } : {}),
     ...(types !== undefined ? { subagentTypes: types } : {}),
     ...(imports !== undefined ? { imports } : {}),
+    ...(emb !== undefined ? { embeddings: emb } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
   };
 }
