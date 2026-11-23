@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Repeats and conflicts (#21). A statement that repeats an active item or a
+  pending proposal from a new source is merged into it as evidence, with its
+  own trust; only the owner's evidence raises support, and nothing merged
+  activates a proposal. A statement that conflicts with an active item
+  becomes a supersession the owner approves in `memory review`: the older
+  item gets `valid_to` and the `superseded` status, keeps its text and
+  evidence, and is no longer recalled. `memory remember --supersedes <id>`
+  supersedes at once, and `memory undo <audit-id>` reverses a merge or a
+  supersession. Notes may carry `at`, the time of their evidence, which
+  decides which conflicting statement is newer. The import report counts
+  `merged` and `supersessions`. No item is rewritten or deleted.
 - The session slice in every context window: printed again, byte-identical,
   after a compaction (`SessionStart` with the `compact` matcher), and given
   to `general-purpose` subagents at their start (`SubagentStart`), resolved

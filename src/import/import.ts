@@ -3,6 +3,7 @@ import { join, sep } from 'node:path';
 import { SILOS, organisationTerms, type Config } from '../config.ts';
 import { matchingTenants, resolveContext } from '../context.ts';
 import { namesOrganisation, refusal } from '../gate.ts';
+import { addItem } from '../consolidate.ts';
 import { insertItem, knownItem, quarantineOf, reduceTombstones, type Anchor, type NewItem } from '../items.ts';
 import { openStore } from '../store/db.ts';
 import { recordAudit } from '../store/audit.ts';
@@ -20,6 +21,10 @@ export interface ImportReport {
   proposed?: number;
   tombstones?: number;
   alreadyKnown?: number;
+  /** Repeats of an item or proposal, attached to it as evidence. */
+  merged?: number;
+  /** Proposals stored as the replacement of an active item, for the owner to decide. */
+  supersessions?: number;
   rejectedBefore?: number;
   /** Proposals stored quarantined: text from a non-owner source that reads as an instruction. */
   quarantined?: number;
@@ -151,6 +156,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
         candidates.push({
           tenant: context.tenant, scope: 'repository', scopeKey: context.repository, type: type ?? 'convention', statement: text,
           rationale: null, anchors, source, trust: silo === 'notes' ? 'agent' : 'owner',
+          ...(silo === 'notes' && at !== undefined ? { evidenceAt: at } : {}),
           ...(silo === 'rejections'
             ? { status: 'rejected', validTo: at ?? new Date().toISOString(), statusReason: 'rejected in the retro record' }
             : { status: 'proposed' }),
@@ -160,7 +166,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   }
 
   if (dryRun) return report;
-  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0 };
+  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0, merged: 0, supersessions: 0 };
   // Tombstones first, so a statement rejected in one silo is not proposed from another.
   candidates.sort((a, b) => Number(b.status === 'rejected') - Number(a.status === 'rejected'));
   const byFile = new Map<string, Candidate[]>();
@@ -175,14 +181,25 @@ export function importSilos(config: Config, data: string, configDir: string, dry
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list) {
         const was = knownItem(db, c);
-        if (was !== undefined && c.status === 'rejected' && was.status === 'proposed') {
-          // Rejected in the retro after it was proposed here: the owner's no stands.
-          reject.run(c.validTo ?? new Date().toISOString(), c.statusReason ?? null, was.id);
-          added.tombstones++;
-        } else if (was !== undefined) counts[was.status === 'rejected' ? 'rejectedBefore' : 'alreadyKnown']++;
+        if (c.status === 'rejected') {
+          if (was !== undefined && was.status === 'proposed') {
+            // Rejected in the retro after it was proposed here: the owner's no stands.
+            reject.run(c.validTo ?? new Date().toISOString(), c.statusReason ?? null, was.id);
+            added.tombstones++;
+          } else if (was !== undefined) counts[was.status === 'rejected' ? 'rejectedBefore' : 'alreadyKnown']++;
+          else {
+            insertItem(db, c);
+            added.tombstones++;
+          }
+          continue;
+        }
+        const stored = addItem(db, c);
+        if (stored.kind === 'rejected') counts.rejectedBefore++;
+        else if (stored.kind === 'known') counts.alreadyKnown++;
+        else if (stored.kind === 'merged') counts.merged++;
         else {
-          insertItem(db, c);
-          added[c.status === 'rejected' ? 'tombstones' : 'proposed']++;
+          if (stored.kind === 'inserted') added.proposed++;
+          if (stored.kind === 'inserted' && stored.supersedes !== undefined) counts.supersessions++;
           if (quarantineOf(c) !== null) counts.quarantined++;
         }
       }

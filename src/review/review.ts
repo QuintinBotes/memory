@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { safe } from '../render/rows.ts';
+import { applySupersession } from '../consolidate.ts';
 import { recordAudit } from '../store/audit.ts';
 
 /**
@@ -26,6 +27,9 @@ export interface Proposal {
   contradictions: number;
   anchors_json: string;
   evidence: { source_ref: string; author_role: string }[];
+  /** The active item this one would replace, when the owner has not yet decided. */
+  supersedes: string | null;
+  older: { id: string; type: string; statement: string; evidence: Proposal['evidence'] } | null;
 }
 
 /** What an automatic gate would have done: three corroborating signals, one from the owner, no contradiction. */
@@ -44,14 +48,20 @@ export function shadow(p: Proposal): { decision: 'approve' | 'hold'; signals: nu
 export function proposals(db: DatabaseSync, tenant: string, id?: string): Proposal[] {
   const rows = db
     .prepare(
-      `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports FROM items
-       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
+      `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports, supersedes FROM items
+       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0)
+              OR (status = 'active' AND EXISTS (SELECT 1 FROM items o WHERE o.id = items.supersedes AND o.status = 'active')) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`,
     )
     .all(tenant, ...(id === undefined ? [] : [id])) as unknown as Proposal[];
   const evidence = db.prepare('SELECT source_ref, author_role FROM evidence WHERE item_id = ? ORDER BY captured_at, id');
-  for (const r of rows) r.evidence = evidence.all(r.id) as Proposal['evidence'];
+  const older = db.prepare("SELECT id, type, statement FROM items WHERE id = ? AND status = 'active'");
+  for (const r of rows) {
+    r.evidence = evidence.all(r.id) as Proposal['evidence'];
+    const o = r.supersedes === null ? undefined : (older.get(r.supersedes) as { id: string; type: string; statement: string } | undefined);
+    r.older = o === undefined ? null : { ...o, evidence: evidence.all(o.id) as Proposal['evidence'] };
+  }
   return rows;
 }
 
@@ -64,6 +74,12 @@ export function renderProposals(list: Proposal[]): string {
         // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
         safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}${p.status === 'stale' ? ', hidden by an agent through an older install' : p.stale_reports === 0 ? '' : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? '' : 's'}`}: ${JSON.stringify(safe(p.statement))}`),
         ...p.evidence.map((e) => safe(`  evidence: ${e.source_ref} (${e.author_role})`)),
+        ...(p.older === null
+          ? []
+          : [
+              safe(`  supersedes [${p.older.id}] ${p.older.type}: ${JSON.stringify(safe(p.older.statement))}`),
+              ...p.older.evidence.map((e) => safe(`    evidence: ${e.source_ref} (${e.author_role})`)),
+            ]),
         ...(p.status !== 'proposed' ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? '' : 's'}, ${g.owner} from the owner)`]),
       ].join('\n');
     })
@@ -77,7 +93,7 @@ export function decide(
   p: Proposal,
   decision: 'approve' | 'reject',
   change: { scope: string; scopeKey: string } | { reason: string | null },
-): void {
+): string | null {
   const now = new Date().toISOString();
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -90,11 +106,30 @@ export function decide(
             .prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = ?")
             .run(now, change.reason, p.id, p.status);
     if (changes !== 1) throw new Error(`proposal ${p.id} changed while it was being decided`);
+    // Approving a supersession proposal is the owner's yes to both halves.
+    const superseded = 'scope' in change && p.older !== null ? applySupersession(db, p.id, p.older.id, p.status, true) : null;
     recordAudit(db, decision === 'approve' ? 'proposal_approved' : 'proposal_rejected', { type: 'item', id: p.id }, {
       decision,
       shadow: shadow(p).decision,
       ...('scope' in change ? { scope: change.scope } : {}),
     });
+    db.exec('COMMIT');
+    return superseded;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+/** Whether `p` is an active item whose only question is whether it replaces an older one. */
+export const isPendingSupersession = (p: Proposal): boolean => p.status === 'active' && p.stale_reports === 0 && p.older !== null;
+
+/** The owner declined to replace the older item: both stay active, and the link is dropped. */
+export function declineSupersession(db: DatabaseSync, p: Proposal): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('UPDATE items SET supersedes = NULL WHERE id = ?').run(p.id);
+    recordAudit(db, 'proposal_rejected', { type: 'item', id: p.id }, { decision: 'reject', supersession: p.older?.id });
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

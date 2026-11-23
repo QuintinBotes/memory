@@ -20,7 +20,10 @@ export type AuditAction =
   | 'proposal_rejected'
   | 'proposal_received'
   | 'feedback'
-  | 'tombstones_reduced';
+  | 'tombstones_reduced'
+  | 'evidence_merged'
+  | 'supersession_applied'
+  | 'undone';
 
 export function recordAudit(
   db: DatabaseSync,

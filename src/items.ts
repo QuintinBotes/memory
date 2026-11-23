@@ -33,8 +33,12 @@ export interface NewItem {
   anchors: Anchor[];
   source: string;
   /** Defaults: an active item with owner trust, as "remember this" makes. */
-  status?: 'active' | 'proposed' | 'rejected';
+  status?: 'active' | 'proposed' | 'rejected' | 'superseded';
   trust?: Trust;
+  /** The active item this one would replace, or has replaced once it is applied. */
+  supersedes?: string;
+  /** When the evidence happened (a commit, comment or run), not when memory captured it. */
+  evidenceAt?: string;
   /** When a rejected item was rejected. */
   validTo?: string;
   statusReason?: string;
@@ -88,17 +92,17 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
   try {
     db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
-         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?)`,
+         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id, item.tenant, item.scope, item.scopeKey, item.type, item.statement, statementKey(item.statement), item.rationale,
       item.status ?? 'active', item.statusReason ?? null, trust, quarantineOf(item), JSON.stringify(item.anchors), now,
-      item.validTo ?? null, now,
+      item.validTo ?? null, now, item.supersedes ?? null,
     );
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`,
-    ).run(`e-${randomBytes(5).toString('hex')}`, id, item.source, trust, sha256(item.statement), now);
+    ).run(`e-${randomBytes(5).toString('hex')}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

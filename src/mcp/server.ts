@@ -5,7 +5,8 @@ import { recheck } from '../anchors.ts';
 import { ConfigError, consented, currentConfigDir, loadConfig, organisationTerms, type Config } from '../config.ts';
 import { git, resolveContext, type Context } from '../context.ts';
 import { refusal } from '../gate.ts';
-import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, insertItem, knownItem, quarantineOf, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
+import { addItem } from '../consolidate.ts';
+import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
 import { READS_EXPIRED, band, confidence, rank, searchTerms } from '../recall/rank.ts';
 import { visibleItems } from '../recall/visible.ts';
 import { ITEMS_LABEL, fence, leanRow, safe, safeJson } from '../render/rows.ts';
@@ -229,16 +230,16 @@ function propose(args: Args, data: string, config: Config, context: Context): st
   const candidate: NewItem = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: 'proposed', trust: origin };
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true)!;
   try {
-    const was = knownItem(db, candidate);
-    if (was !== undefined) {
-      return was.status === 'rejected' ? 'not proposed: the owner rejected this statement before' : `not proposed: memory already holds this statement as ${was.id}`;
-    }
-    const id = insertItem(db, candidate);
+    const stored = addItem(db, candidate);
+    if (stored.kind === 'rejected') return 'not proposed: the owner rejected this statement before';
+    if (stored.kind === 'known') return `not proposed: memory already holds this statement as ${stored.id}`;
+    if (stored.kind === 'merged') return `merged into ${stored.id} as ${origin} evidence; it is not a new proposal, and only the owner's evidence raises support`;
+    const id = stored.id;
     const flag = quarantineOf(candidate);
     recordAudit(db, 'proposal_received', { type: 'item', id }, { origin, ...(flag === null ? {} : { quarantined: flag }) });
     const where = `${scope}${scopeKey === '' ? '' : ` ${scopeKey}`}, trust ${origin}`;
     return flag === null
-      ? `proposed ${id} (${where}); it waits for the owner in memory review and is not active until approved`
+      ? `proposed ${id} (${where})${stored.kind === 'inserted' && stored.supersedes !== undefined ? `, as a supersession of ${stored.supersedes}` : ''}; it waits for the owner in memory review and is not active until approved`
       : `proposed ${id} (${where}), quarantined: it reads as an instruction (${flag}), so it is never searched; the owner sees the flag in memory review`;
   } finally {
     db.close();

@@ -175,6 +175,35 @@ A rejected statement is kept as a tombstone and never proposed again; after
 commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)` and `Bash(*memory.mjs*reject*)`.
 
+## Repeats and conflicts
+
+Nothing is stored twice, and nothing is rewritten or deleted. When a statement
+arrives (`remember`, an import, `memory_propose`) it is compared with the
+active items and pending proposals of the same type and scope, by its
+normalised text, word overlap and cited files:
+
+- **A repeat** (same words, same file or no file) from a new source is merged
+  into the item or proposal as evidence, and the owner is not asked again.
+  Evidence keeps its own trust (`owner`, `agent`, `external`, `bot`); only
+  your own evidence raises `support`, and merged evidence never activates a
+  proposal. The same words anchored in different files are a new statement.
+  A repeat of a rejected statement is still dropped.
+- **A conflict** (mostly the same subject, different words) becomes a
+  supersession: an agent's or an import's statement is a proposal that names
+  the older item, and `memory review` shows both statements with their
+  evidence. `memory approve` makes the new one active and ends the older
+  item's validity: it gets `valid_to` and the `superseded` status, is no
+  longer recalled, and `memory_get` names its successor. Its text and evidence
+  stay. `memory reject` on a supersession of an active item keeps both.
+- `memory remember --supersedes <id> -- <statement>` replaces an item at
+  once. `remember` without it, on a conflict, is active and queues the
+  supersession.
+- An imported note's `at` (when the evidence happened) decides which of two
+  conflicting statements is newer, not when memory captured it: older
+  evidence arrives already superseded by the active item.
+- Each merge and supersession prints an audit id; `memory undo <audit-id>`
+  reverses it.
+
 ## What agents can do
 
 The plugin runs an MCP server with four tools. None of them can approve,
