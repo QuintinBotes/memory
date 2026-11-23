@@ -11,7 +11,7 @@
       "name": "memory",
       "description": "Local memory for Claude Code that never crosses organisations: a few cited items you approved, recalled within a fixed token budget.",
       "source": "./",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "development",
       "tags": [
         "memory",
