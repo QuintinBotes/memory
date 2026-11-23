@@ -75,6 +75,7 @@ memory remember --scope repository --type convention -- 'Releases are cut from t
 memory remember --scope person --type preference -- 'Explain changes in plain English'
 memory list
 memory recheck                          # re-check anchored items, stale ones included
+memory sweep                            # queue merges of active repeats for review
 memory purge --repo acme/api            # preview; add --confirm to delete
 ```
 
@@ -83,7 +84,11 @@ from one source, such as a pull request URL. `--source` reaches only this
 repository's tenant and the person file: evidence from the source is
 deleted, and an item left with none returns to proposed, or with
 `--with-derived` is deleted too. The preview lists any promoted check built
-from an affected item, for you to review; memory does not edit it. Every
+from an affected item, for you to review; memory does not edit it, and it
+lists the id of every item that would return to proposed, so a follow-up
+`--item` can reach it. A rejected or expired item the source touched is cut
+to its hash, type and scope at once, so its text is gone but the statement is
+still not proposed again. Every
 store is opened with secure deletion, so what a purge deletes is overwritten
 and cannot be read back from the files memory keeps; a store written by an
 earlier version is rewritten once when it is next opened. Backups, file-system
@@ -201,6 +206,14 @@ normalised text, word overlap and cited files:
 - An imported note's `at` (when the evidence happened) decides which of two
   conflicting statements is newer, not when memory captured it: older
   evidence arrives already superseded by the active item.
+- A conflict across scopes (a repository decision against an organisation
+  one, a person preference against a repository one) supersedes nothing: both
+  stay, and recall shows only the narrower scope's item.
+- `memory sweep` runs the same matching over the active items of this
+  repository's tenant and the person file, and queues the newer of two
+  repeats as a supersession of the older, which `memory review` shows. It
+  applies nothing. The session start runs it at most once a day per store;
+  there is no background process.
 - Each merge and supersession prints an audit id; `memory undo <audit-id>`
   reverses it.
 

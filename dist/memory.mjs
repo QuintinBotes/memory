@@ -1177,6 +1177,54 @@ function undo(db, auditId) {
     throw error;
   }
 }
+var NARROWNESS = ["person", "repository", "organisation", "global"];
+function narrowerWins(items) {
+  const w = items.map((i) => words(i.statement));
+  return items.filter(
+    (a, i) => !items.some((b, j) => {
+      if (i === j || a.type !== b.type || a.scope === b.scope || NARROWNESS.indexOf(b.scope) >= NARROWNESS.indexOf(a.scope)) return false;
+      const sim = similarity(w[i], w[j]);
+      return anchorsOverlap(a.anchors, b.anchors) && sim >= CONFLICT && sim < REPEAT;
+    })
+  );
+}
+var DAY = 864e5;
+function sweep(db) {
+  const rows = db.prepare(
+    `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
+       WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
+  ).all();
+  const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
+  let proposed = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [j, newer] of rows.entries()) {
+      if (newer.supersedes !== null) continue;
+      const mine = words(newer.statement);
+      const older = rows.slice(0, j).find((r) => {
+        if (taken.has(r.id) || r.type !== newer.type || r.scope !== newer.scope || r.scope_key !== newer.scope_key) return false;
+        if (!anchorsOverlap(JSON.parse(r.anchors_json), JSON.parse(newer.anchors_json))) return false;
+        const theirs = words(r.statement);
+        return r.statement_key === newer.statement_key || similarity(mine, theirs) >= REPEAT && sameNumbers(mine, theirs);
+      });
+      if (older === void 0) continue;
+      db.prepare("UPDATE items SET supersedes = ? WHERE id = ?").run(older.id, newer.id);
+      recordAudit(db, "merge_proposed", { type: "item", id: newer.id }, { older: older.id });
+      taken.add(older.id);
+      proposed++;
+    }
+    recordAudit(db, "sweep", null, { proposed });
+    db.exec("COMMIT");
+    return proposed;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+function sweepIfDue(db, now = Date.now()) {
+  const last = db.prepare("SELECT max(created_at) AS at FROM audit_events WHERE action = 'sweep'").get().at;
+  return last !== null && now - Date.parse(last) < DAY ? null : sweep(db);
+}
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
@@ -1366,7 +1414,7 @@ function visibleItems(data, context, cwd, terms = []) {
       person.close();
     }
   }
-  return out;
+  return narrowerWins(out);
 }
 
 // src/mcp/server.ts
@@ -1714,17 +1762,19 @@ function previewPurge(db, scope) {
   const e = evidenceClause(scope);
   let items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${i.where}`, ...i.params);
   let evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${i.where})`, ...i.params);
-  let returnedToProposed = 0;
+  let returnedToProposedIds = [];
   let reached = i;
   if (e !== null) {
     const o = orphaned(e);
     evidence = count(db, `SELECT COUNT(*) AS n FROM evidence WHERE ${e.where}`, ...e.params);
     if (scope.withDerived === true) items = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${o.where}`, ...o.params);
-    else returnedToProposed = count(db, `SELECT COUNT(*) AS n FROM items WHERE ${SHOWN} AND ${o.where}`, ...o.params);
+    else {
+      returnedToProposedIds = db.prepare(`SELECT id FROM items WHERE ${SHOWN} AND ${o.where} ORDER BY id`).all(...o.params).map((r) => r.id);
+    }
     reached = touched(e);
   }
   const checks = db.prepare(`SELECT DISTINCT promoted_to AS c FROM items WHERE promoted_to IS NOT NULL AND ${reached.where} ORDER BY c`).all(...reached.params).map((r) => r.c);
-  return { items, evidence, returnedToProposed, checks };
+  return { items, evidence, returnedToProposed: returnedToProposedIds.length, returnedToProposedIds, checks };
 }
 function executePurge(db, scope) {
   const preview = previewPurge(db, scope);
@@ -1741,11 +1791,18 @@ function executePurge(db, scope) {
       ).run(...e.params, ...t.params);
       if (scope.withDerived === true) db.prepare(`DELETE FROM items WHERE ${o.where}`).run(...o.params);
       else db.prepare(`UPDATE items SET status = 'proposed' WHERE ${SHOWN} AND ${o.where}`).run(...o.params);
+      if (scope.source !== void 0) {
+        db.prepare(
+          `UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE status IN ('rejected', 'expired') AND statement != '' AND ${t.where}`
+        ).run(...t.params);
+        db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE status IN ('rejected', 'expired') AND ${t.where})`).run(...t.params);
+      }
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     const audited = scope.source === void 0 ? scope : { ...scope, source: "withheld" };
-    recordAudit(db, "purge", null, { scope: audited, removed: preview });
+    const { returnedToProposedIds: _ids, ...counts } = preview;
+    recordAudit(db, "purge", null, { scope: audited, removed: counts });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -2450,6 +2507,9 @@ var USAGE = `usage: memory <command>
       keep a proposal as a tombstone, so the same statement is never proposed again
   undo <audit-id>
       reverse one merge or supersession, by the audit id its command printed
+  sweep
+      the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
+      older in review. Applies nothing. The session start runs it at most once a day
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -2731,6 +2791,20 @@ function recheckCommand(args, data, cwd) {
     db.close();
   }
 }
+function sweepCommand(data, cwd, due) {
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  let proposed = 0;
+  for (const { file } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
+    } finally {
+      db.close();
+    }
+  }
+  if (!due) console.log(`proposed ${proposed} merge${proposed === 1 ? "" : "s"}; they wait in memory review`);
+}
 function hookInput() {
   try {
     const v = JSON.parse(readFileSync5(0, "utf8"));
@@ -2749,6 +2823,7 @@ function sessionStart(data) {
     if (typeof input2["agent_type"] === "string" && neverSubagent(input2["agent_type"])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
+    sweepCommand(data, typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), true);
     process.stdout.write(hookSlice(data, config, input2, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
   } catch {
   }
@@ -2849,7 +2924,7 @@ function purge(args, data, cwd) {
   const files = tenants.map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0) files.push(personFile(data));
   const report = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0, checks: [] };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [] };
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -2859,6 +2934,7 @@ function purge(args, data, cwd) {
       total.items += r.items;
       total.evidence += r.evidence;
       total.returnedToProposed += r.returnedToProposed;
+      total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
     } finally {
       db.close();
@@ -2953,6 +3029,8 @@ function main(argv) {
     case "approve":
     case "reject":
       return decideCommand(rest, data, process.cwd(), command);
+    case "sweep":
+      return sweepCommand(data, process.cwd(), false);
     case "recheck":
       return recheckCommand(rest, data, process.cwd());
     case "mcp":

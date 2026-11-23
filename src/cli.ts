@@ -32,7 +32,7 @@ import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/pla
 import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
-import { addItem, supersedeNow, undo } from './consolidate.ts';
+import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
@@ -64,6 +64,9 @@ const USAGE = `usage: memory <command>
       keep a proposal as a tombstone, so the same statement is never proposed again
   undo <audit-id>
       reverse one merge or supersession, by the audit id its command printed
+  sweep
+      the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
+      older in review. Applies nothing. The session start runs it at most once a day
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -371,6 +374,22 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   }
 }
 
+/** `memory sweep`, or with `due` the session start's: each store this repository may see, once a day. */
+function sweepCommand(data: string, cwd: string, due: boolean): void {
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  let proposed = 0;
+  for (const { file } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
+    } finally {
+      db.close();
+    }
+  }
+  if (!due) console.log(`proposed ${proposed} merge${proposed === 1 ? '' : 's'}; they wait in memory review`);
+}
+
 /** The JSON a hook is given on stdin, or nothing when there is none or it is not an object. */
 function hookInput(): Record<string, unknown> {
   try {
@@ -399,6 +418,7 @@ function sessionStart(data: string): void {
     if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
+    sweepCommand(data, typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd(), true);
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
   } catch {
     // Silent by design; see above.
@@ -521,7 +541,7 @@ function purge(args: string[], data: string, cwd: string): void {
   if (values.all === true || days !== undefined || values.item !== undefined || values.source !== undefined) files.push(personFile(data));
 
   const report: Record<string, ReturnType<typeof previewPurge>> = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0, checks: [] as string[] };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [] as string[], checks: [] as string[] };
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -531,6 +551,7 @@ function purge(args: string[], data: string, cwd: string): void {
       total.items += r.items;
       total.evidence += r.evidence;
       total.returnedToProposed += r.returnedToProposed;
+      total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
     } finally {
       db.close();
@@ -625,6 +646,8 @@ function main(argv: string[]): void {
     case 'approve':
     case 'reject':
       return decideCommand(rest, data, process.cwd(), command);
+    case 'sweep':
+      return sweepCommand(data, process.cwd(), false);
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
     case 'mcp':

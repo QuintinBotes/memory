@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { visibleText } from './codefree.ts';
-import { insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem } from './items.ts';
+import { insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
 import { recordAudit } from './store/audit.ts';
 
 /**
@@ -174,4 +174,72 @@ export function undo(db: DatabaseSync, auditId: string): string | false {
     db.exec('ROLLBACK');
     throw error;
   }
+}
+
+const NARROWNESS = ['person', 'repository', 'organisation', 'global'];
+
+/**
+ * Recall's rule for a conflict across scopes: of two visible items of one type that are about the same thing, only
+ * the narrower scope is shown. Nothing is superseded or changed; the broader item is shown again where it stands alone.
+ */
+export function narrowerWins(items: Visible[]): Visible[] {
+  const w = items.map((i) => words(i.statement));
+  return items.filter((a, i) =>
+    !items.some((b, j) => {
+      if (i === j || a.type !== b.type || a.scope === b.scope || NARROWNESS.indexOf(b.scope) >= NARROWNESS.indexOf(a.scope)) return false;
+      // shortcut: a pair that differs only in a number (similarity from REPEAT up) is left alone, as it may be two
+      // numbered rules rather than one rule stated twice; narrow this only with evidence from the owner's replay.
+      const sim = similarity(w[i]!, w[j]!);
+      return anchorsOverlap(a.anchors, b.anchors) && sim >= CONFLICT && sim < REPEAT;
+    }),
+  );
+}
+
+const DAY = 86_400_000;
+
+/**
+ * FR-006: the same matching over the active items of one store. Of two that repeat each other, the newer is left
+ * active and named as superseding the older, which is the supersession proposal `memory review` already shows;
+ * the owner approves or rejects it. Nothing is applied here, and a pair already waiting is not proposed twice.
+ * shortcut: compares every pair of the store's active items, quadratic; index by type if a store passes ~5,000 items.
+ */
+export function sweep(db: DatabaseSync): number {
+  const rows = db
+    .prepare(
+      `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
+       WHERE status = 'active' AND statement != '' ORDER BY created_at, id`,
+    )
+    .all() as unknown as (Related & { supersedes: string | null })[];
+  const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
+  let proposed = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const [j, newer] of rows.entries()) {
+      if (newer.supersedes !== null) continue;
+      const mine = words(newer.statement);
+      const older = rows.slice(0, j).find((r) => {
+        if (taken.has(r.id) || r.type !== newer.type || r.scope !== newer.scope || r.scope_key !== newer.scope_key) return false;
+        if (!anchorsOverlap(JSON.parse(r.anchors_json) as Anchor[], JSON.parse(newer.anchors_json) as Anchor[])) return false;
+        const theirs = words(r.statement);
+        return r.statement_key === newer.statement_key || (similarity(mine, theirs) >= REPEAT && sameNumbers(mine, theirs));
+      });
+      if (older === undefined) continue;
+      db.prepare('UPDATE items SET supersedes = ? WHERE id = ?').run(older.id, newer.id);
+      recordAudit(db, 'merge_proposed', { type: 'item', id: newer.id }, { older: older.id });
+      taken.add(older.id);
+      proposed++;
+    }
+    recordAudit(db, 'sweep', null, { proposed });
+    db.exec('COMMIT');
+    return proposed;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+/** The sweep, unless this store was swept in the last day: the session start's cheap way to make it daily. */
+export function sweepIfDue(db: DatabaseSync, now = Date.now()): number | null {
+  const last = (db.prepare("SELECT max(created_at) AS at FROM audit_events WHERE action = 'sweep'").get() as { at: string | null }).at;
+  return last !== null && now - Date.parse(last) < DAY ? null : sweep(db);
 }

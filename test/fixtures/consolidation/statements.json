@@ -1,0 +1,1036 @@
+{
+ "store": [
+  "baba bafo bale banu requires basi baza",
+  "bedo beke bemu beri requires beva bibo",
+  "bige bilu bipi bita requires bizo bofe",
+  "boku boni bosa bovo requires bude bugu",
+  "bumi bura buto dabe requires dafu dali",
+  "dapa daso daze dedu requires deki dena",
+  "dero deve dibu digi requires dima dipo",
+  "dite dizu dofi dola requires dono dose",
+  "dovu dudi duka dumo requires dure dutu",
+  "fabi faga falo fape requires fasu fazi",
+  "fefa feko fene feru requires fevi fida",
+  "figo fime fipu fiti requires foba fofo",
+  "fole fonu fosi foza requires fudo fuke",
+  "fumu furi fuva gabo requires gage galu",
+  "gapi gata gazo gefe requires geku geni",
+  "gesa gevo gide gigu requires gimi gira",
+  "gito gobe gofu goli requires gopa goso",
+  "goze gudu guki guna requires guro guve",
+  "kabu kagi kama kapo requires kate kazu",
+  "kefi kela keno kese requires kevu kidi",
+  "kika kimo kire kitu requires kobi koga",
+  "kolo kope kosu kozi requires kufa kuko",
+  "kune kuru kuvi lada requires lago lame",
+  "lapu lati leba lefo requires lele lenu",
+  "lesi leza lido like requires limu liri",
+  "liva lobo loge lolu requires lopi lota",
+  "lozo lufe luku luni requires lusa luvo",
+  "made magu mami mara requires mato mebe",
+  "mefu meli mepa meso requires meze midu",
+  "miki mina miro mive requires mobu mogi",
+  "moma mopo mote mozu requires mufi mula",
+  "muno muse muvu nadi requires naka namo",
+  "nare natu nebi nega requires nelo nepe",
+  "nesu nezi nifa niko requires nine niru",
+  "nivi noda nogo nome requires nopu noti",
+  "nuba nufo nule nunu requires nusi nuza",
+  "pado pake pamu pari requires pava pebo",
+  "pege pelu pepi peta requires pezo pife",
+  "piku pini pisa pivo requires pode pogu",
+  "pomi pora poto pube requires pufu puli",
+  "pupa puso puze radu requires raki rana",
+  "raro rave rebu regi requires rema repo",
+  "rete rezu rifi rila requires rino rise",
+  "rivu rodi roka romo requires rore rotu",
+  "rubi ruga rulo rupe requires rusu ruzi",
+  "safa sako sane saru requires savi seda",
+  "sego seme sepu seti requires siba sifo",
+  "sile sinu sisi siza requires sodo soke",
+  "somu sori sova subo requires suge sulu",
+  "supi suta suzo tafe requires taku tani",
+  "tasa tavo tede tegu requires temi tera",
+  "teto tibe tifu tili requires tipa tiso",
+  "tize todu toki tona requires toro tove",
+  "tubu tugi tuma tupo requires tute tuzu",
+  "vafi vala vano vase requires vavu vedi",
+  "veka vemo vere vetu requires vibi viga",
+  "vilo vipe visu vizi requires vofa voko",
+  "vone voru vovi vuda requires vugo vume",
+  "vupu vuti zaba zafo requires zale zanu",
+  "zasi zaza zedo zeke requires zemu zeri",
+  "zeva zibo zige zilu requires zipi zita",
+  "zizo zofe zoku zoni requires zosa zovo",
+  "zude zugu zumi zura requires zuto babe",
+  "bafu bali bapa baso requires baze bedu",
+  "beki bena bero beve requires bibu bigi",
+  "bima bipo bite bizu requires bofi bola",
+  "bono bose bovu budi requires buka bumo",
+  "bure butu dabi daga requires dalo dape",
+  "dasu dazi defa deko requires dene deru",
+  "devi dida digo dime requires dipu diti",
+  "doba dofo dole donu requires dosi doza",
+  "dudo duke dumu duri requires duva fabo",
+  "fage falu fapi fata requires fazo fefe",
+  "feku feni fesa fevo requires fide figu",
+  "fimi fira fito fobe requires fofu foli",
+  "fopa foso foze fudu requires fuki funa",
+  "furo fuve gabu gagi requires gama gapo",
+  "gate gazu gefi gela requires geno gese",
+  "gevu gidi gika gimo requires gire gitu",
+  "gobi goga golo gope requires gosu gozi",
+  "gufa guko gune guru requires guvi kada",
+  "kago kame kapu kati requires keba kefo",
+  "kele kenu kesi keza requires kido kike",
+  "kimu kiri kiva kobo requires koge kolu",
+  "kopi kota kozo kufe requires kuku kuni",
+  "kusa kuvo lade lagu requires lami lara",
+  "lato lebe lefu leli requires lepa leso",
+  "leze lidu liki lina requires liro live",
+  "lobu logi loma lopo requires lote lozu",
+  "lufi lula luno luse requires luvu madi",
+  "maka mamo mare matu requires mebi mega",
+  "melo mepe mesu mezi requires mifa miko",
+  "mine miru mivi moda requires mogo mome",
+  "mopu moti muba mufo requires mule munu",
+  "musi muza nado nake requires namu nari",
+  "nava nebo nege nelu requires nepi neta",
+  "nezo nife niku nini requires nisa nivo",
+  "node nogu nomi nora requires noto nube",
+  "nufu nuli nupa nuso requires nuze padu",
+  "paki pana paro pave requires pebu pegi"
+ ],
+ "incoming": [
+  {
+   "label": "repeat",
+   "of": 0,
+   "text": "baba bafo bale banu requires basi baza also"
+  },
+  {
+   "label": "conflict",
+   "of": 50,
+   "text": "tasa tavo tede tegu requires pema pepo"
+  },
+  {
+   "label": "new",
+   "text": "baba bafo vaba vafo requires vale vanu"
+  },
+  {
+   "label": "repeat",
+   "of": 1,
+   "text": "bedo beke bemu beri requires beva bibo also"
+  },
+  {
+   "label": "conflict",
+   "of": 51,
+   "text": "teto tibe tifu tili requires pete pezu"
+  },
+  {
+   "label": "new",
+   "text": "bedo beke vasi vaza requires vedo veke"
+  },
+  {
+   "label": "repeat",
+   "of": 2,
+   "text": "bige bilu bipi bita requires bizo bofe also"
+  },
+  {
+   "label": "conflict",
+   "of": 52,
+   "text": "tize todu toki tona requires pifi pila"
+  },
+  {
+   "label": "new",
+   "text": "bige bilu vemu veri requires veva vibo"
+  },
+  {
+   "label": "repeat",
+   "of": 3,
+   "text": "boku boni bosa bovo requires bude bugu also"
+  },
+  {
+   "label": "conflict",
+   "of": 53,
+   "text": "tubu tugi tuma tupo requires pino pise"
+  },
+  {
+   "label": "new",
+   "text": "boku boni vige vilu requires vipi vita"
+  },
+  {
+   "label": "repeat",
+   "of": 4,
+   "text": "bumi bura buto dabe requires dafu dali also"
+  },
+  {
+   "label": "conflict",
+   "of": 54,
+   "text": "vafi vala vano vase requires pivu podi"
+  },
+  {
+   "label": "new",
+   "text": "bumi bura vizo vofe requires voku voni"
+  },
+  {
+   "label": "repeat",
+   "of": 5,
+   "text": "dapa daso daze dedu requires deki dena also"
+  },
+  {
+   "label": "conflict",
+   "of": 55,
+   "text": "veka vemo vere vetu requires poka pomo"
+  },
+  {
+   "label": "new",
+   "text": "dapa daso vosa vovo requires vude vugu"
+  },
+  {
+   "label": "repeat",
+   "of": 6,
+   "text": "dero deve dibu digi requires dima dipo also"
+  },
+  {
+   "label": "conflict",
+   "of": 56,
+   "text": "vilo vipe visu vizi requires pore potu"
+  },
+  {
+   "label": "new",
+   "text": "dero deve vumi vura requires vuto zabe"
+  },
+  {
+   "label": "repeat",
+   "of": 7,
+   "text": "dite dizu dofi dola requires dono dose also"
+  },
+  {
+   "label": "conflict",
+   "of": 57,
+   "text": "vone voru vovi vuda requires pubi puga"
+  },
+  {
+   "label": "new",
+   "text": "dite dizu zafu zali requires zapa zaso"
+  },
+  {
+   "label": "repeat",
+   "of": 8,
+   "text": "dovu dudi duka dumo requires dure dutu also"
+  },
+  {
+   "label": "conflict",
+   "of": 58,
+   "text": "vupu vuti zaba zafo requires pulo pupe"
+  },
+  {
+   "label": "new",
+   "text": "dovu dudi zaze zedu requires zeki zena"
+  },
+  {
+   "label": "repeat",
+   "of": 9,
+   "text": "fabi faga falo fape requires fasu fazi also"
+  },
+  {
+   "label": "conflict",
+   "of": 59,
+   "text": "zasi zaza zedo zeke requires pusu puzi"
+  },
+  {
+   "label": "new",
+   "text": "fabi faga zero zeve requires zibu zigi"
+  },
+  {
+   "label": "repeat",
+   "of": 10,
+   "text": "fefa feko fene feru requires fevi fida also"
+  },
+  {
+   "label": "conflict",
+   "of": 60,
+   "text": "zeva zibo zige zilu requires rafa rako"
+  },
+  {
+   "label": "new",
+   "text": "fefa feko zima zipo requires zite zizu"
+  },
+  {
+   "label": "repeat",
+   "of": 11,
+   "text": "figo fime fipu fiti requires foba fofo also"
+  },
+  {
+   "label": "conflict",
+   "of": 61,
+   "text": "zizo zofe zoku zoni requires rane raru"
+  },
+  {
+   "label": "new",
+   "text": "figo fime zofi zola requires zono zose"
+  },
+  {
+   "label": "repeat",
+   "of": 12,
+   "text": "fole fonu fosi foza requires fudo fuke also"
+  },
+  {
+   "label": "conflict",
+   "of": 62,
+   "text": "zude zugu zumi zura requires ravi reda"
+  },
+  {
+   "label": "new",
+   "text": "fole fonu zovu zudi requires zuka zumo"
+  },
+  {
+   "label": "repeat",
+   "of": 13,
+   "text": "fumu furi fuva gabo requires gage galu also"
+  },
+  {
+   "label": "conflict",
+   "of": 63,
+   "text": "bafu bali bapa baso requires rego reme"
+  },
+  {
+   "label": "new",
+   "text": "fumu furi zure zutu requires babi baga"
+  },
+  {
+   "label": "repeat",
+   "of": 14,
+   "text": "gapi gata gazo gefe requires geku geni also"
+  },
+  {
+   "label": "conflict",
+   "of": 64,
+   "text": "beki bena bero beve requires repu reti"
+  },
+  {
+   "label": "new",
+   "text": "gapi gata balo bape requires basu bazi"
+  },
+  {
+   "label": "repeat",
+   "of": 15,
+   "text": "gesa gevo gide gigu requires gimi gira also"
+  },
+  {
+   "label": "conflict",
+   "of": 65,
+   "text": "bima bipo bite bizu requires riba rifo"
+  },
+  {
+   "label": "new",
+   "text": "gesa gevo befa beko requires bene beru"
+  },
+  {
+   "label": "repeat",
+   "of": 16,
+   "text": "gito gobe gofu goli requires gopa goso also"
+  },
+  {
+   "label": "conflict",
+   "of": 66,
+   "text": "bono bose bovu budi requires rile rinu"
+  },
+  {
+   "label": "new",
+   "text": "gito gobe bevi bida requires bigo bime"
+  },
+  {
+   "label": "repeat",
+   "of": 17,
+   "text": "goze gudu guki guna requires guro guve also"
+  },
+  {
+   "label": "conflict",
+   "of": 67,
+   "text": "bure butu dabi daga requires risi riza"
+  },
+  {
+   "label": "new",
+   "text": "goze gudu bipu biti requires boba bofo"
+  },
+  {
+   "label": "repeat",
+   "of": 18,
+   "text": "kabu kagi kama kapo requires kate kazu also"
+  },
+  {
+   "label": "conflict",
+   "of": 68,
+   "text": "dasu dazi defa deko requires rodo roke"
+  },
+  {
+   "label": "new",
+   "text": "kabu kagi bole bonu requires bosi boza"
+  },
+  {
+   "label": "repeat",
+   "of": 19,
+   "text": "kefi kela keno kese requires kevu kidi also"
+  },
+  {
+   "label": "conflict",
+   "of": 69,
+   "text": "devi dida digo dime requires romu rori"
+  },
+  {
+   "label": "new",
+   "text": "kefi kela budo buke requires bumu buri"
+  },
+  {
+   "label": "repeat",
+   "of": 20,
+   "text": "kika kimo kire kitu requires kobi koga also"
+  },
+  {
+   "label": "conflict",
+   "of": 70,
+   "text": "doba dofo dole donu requires rova rubo"
+  },
+  {
+   "label": "new",
+   "text": "kika kimo buva dabo requires dage dalu"
+  },
+  {
+   "label": "repeat",
+   "of": 21,
+   "text": "kolo kope kosu kozi requires kufa kuko also"
+  },
+  {
+   "label": "conflict",
+   "of": 71,
+   "text": "dudo duke dumu duri requires ruge rulu"
+  },
+  {
+   "label": "new",
+   "text": "kolo kope dapi data requires dazo defe"
+  },
+  {
+   "label": "repeat",
+   "of": 22,
+   "text": "kune kuru kuvi lada requires lago lame also"
+  },
+  {
+   "label": "conflict",
+   "of": 72,
+   "text": "fage falu fapi fata requires rupi ruta"
+  },
+  {
+   "label": "new",
+   "text": "kune kuru deku deni requires desa devo"
+  },
+  {
+   "label": "repeat",
+   "of": 23,
+   "text": "lapu lati leba lefo requires lele lenu also"
+  },
+  {
+   "label": "conflict",
+   "of": 73,
+   "text": "feku feni fesa fevo requires ruzo safe"
+  },
+  {
+   "label": "new",
+   "text": "lapu lati dide digu requires dimi dira"
+  },
+  {
+   "label": "repeat",
+   "of": 24,
+   "text": "lesi leza lido like requires limu liri also"
+  },
+  {
+   "label": "conflict",
+   "of": 74,
+   "text": "fimi fira fito fobe requires saku sani"
+  },
+  {
+   "label": "new",
+   "text": "lesi leza dito dobe requires dofu doli"
+  },
+  {
+   "label": "repeat",
+   "of": 25,
+   "text": "liva lobo loge lolu requires lopi lota also"
+  },
+  {
+   "label": "conflict",
+   "of": 75,
+   "text": "fopa foso foze fudu requires sasa savo"
+  },
+  {
+   "label": "new",
+   "text": "liva lobo dopa doso requires doze dudu"
+  },
+  {
+   "label": "repeat",
+   "of": 26,
+   "text": "lozo lufe luku luni requires lusa luvo also"
+  },
+  {
+   "label": "conflict",
+   "of": 76,
+   "text": "furo fuve gabu gagi requires sede segu"
+  },
+  {
+   "label": "new",
+   "text": "lozo lufe duki duna requires duro duve"
+  },
+  {
+   "label": "repeat",
+   "of": 27,
+   "text": "made magu mami mara requires mato mebe also"
+  },
+  {
+   "label": "conflict",
+   "of": 77,
+   "text": "gate gazu gefi gela requires semi sera"
+  },
+  {
+   "label": "new",
+   "text": "made magu fabu fagi requires fama fapo"
+  },
+  {
+   "label": "repeat",
+   "of": 28,
+   "text": "mefu meli mepa meso requires meze midu also"
+  },
+  {
+   "label": "conflict",
+   "of": 78,
+   "text": "gevu gidi gika gimo requires seto sibe"
+  },
+  {
+   "label": "new",
+   "text": "mefu meli fate fazu requires fefi fela"
+  },
+  {
+   "label": "repeat",
+   "of": 29,
+   "text": "miki mina miro mive requires mobu mogi also"
+  },
+  {
+   "label": "conflict",
+   "of": 79,
+   "text": "gobi goga golo gope requires sifu sili"
+  },
+  {
+   "label": "new",
+   "text": "miki mina feno fese requires fevu fidi"
+  },
+  {
+   "label": "repeat",
+   "of": 30,
+   "text": "moma mopo mote mozu requires mufi mula also"
+  },
+  {
+   "label": "conflict",
+   "of": 80,
+   "text": "gufa guko gune guru requires sipa siso"
+  },
+  {
+   "label": "new",
+   "text": "moma mopo fika fimo requires fire fitu"
+  },
+  {
+   "label": "repeat",
+   "of": 31,
+   "text": "muno muse muvu nadi requires naka namo also"
+  },
+  {
+   "label": "conflict",
+   "of": 81,
+   "text": "kago kame kapu kati requires size sodu"
+  },
+  {
+   "label": "new",
+   "text": "muno muse fobi foga requires folo fope"
+  },
+  {
+   "label": "repeat",
+   "of": 32,
+   "text": "nare natu nebi nega requires nelo nepe also"
+  },
+  {
+   "label": "conflict",
+   "of": 82,
+   "text": "kele kenu kesi keza requires soki sona"
+  },
+  {
+   "label": "new",
+   "text": "nare natu fosu fozi requires fufa fuko"
+  },
+  {
+   "label": "repeat",
+   "of": 33,
+   "text": "nesu nezi nifa niko requires nine niru also"
+  },
+  {
+   "label": "conflict",
+   "of": 83,
+   "text": "kimu kiri kiva kobo requires soro sove"
+  },
+  {
+   "label": "new",
+   "text": "nesu nezi fune furu requires fuvi gada"
+  },
+  {
+   "label": "repeat",
+   "of": 34,
+   "text": "nivi noda nogo nome requires nopu noti also"
+  },
+  {
+   "label": "conflict",
+   "of": 84,
+   "text": "kopi kota kozo kufe requires subu sugi"
+  },
+  {
+   "label": "new",
+   "text": "nivi noda gago game requires gapu gati"
+  },
+  {
+   "label": "repeat",
+   "of": 35,
+   "text": "nuba nufo nule nunu requires nusi nuza also"
+  },
+  {
+   "label": "conflict",
+   "of": 85,
+   "text": "kusa kuvo lade lagu requires suma supo"
+  },
+  {
+   "label": "new",
+   "text": "nuba nufo geba gefo requires gele genu"
+  },
+  {
+   "label": "repeat",
+   "of": 36,
+   "text": "pado pake pamu pari requires pava pebo also"
+  },
+  {
+   "label": "conflict",
+   "of": 86,
+   "text": "lato lebe lefu leli requires sute suzu"
+  },
+  {
+   "label": "new",
+   "text": "pado pake gesi geza requires gido gike"
+  },
+  {
+   "label": "repeat",
+   "of": 37,
+   "text": "pege pelu pepi peta requires pezo pife also"
+  },
+  {
+   "label": "conflict",
+   "of": 87,
+   "text": "leze lidu liki lina requires tafi tala"
+  },
+  {
+   "label": "new",
+   "text": "pege pelu gimu giri requires giva gobo"
+  },
+  {
+   "label": "repeat",
+   "of": 38,
+   "text": "piku pini pisa pivo requires pode pogu also"
+  },
+  {
+   "label": "conflict",
+   "of": 88,
+   "text": "lobu logi loma lopo requires tano tase"
+  },
+  {
+   "label": "new",
+   "text": "piku pini goge golu requires gopi gota"
+  },
+  {
+   "label": "repeat",
+   "of": 39,
+   "text": "pomi pora poto pube requires pufu puli also"
+  },
+  {
+   "label": "conflict",
+   "of": 89,
+   "text": "lufi lula luno luse requires tavu tedi"
+  },
+  {
+   "label": "new",
+   "text": "pomi pora gozo gufe requires guku guni"
+  },
+  {
+   "label": "repeat",
+   "of": 40,
+   "text": "pupa puso puze radu requires raki rana also"
+  },
+  {
+   "label": "conflict",
+   "of": 90,
+   "text": "maka mamo mare matu requires teka temo"
+  },
+  {
+   "label": "new",
+   "text": "pupa puso gusa guvo requires kade kagu"
+  },
+  {
+   "label": "repeat",
+   "of": 41,
+   "text": "raro rave rebu regi requires rema repo also"
+  },
+  {
+   "label": "conflict",
+   "of": 91,
+   "text": "melo mepe mesu mezi requires tere tetu"
+  },
+  {
+   "label": "new",
+   "text": "raro rave kami kara requires kato kebe"
+  },
+  {
+   "label": "repeat",
+   "of": 42,
+   "text": "rete rezu rifi rila requires rino rise also"
+  },
+  {
+   "label": "conflict",
+   "of": 92,
+   "text": "mine miru mivi moda requires tibi tiga"
+  },
+  {
+   "label": "new",
+   "text": "rete rezu kefu keli requires kepa keso"
+  },
+  {
+   "label": "repeat",
+   "of": 43,
+   "text": "rivu rodi roka romo requires rore rotu also"
+  },
+  {
+   "label": "conflict",
+   "of": 93,
+   "text": "mopu moti muba mufo requires tilo tipe"
+  },
+  {
+   "label": "new",
+   "text": "rivu rodi keze kidu requires kiki kina"
+  },
+  {
+   "label": "repeat",
+   "of": 44,
+   "text": "rubi ruga rulo rupe requires rusu ruzi also"
+  },
+  {
+   "label": "conflict",
+   "of": 94,
+   "text": "musi muza nado nake requires tisu tizi"
+  },
+  {
+   "label": "new",
+   "text": "rubi ruga kiro kive requires kobu kogi"
+  },
+  {
+   "label": "repeat",
+   "of": 45,
+   "text": "safa sako sane saru requires savi seda also"
+  },
+  {
+   "label": "conflict",
+   "of": 95,
+   "text": "nava nebo nege nelu requires tofa toko"
+  },
+  {
+   "label": "new",
+   "text": "safa sako koma kopo requires kote kozu"
+  },
+  {
+   "label": "repeat",
+   "of": 46,
+   "text": "sego seme sepu seti requires siba sifo also"
+  },
+  {
+   "label": "conflict",
+   "of": 96,
+   "text": "nezo nife niku nini requires tone toru"
+  },
+  {
+   "label": "new",
+   "text": "sego seme kufi kula requires kuno kuse"
+  },
+  {
+   "label": "repeat",
+   "of": 47,
+   "text": "sile sinu sisi siza requires sodo soke also"
+  },
+  {
+   "label": "conflict",
+   "of": 97,
+   "text": "node nogu nomi nora requires tovi tuda"
+  },
+  {
+   "label": "new",
+   "text": "sile sinu kuvu ladi requires laka lamo"
+  },
+  {
+   "label": "repeat",
+   "of": 48,
+   "text": "somu sori sova subo requires suge sulu also"
+  },
+  {
+   "label": "conflict",
+   "of": 98,
+   "text": "nufu nuli nupa nuso requires tugo tume"
+  },
+  {
+   "label": "new",
+   "text": "somu sori lare latu requires lebi lega"
+  },
+  {
+   "label": "repeat",
+   "of": 49,
+   "text": "supi suta suzo tafe requires taku tani also"
+  },
+  {
+   "label": "conflict",
+   "of": 99,
+   "text": "paki pana paro pave requires tupu tuti"
+  },
+  {
+   "label": "new",
+   "text": "supi suta lelo lepe requires lesu lezi"
+  },
+  {
+   "label": "repeat",
+   "of": 50,
+   "text": "tasa tavo tede tegu requires temi tera also"
+  },
+  {
+   "label": "new",
+   "text": "tasa tavo lifa liko requires line liru"
+  },
+  {
+   "label": "repeat",
+   "of": 51,
+   "text": "teto tibe tifu tili requires tipa tiso also"
+  },
+  {
+   "label": "new",
+   "text": "teto tibe livi loda requires logo lome"
+  },
+  {
+   "label": "repeat",
+   "of": 52,
+   "text": "tize todu toki tona requires toro tove also"
+  },
+  {
+   "label": "new",
+   "text": "tize todu lopu loti requires luba lufo"
+  },
+  {
+   "label": "repeat",
+   "of": 53,
+   "text": "tubu tugi tuma tupo requires tute tuzu also"
+  },
+  {
+   "label": "new",
+   "text": "tubu tugi lule lunu requires lusi luza"
+  },
+  {
+   "label": "repeat",
+   "of": 54,
+   "text": "vafi vala vano vase requires vavu vedi also"
+  },
+  {
+   "label": "new",
+   "text": "vafi vala mado make requires mamu mari"
+  },
+  {
+   "label": "repeat",
+   "of": 55,
+   "text": "veka vemo vere vetu requires vibi viga also"
+  },
+  {
+   "label": "new",
+   "text": "veka vemo mava mebo requires mege melu"
+  },
+  {
+   "label": "repeat",
+   "of": 56,
+   "text": "vilo vipe visu vizi requires vofa voko also"
+  },
+  {
+   "label": "new",
+   "text": "vilo vipe mepi meta requires mezo mife"
+  },
+  {
+   "label": "repeat",
+   "of": 57,
+   "text": "vone voru vovi vuda requires vugo vume also"
+  },
+  {
+   "label": "new",
+   "text": "vone voru miku mini requires misa mivo"
+  },
+  {
+   "label": "repeat",
+   "of": 58,
+   "text": "vupu vuti zaba zafo requires zale zanu also"
+  },
+  {
+   "label": "new",
+   "text": "vupu vuti mode mogu requires momi mora"
+  },
+  {
+   "label": "repeat",
+   "of": 59,
+   "text": "zasi zaza zedo zeke requires zemu zeri also"
+  },
+  {
+   "label": "new",
+   "text": "zasi zaza moto mube requires mufu muli"
+  },
+  {
+   "label": "repeat",
+   "of": 60,
+   "text": "zeva zibo zige zilu requires zipi zita also"
+  },
+  {
+   "label": "new",
+   "text": "zeva zibo mupa muso requires muze nadu"
+  },
+  {
+   "label": "repeat",
+   "of": 61,
+   "text": "zizo zofe zoku zoni requires zosa zovo also"
+  },
+  {
+   "label": "new",
+   "text": "zizo zofe naki nana requires naro nave"
+  },
+  {
+   "label": "repeat",
+   "of": 62,
+   "text": "zude zugu zumi zura requires zuto babe also"
+  },
+  {
+   "label": "new",
+   "text": "zude zugu nebu negi requires nema nepo"
+  },
+  {
+   "label": "repeat",
+   "of": 63,
+   "text": "bafu bali bapa baso requires baze bedu also"
+  },
+  {
+   "label": "new",
+   "text": "bafu bali nete nezu requires nifi nila"
+  },
+  {
+   "label": "repeat",
+   "of": 64,
+   "text": "beki bena bero beve requires bibu bigi also"
+  },
+  {
+   "label": "new",
+   "text": "beki bena nino nise requires nivu nodi"
+  },
+  {
+   "label": "repeat",
+   "of": 65,
+   "text": "bima bipo bite bizu requires bofi bola also"
+  },
+  {
+   "label": "new",
+   "text": "bima bipo noka nomo requires nore notu"
+  },
+  {
+   "label": "repeat",
+   "of": 66,
+   "text": "bono bose bovu budi requires buka bumo also"
+  },
+  {
+   "label": "new",
+   "text": "bono bose nubi nuga requires nulo nupe"
+  },
+  {
+   "label": "repeat",
+   "of": 67,
+   "text": "bure butu dabi daga requires dalo dape also"
+  },
+  {
+   "label": "new",
+   "text": "bure butu nusu nuzi requires pafa pako"
+  },
+  {
+   "label": "repeat",
+   "of": 68,
+   "text": "dasu dazi defa deko requires dene deru also"
+  },
+  {
+   "label": "new",
+   "text": "dasu dazi pane paru requires pavi peda"
+  },
+  {
+   "label": "repeat",
+   "of": 69,
+   "text": "devi dida digo dime requires dipu diti also"
+  },
+  {
+   "label": "new",
+   "text": "devi dida pego peme requires pepu peti"
+  },
+  {
+   "label": "repeat",
+   "of": 70,
+   "text": "doba dofo dole donu requires dosi doza also"
+  },
+  {
+   "label": "repeat",
+   "of": 71,
+   "text": "dudo duke dumu duri requires duva fabo also"
+  },
+  {
+   "label": "repeat",
+   "of": 72,
+   "text": "fage falu fapi fata requires fazo fefe also"
+  },
+  {
+   "label": "repeat",
+   "of": 73,
+   "text": "feku feni fesa fevo requires fide figu also"
+  },
+  {
+   "label": "repeat",
+   "of": 74,
+   "text": "fimi fira fito fobe requires fofu foli also"
+  },
+  {
+   "label": "repeat",
+   "of": 75,
+   "text": "fopa foso foze fudu requires fuki funa also"
+  },
+  {
+   "label": "repeat",
+   "of": 76,
+   "text": "furo fuve gabu gagi requires gama gapo also"
+  },
+  {
+   "label": "repeat",
+   "of": 77,
+   "text": "gate gazu gefi gela requires geno gese also"
+  },
+  {
+   "label": "repeat",
+   "of": 78,
+   "text": "gevu gidi gika gimo requires gire gitu also"
+  },
+  {
+   "label": "repeat",
+   "of": 79,
+   "text": "gobi goga golo gope requires gosu gozi also"
+  }
+ ]
+}

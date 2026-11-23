@@ -22,6 +22,8 @@ export type AuditAction =
   | 'feedback'
   | 'tombstones_reduced'
   | 'evidence_merged'
+  | 'merge_proposed'
+  | 'sweep'
   | 'supersession_applied'
   | 'undone';
 

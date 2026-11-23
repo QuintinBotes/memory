@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setup, run, remember, tools } from './helpers.mjs';
+import { setup, run, remember, tools, sessionStart } from './helpers.mjs';
 
 const open = (s) => new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
 const rows = (s, sql, ...args) => {
@@ -215,4 +215,108 @@ test('a quarantined agent proposal that conflicts stays a quarantined proposal a
   assert.ok(p.quarantine);
   const out = list(s);
   assert.ok(out.includes('is main') && !out.includes('trunk'), out);
+});
+
+// FR-006: the daily sweep. Two active items that are repeats of each other can only exist from before consolidation,
+// so the test makes one by hand.
+const duplicates = (s) => {
+  rem(s, 'Handlers log the request id before returning to the caller', '--type', 'decision', '--source', 'a');
+  rem(s, 'Handlers log the request id before returning to the caller today', '--type', 'convention', '--source', 'b');
+  const db = open(s);
+  db.prepare("UPDATE items SET type = 'decision' WHERE type = 'convention'").run();
+  db.close();
+  const [older, newer] = rows(s, "SELECT id FROM items WHERE status = 'active' ORDER BY created_at, rowid").map((r) => r.id);
+  return { older, newer };
+};
+const sweepRuns = (s) => rows(s, "SELECT 1 FROM audit_events WHERE action = 'sweep'").length;
+
+test('FR-006 memory sweep proposes a merge of two active repeats, applies nothing, and a second sweep adds nothing', () => {
+  const s = setup();
+  const { older, newer } = duplicates(s);
+  const r = run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /proposed 1 merge/);
+  assert.deepEqual(rows(s, 'SELECT id, status, supersedes FROM items ORDER BY created_at, rowid').map((i) => [i.id, i.status, i.supersedes]), [
+    [older, 'active', null],
+    [newer, 'active', older],
+  ]);
+  assert.match(review(s).stdout, new RegExp(`supersedes \\[${older}\\]`));
+  assert.match(run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stdout, /proposed 0 merges/);
+  assert.equal(approve(s, newer).status, 0);
+  assert.equal(rows(s, 'SELECT status FROM items WHERE id = ?', older)[0].status, 'superseded');
+});
+
+test('FR-006 the session start runs the sweep at most once a day, and prints the same slice', () => {
+  const s = setup();
+  const { older, newer } = duplicates(s);
+  const before = sessionStart(s.acmeApi, s.data, s.configA).stdout;
+  assert.equal(sweepRuns(s), 1);
+  assert.equal(rows(s, 'SELECT supersedes FROM items WHERE id = ?', newer)[0].supersedes, older);
+  assert.equal(sessionStart(s.acmeApi, s.data, s.configA).stdout, before);
+  assert.equal(sweepRuns(s), 1, 'the second start within a day does not sweep again');
+  const db = open(s);
+  db.prepare("UPDATE audit_events SET created_at = '2020-01-01T00:00:00.000Z' WHERE action = 'sweep'").run();
+  db.close();
+  sessionStart(s.acmeApi, s.data, s.configA);
+  assert.equal(sweepRuns(s), 2);
+});
+
+test('edge: a broader-scope item that conflicts with a narrower one is not recalled, and neither is superseded', () => {
+  const s = setup();
+  const org = idOf(run(['remember', '--scope', 'organisation', '--type', 'decision', '--', 'Services retry failed calls three times'], { cwd: s.acmeApi, data: s.data, config: s.configA }));
+  const repo = idOf(rem(s, 'Services retry failed calls five times', '--type', 'decision'));
+  const shown = list(s);
+  assert.match(shown, new RegExp(`\\[${repo}\\]`));
+  assert.doesNotMatch(shown, new RegExp(`\\[${org}\\]`));
+  assert.doesNotMatch(sessionStart(s.acmeApi, s.data, s.configA).stdout, new RegExp(org));
+  assert.deepEqual(rows(s, 'SELECT status, supersedes FROM items ORDER BY created_at, rowid').map((i) => [i.status, i.supersedes]), [['active', null], ['active', null]]);
+  // An unrelated broader item is still recalled.
+  const other = idOf(run(['remember', '--scope', 'organisation', '--type', 'decision', '--', 'Releases are cut on Tuesdays'], { cwd: s.acmeApi, data: s.data, config: s.configA }));
+  assert.match(list(s), new RegExp(`\\[${other}\\]`));
+});
+
+// SC-001 and SC-002 on the labelled fixture: 100 stored items, 200 incoming statements made up from invented words,
+// each labelled `repeat of <n>`, `conflict with <n>` or `new`. Deterministic, offline, no model.
+// SC-003 replays the owner's own review history, which is local data, so it is not in the suite.
+// SC-004 is covered by US2.2.
+test('SC-001 and SC-002 consolidation on the 200-statement labelled fixture meets the issue bars', () => {
+  const s = setup();
+  const fixture = JSON.parse(readFileSync(new URL('./fixtures/consolidation/statements.json', import.meta.url), 'utf8'));
+  const config = join(s.data, 'config.json');
+  const importNotes = (name, lines) => {
+    writeFileSync(join(s.acmeApi, name), lines.map((text) => JSON.stringify({ kind: 'decision', text })).join('\n') + '\n');
+    const c = JSON.parse(readFileSync(config, 'utf8'));
+    c.imports = { [s.acmeApi]: { notes: name } };
+    writeFileSync(config, JSON.stringify(c));
+    const r = run(['import'], { cwd: s.base, data: s.data, config: s.configA });
+    assert.equal(r.status, 0, r.stderr);
+  };
+  importNotes('store.jsonl', fixture.store);
+  const db = open(s);
+  db.prepare("UPDATE items SET status = 'active'").run();
+  db.close();
+  const stored = fixture.store.map((text) => byText(s, text)[0].id);
+  importNotes('incoming.jsonl', fixture.incoming.map((i) => i.text));
+
+  const tally = { repeat: [0, 0], conflict: [0, 0], new: [0, 0] };
+  const wrong = { mergedNew: 0, supersedingNew: 0 };
+  for (const i of fixture.incoming) {
+    const [row] = byText(s, i.text);
+    const merged = row === undefined;
+    tally[i.label][1]++;
+    if (i.label === 'repeat' && merged) tally.repeat[0]++;
+    if (i.label === 'conflict' && !merged && row.supersedes === stored[i.of]) tally.conflict[0]++;
+    if (i.label === 'new') {
+      if (merged) wrong.mergedNew++;
+      else if (row.supersedes !== null) wrong.supersedingNew++;
+      else tally.new[0]++;
+    }
+  }
+  assert.deepEqual([tally.repeat[1], tally.conflict[1], tally.new[1]], [80, 50, 70]);
+  assert.ok(tally.repeat[0] / 80 >= 0.9, `repeats merged: ${tally.repeat[0]}/80`);
+  assert.ok(wrong.mergedNew / 70 <= 0.02, `new wrongly merged: ${wrong.mergedNew}/70`);
+  assert.ok(tally.conflict[0] / 50 >= 0.85, `conflicts shown as supersessions: ${tally.conflict[0]}/50`);
+  assert.ok(wrong.supersedingNew / 70 <= 0.05, `new shown as superseding: ${wrong.supersedingNew}/70`);
+  // Nothing is rewritten or lost.
+  assert.equal(rows(s, 'SELECT 1 FROM items WHERE statement IN (' + fixture.store.map(() => '?').join(',') + ')', ...fixture.store).length, 100);
 });
