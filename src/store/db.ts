@@ -192,7 +192,8 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
 
   // v12 - failures and reverts (#18). An episode is one failed session command, scrubbed, kept 30 days (only with the
   // failing-commands opt-in); commit_items names the items shown in the session that made a commit, and reverts the
-  // reverts of such commits already counted, so one revert is never counted twice.
+  // reverts of such commits already counted, so one revert is never counted twice, and revert_counts the contradictions
+  // those reverts have added to an item (one per session that reverted it, none for a revert that was itself reverted).
   `
   CREATE TABLE IF NOT EXISTS episodes (
     id TEXT PRIMARY KEY,
@@ -218,7 +219,13 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     revert_sha TEXT PRIMARY KEY,
     reverted_sha TEXT NOT NULL,
     at TEXT NOT NULL,
-    seen_at TEXT NOT NULL
+    seen_at TEXT NOT NULL,
+    linked INTEGER NOT NULL DEFAULT 0,
+    cancelled_by TEXT
+  );
+  CREATE TABLE IF NOT EXISTS revert_counts (
+    item_id TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    applied INTEGER NOT NULL
   );
   `,
 ];

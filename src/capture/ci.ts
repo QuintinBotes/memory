@@ -75,9 +75,16 @@ export function captureCi(data: string, config: Config, cwd: string, limit = 100
         out.push(`run ${failed.databaseId}: no line of its log names the failure well enough to recall it by`);
         continue;
       }
+      if (!/^[0-9a-f]{7,40}$/.test(passed.headSha)) {
+        out.push(`run ${passed.databaseId}: its commit is not a hash`);
+        continue;
+      }
       const fix = passed.headSha.slice(0, 7);
+      // The workflow's name is free text from the repository: kept only when scrubbing leaves it as it was.
+      const clean = scrubFailure(String(failed.workflowName), names);
+      const flow = clean === failed.workflowName && /^[\w .-]{1,40}$/.test(clean) ? `the ${clean} run` : 'a CI run';
       const id = proposeRepair(db, repo, {
-        signature, fingerprint, fix, how: `the ${failed.workflowName} run passed`,
+        signature, fingerprint, fix, how: `${flow} passed`,
         source: `ci failed-run:${failed.databaseId} passed-run:${passed.databaseId} fingerprint:${fingerprint} passed-after:${fix}`, evidenceAt: passed.createdAt,
       });
       out.push(id === null ? `run ${failed.databaseId}: the proposal was refused` : `run ${failed.databaseId} then ${passed.databaseId}: repair proposal ${id}`);

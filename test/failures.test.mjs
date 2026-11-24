@@ -4,7 +4,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { setup as sandboxed, remember, run, runAsync, commit, storeBytes, assemble } from './helpers.mjs';
+import { userInfo } from 'node:os';
+import { symlinkSync } from 'node:fs';
+import { setup as sandboxed, remember, run, runAsync, commit, storeBytes, assemble, tools } from './helpers.mjs';
 
 // Slice 13 (#18): a failure that was fixed becomes a repair proposal, and a revert weakens what informed the change.
 /** The sandbox with acme's store already made, so a test can ask it questions before anything writes to it. */
@@ -41,10 +43,10 @@ const repairs = (s) => sql(s, "SELECT id, status, statement FROM items WHERE typ
 const evidence = (s, id) => sql(s, 'SELECT source_ref FROM evidence WHERE item_id = ?', id).map((r) => r.source_ref);
 
 const base = (s, session, command, extra = {}) => ({ session_id: session, tool_name: 'Bash', tool_input: { command }, cwd: s.acmeApi, ...extra });
-const failed = (s, command, error = ERROR(), session = 's1') =>
-  runAsync(['failure-recall'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ ...base(s, session, command), hook_event_name: 'PostToolUseFailure', error, is_interrupt: false }) });
-const passed = (s, command, session = 's1', env) =>
-  runAsync(['command-passed'], { cwd: s.acmeApi, data: s.data, config: s.configA, env, input: JSON.stringify({ ...base(s, session, command), hook_event_name: 'PostToolUse', tool_response: { stdout: 'ok' } }) });
+const failed = (s, command, error = ERROR(), session = 's1', cwd = s.acmeApi) =>
+  runAsync(['failure-recall'], { cwd, data: s.data, config: s.configA, input: JSON.stringify({ ...base(s, session, command), cwd, hook_event_name: 'PostToolUseFailure', error, is_interrupt: false }) });
+const passed = (s, command, session = 's1', env, cwd = s.acmeApi) =>
+  runAsync(['command-passed'], { cwd, data: s.data, config: s.configA, env, input: JSON.stringify({ ...base(s, session, command), cwd, hook_event_name: 'PostToolUse', tool_response: { stdout: 'ok' } }) });
 const enable = (s) => {
   const r = run(['init', '--failing-commands', 'on', '--confirm'], { cwd: s.base, data: s.data, config: s.configA });
   assert.equal(r.status, 0, r.stderr);
@@ -197,6 +199,7 @@ test('edge: another command passing, or the tools\' own commits and posts, are n
   }
   assert.equal(sql(s, "SELECT count(*) AS n FROM episodes WHERE session = 's2'")[0].n, 0, 'none recorded');
   assert.equal(repairs(s).length, 0);
+  commit(s.acmeApi, { 'fix.txt': '1\n' }, 'the fix');
   assert.equal((await passed(s, 'npm run build')).status, 0);
   assert.equal(repairs(s).length, 1, 'control: the same command passing is');
 });
@@ -255,8 +258,9 @@ const ago = (days) => new Date(Date.now() - days * 864e5).toISOString();
 
 test('US1.5 two memory-linked reverts within seven days turn recall off and say why; init --recall on turns it back on', async () => {
   const s = await twoLinked();
-  git(s.acmeApi, { GIT_COMMITTER_DATE: ago(3) }, 'revert', '--no-edit', s.shas[0]);
+  git(s.acmeApi, {}, 'revert', '--no-edit', s.shas[0]);
   assert.match(JSON.parse((await passed(s, 'git revert')).stdout).systemMessage, /1 revert counted/);
+  exec(s, `UPDATE reverts SET seen_at = '${ago(3)}'`);
   assert.equal(config(s).recallOff, undefined, 'one revert does not');
   assert.notEqual((await failed(s, 'npm run build', ERROR(), 'before')).stdout, '', 'recall is on');
   git(s.acmeApi, {}, 'revert', '--no-edit', s.shas[1]);
@@ -277,8 +281,9 @@ test('US1.5 two memory-linked reverts within seven days turn recall off and say 
 
 test('US1.5 two memory-linked reverts more than seven days apart leave recall on', async () => {
   const s = await twoLinked();
-  git(s.acmeApi, { GIT_COMMITTER_DATE: ago(9) }, 'revert', '--no-edit', s.shas[0]);
+  git(s.acmeApi, {}, 'revert', '--no-edit', s.shas[0]);
   await passed(s, 'git revert');
+  exec(s, `UPDATE reverts SET seen_at = '${ago(9)}'`);
   git(s.acmeApi, {}, 'revert', '--no-edit', s.shas[1]);
   const said = JSON.parse((await passed(s, 'git revert')).stdout).systemMessage;
   assert.match(said, /1 revert counted/);
@@ -352,6 +357,7 @@ test('the Bash hook on every command stays cheap: it opens no store for a comman
 
   enable(s);
   await failed(s, 'npm run build');
+  commit(s.acmeApi, { 'fix.txt': '1\n' }, 'the fix');
   const holder = new DatabaseSync(tenantFile(s));
   holder.exec('BEGIN IMMEDIATE');
   try {
@@ -428,8 +434,194 @@ test('FR-003 an Orbit run that failed a check and a later run that passed it giv
 test('migrating a store from schema 11 adds the failure tables', () => {
   const s = setup();
   remember(s.acmeApi, s.data, s.configA, 'A convention', '--scope', 'repository', '--type', 'convention');
-  exec(s, 'DROP TABLE episodes; DROP TABLE commit_items; DROP TABLE reverts; PRAGMA user_version = 11;');
+  const before = sql(s, 'SELECT i.id, i.statement, e.source_ref, e.quote_hash FROM items i JOIN evidence e ON e.item_id = i.id');
+  assert.equal(before.length, 2);
+  exec(s, 'DROP TABLE revert_counts; DROP TABLE episodes; DROP TABLE commit_items; DROP TABLE reverts; PRAGMA user_version = 11;');
   assert.equal(run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 12);
-  assert.deepEqual(sql(s, "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('episodes', 'commit_items', 'reverts') ORDER BY name").map((r) => r.name), ['commit_items', 'episodes', 'reverts']);
+  assert.deepEqual(sql(s, "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('episodes', 'commit_items', 'reverts', 'revert_counts') ORDER BY name").map((r) => r.name), ['commit_items', 'episodes', 'revert_counts', 'reverts']);
+  assert.deepEqual(sql(s, 'SELECT i.id, i.statement, e.source_ref, e.quote_hash FROM items i JOIN evidence e ON e.item_id = i.id'), before, 'the item and its evidence survive');
+});
+
+// ---- review of PR 67 ---------------------------------------------------------------------------------------------
+
+const HOME_DIR = assemble('/Us', 'ers/jdoe');
+const TOKEN = assemble('abcd', 'efgh1234ijkl5678');
+
+test('a command with secrets, paths or user names is stored as its program and subcommand only', async () => {
+  const s = setup();
+  enable(s);
+  const dirty = [
+    ['DB_PASSWORD=hunter2 npm run build --token=' + TOKEN + ` ${HOME_DIR}/secret/file.txt`, 'npm run build'],
+    [`cat ${HOME_DIR}/secret/file.txt`, 'cat'],
+    [`npm publish --//registry.npmjs.org/:_authToken=${TOKEN}`, 'npm publish'],
+    ['echo hunter2', 'echo'],
+  ];
+  for (const [i, [command, kept]] of dirty.entries()) {
+    assert.equal((await failed(s, command, ERROR(`/w${i}`), `d${i}`)).status, 0);
+    commit(s.acmeApi, { [`d${i}.txt`]: '1\n' }, 'fix');
+    assert.equal((await passed(s, command, `d${i}`)).status, 0);
+    assert.equal(sql(s, 'SELECT command FROM episodes WHERE session = ?', `d${i}`)[0].command, kept);
+  }
+  const bytes = storeBytes(s.data).toString('latin1');
+  for (const secret of ['hunter2', TOKEN, 'jdoe', 'secret/file', 'DB_PASSWORD']) assert.equal(bytes.includes(secret), false, secret);
+  assert.ok(repairs(s).some((r) => /`npm run build` passed/.test(r.statement)), 'control: the program and subcommand are kept and the feature works');
+});
+
+test('user names and home directories are normalised anywhere in a signature line', async () => {
+  const me = userInfo().username;
+  const s = setup();
+  enable(s);
+  const error = `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'esbuild' imported from ${assemble('/ho', 'me/jdoe')}/app/scripts/build.mjs for user ${me} and C:\\Users\\jdoe\\app and ${HOME_DIR}/x\n`;
+  await repairedInSession(s, error);
+  const [item] = repairs(s);
+  assert.ok(item, 'control: a proposal is made');
+  const bytes = storeBytes(s.data).toString('latin1');
+  assert.equal(bytes.includes('jdoe'), false);
+  if (me.length >= 3) assert.equal(bytes.includes(me), false, 'the machine user name');
+  assert.match(item.statement, /esbuild/);
+});
+
+test('an episode is for one command in one directory, and a pass at the failing commit is a retry, not a repair', async () => {
+  const s = setup();
+  enable(s);
+  commit(s.acmeApi, { 'packages/a/x.txt': '1\n', 'packages/b/x.txt': '1\n' }, 'packages');
+  const a = join(s.acmeApi, 'packages/a');
+  const b = join(s.acmeApi, 'packages/b');
+  await failed(s, 'npm test', ERROR(), 's1', a);
+  commit(s.acmeApi, { 'fix.txt': '1\n' }, 'fix');
+  await passed(s, 'npm test', 's1', undefined, b);
+  assert.equal(repairs(s).length, 0, 'passing in packages/b does not repair packages/a');
+  await passed(s, 'npm test', 's1', undefined, a);
+  assert.equal(repairs(s).length, 1, 'control: passing in packages/a does');
+
+  await failed(s, 'npm run lint', ERROR('/other'), 's2');
+  await passed(s, 'npm run lint', 's2');
+  assert.equal(repairs(s).length, 1, 'a pass with HEAD unchanged writes no proposal and no passed-after marker');
+  assert.equal(sql(s, "SELECT repaired_at FROM episodes WHERE session = 's2'")[0].repaired_at, null, 'the episode stays open');
+  commit(s.acmeApi, { 'fix2.txt': '1\n' }, 'fix 2');
+  await passed(s, 'npm run lint', 's2');
+  assert.equal(repairs(s).length, 2, 'control: a pass after a new commit is a repair');
+});
+
+/** A linked commit and a hook-seen revert fixture: items shown, commit made, returns the repository and the commit. */
+async function linkedCommit(session = 's1', file = 'linked.txt') {
+  const s = setup();
+  remember(s.acmeApi, s.data, s.configA, RECIPE, '--scope', 'repository', '--type', 'repair-recipe');
+  assert.notEqual((await failed(s, 'npm run build', ERROR(), session)).stdout, '');
+  commit(s.acmeApi, { [file]: '1\n' }, 'linked change');
+  await passed(s, 'git commit', session);
+  s.linked = head(s.acmeApi);
+  s.recipe = sql(s, "SELECT id FROM items WHERE type = 'repair-recipe'")[0].id;
+  return s;
+}
+const contradictions = (s) => sql(s, 'SELECT contradictions FROM items WHERE id = ?', s.recipe)[0].contradictions;
+
+test('a forged revert counts for nothing: another author, a quoting body, a command that only mentions git revert', async () => {
+  const s = await linkedCommit();
+  git(s.acmeApi, { GIT_AUTHOR_EMAIL: 'someone@example.com', GIT_COMMITTER_EMAIL: 'someone@example.com' }, 'commit', '--allow-empty', '-q', '-m', `Revert "linked change"`, '-m', `This reverts commit ${s.linked}.`);
+  git(s.acmeApi, {}, 'commit', '--allow-empty', '-q', '-m', 'notes', '-m', `This reverts commit ${s.linked}.`);
+  assert.equal((await passed(s, 'git revert HEAD')).stdout, '');
+  assert.equal(contradictions(s), 0, 'neither forged commit counts');
+  git(s.acmeApi, {}, 'revert', '--no-edit', s.linked);
+  assert.equal((await passed(s, 'echo "git revert later" && true')).stdout, '', 'a command that mentions git revert is not one');
+  assert.equal(contradictions(s), 0);
+  assert.match(JSON.parse((await passed(s, 'git revert HEAD')).stdout).systemMessage, /1 revert counted/);
+  assert.equal(contradictions(s), 1, 'control: the real revert by the local user counts');
+});
+
+test('a revert of a revert cancels it, and many reverts in one session add one contradiction per item', async () => {
+  const s = await linkedCommit();
+  git(s.acmeApi, {}, 'revert', '--no-edit', s.linked);
+  await passed(s, 'git revert HEAD');
+  assert.equal(contradictions(s), 1);
+  const first = head(s.acmeApi);
+  git(s.acmeApi, {}, 'revert', '--no-edit', first);
+  await passed(s, 'git revert HEAD');
+  assert.equal(contradictions(s), 0, 'reverting the revert takes the contradiction back');
+
+  const m = await linkedCommit('s1', 'one.txt');
+  commit(m.acmeApi, { 'two.txt': '1\n' }, 'second');
+  const second = head(m.acmeApi);
+  await passed(m, 'git commit', 's1');
+  git(m.acmeApi, {}, 'revert', '--no-edit', second);
+  git(m.acmeApi, {}, 'revert', '--no-edit', m.linked);
+  await passed(m, 'git revert HEAD');
+  assert.equal(contradictions(m), 1, 'two reverted commits of one session: one contradiction for the item');
+});
+
+test('recall off stops MCP search, get and related, memory recall and memory related, and not propose', async () => {
+  const s = await twoLinked();
+  const QUERY = 'ERR_MODULE_NOT_FOUND esbuild build tool';
+  const id = sql(s, "SELECT id FROM items WHERE type = 'repair-recipe'")[0].id;
+  const ask = () => tools(s.acmeApi, s.data, s.configA, [['memory_search', { query: QUERY }], ['memory_get', { id }], ['memory_related', { path: 'src/ledger.ts' }]]);
+  assert.match(ask()[0].text, /esbuild/, 'control: search finds the item before');
+  const orbitRecall = () => run(['recall', '--orbit', '--check', 'unit'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  for (const sha of s.shas) {
+    git(s.acmeApi, {}, 'revert', '--no-edit', sha);
+    await passed(s, 'git revert HEAD');
+  }
+  assert.notEqual(config(s).recallOff, undefined);
+  for (const r of ask()) assert.match(r.text, /Recall is off: two memory-linked reverts/);
+  assert.match(orbitRecall().stderr, /Recall is off/);
+  assert.equal(orbitRecall().stdout, '');
+  assert.match(run(['related', 'src/ledger.ts'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stderr, /Recall is off/);
+  assert.match(run(['recall', '--diff', 'HEAD~1..HEAD'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stderr, /Recall is off/);
+  const [p] = tools(s.acmeApi, s.data, s.configA, [['memory_propose', { statement: 'Builds use npm ci', scope: 'repository', type: 'convention', evidence: { source: 'https://github.com/acme/api/pull/7#issuecomment-1' } }]]);
+  assert.equal(p.isError, false, 'proposing still works');
+});
+
+test('memory ci with no gh, gh not signed in, or a failing gh run view says so and stores nothing; it uses only run list and run view', () => {
+  const s = setup();
+  const empty = join(s.base, 'nogh');
+  mkdirSync(empty);
+  symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(empty, 'git'));
+  const none = run(['ci'], { cwd: s.acmeApi, data: s.data, config: s.configA, path: empty });
+  assert.equal(none.status, 0, none.stderr);
+  assert.match(none.stdout, /gh run list failed \(ENOENT\)/);
+
+  const dir = join(s.base, 'gh2');
+  mkdirSync(dir);
+  const calls = join(dir, 'calls');
+  const write = (body) => {
+    writeFileSync(join(dir, 'gh'), `#!/bin/sh\necho "$@" >> "${calls}"\n${body}\n`);
+    chmodSync(join(dir, 'gh'), 0o755);
+  };
+  const ghRun = () => run(['ci'], { cwd: s.acmeApi, data: s.data, config: s.configA, path: `${dir}:${process.env.PATH}` });
+  write('echo "gh: To get started with GitHub CLI, please run: gh auth login" >&2; exit 4');
+  const out = ghRun();
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /gh run list failed/);
+
+  const runs = JSON.stringify([run1(10, 'failure', 'a'.repeat(40), '2026-11-24T10:00:00Z'), run1(11, 'success', 'b'.repeat(40), '2026-11-24T11:00:00Z')]);
+  write(`case "$2" in list) echo '${runs}' ;; *) exit 1 ;; esac`);
+  const noLog = ghRun();
+  assert.equal(noLog.status, 0, noLog.stderr);
+  assert.match(noLog.stdout, /run 10: its log could not be read/);
+  assert.equal(repairs(s).length, 0);
+
+  const verbs = new Set(readFileSync(calls, 'utf8').split('\n').filter(Boolean).map((l) => l.split(' ').slice(0, 2).join(' ')));
+  assert.deepEqual([...verbs].sort(), ['run list', 'run view']);
+});
+
+test('a workflow name is scrubbed, and dropped when scrubbing changes it', () => {
+  const s = setup();
+  const mail = assemble('ops', '@corp.example');
+  const gh = fakeGh(s, [run1(10, 'failure', 'a'.repeat(40), '2026-11-24T10:00:00Z', { workflowName: `build ${mail}` }), run1(11, 'success', 'b'.repeat(40), '2026-11-24T11:00:00Z', { workflowName: `build ${mail}` })], { 10: LOG() });
+  assert.equal(ci(s, gh).status, 0);
+  const [item] = repairs(s);
+  assert.match(item.statement, / => a CI run passed after the fix at bbbbbbb$/);
+  assert.equal(storeBytes(s.data).toString('latin1').includes(mail), false);
+});
+
+test('an Orbit repair is recalled by recall --orbit once approved, by fingerprint or check, not by a Bash error', async () => {
+  const FP = 'fp:tsc:TS2322';
+  const s = orbitFixture([['run-3', 'FAILED', [{ check_id: 'unit', signature: FP }]], ['run-5', 'PASSED', [{ check_id: 'unit' }]]]);
+  writeFileSync(join(s.acmeApi, '.orbit', 'config.yaml'), 'version: 1\nknowledge:\n  enabled: true\n  max_advisory_tokens: 800\n  lessons_in_prompts: true\n  max_prompt_lessons: 3\n');
+  const [{ id }] = repairs(s);
+  const recall = () => run(['recall', '--orbit', '--fingerprint', FP], { cwd: s.acmeApi, data: s.data, config: s.configA }).stdout;
+  assert.equal(recall(), '', 'a proposal is not recalled');
+  assert.equal(run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.match(recall(), /a later Orbit run passed the check/);
+  assert.equal((await failed(s, 'npm test', `Error: TS2322 type mismatch in tsc\n`, 'o1')).stdout, '', 'a Bash error does not match its hash signature');
 });

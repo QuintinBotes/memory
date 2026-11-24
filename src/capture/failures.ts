@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { userInfo } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
 import { addItem } from '../consolidate.ts';
 import { currentConfigDir, loadConfig, saveConfig, type Config } from '../config.ts';
@@ -12,7 +13,7 @@ import { HOOK_BUSY_MS, openStore } from '../store/db.ts';
 import { tenantFile } from '../store/paths.ts';
 import { inTransaction } from '../store/transaction.ts';
 import { scrub } from './capture.ts';
-import { scanReverts, type RevertScan } from './reverts.ts';
+import { isGitRevert, scanReverts, type RevertScan } from './reverts.ts';
 
 /** Episodes are deleted after this many days (FR-006 of #18). */
 export const EPISODE_DAYS = 30;
@@ -25,8 +26,6 @@ const episodesOn = (config: Config | null): config is Config => config !== null 
 /** Commands memory never captures: the tools' own commits, pushes and posts, and memory itself. */
 export const ownCommand = (command: string): boolean => /\bgit\s+(?:commit|push)\b|\bgh\s+(?:pr|issue|release|api)\b|memory\.mjs|\bmemory\s+\w/.test(command);
 
-const key = (command: string): string => createHash('sha256').update(command.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 16);
-
 export const git = (cwd: string, ...args: string[]): string | null => {
   try {
     return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
@@ -34,6 +33,32 @@ export const git = (cwd: string, ...args: string[]): string | null => {
     return null;
   }
 };
+
+/** Programs whose next words are subcommands (`npm run build`), not arguments; for any other program only its name is kept. */
+const SUBCOMMANDS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'npx', 'cargo', 'go', 'dotnet', 'make', 'gradle', 'mvn', 'pip', 'poetry', 'uv', 'pytest', 'tsc', 'node', 'docker']);
+
+/**
+ * What of a command is kept: its program (no directory) and, for a known tool, up to two plain subcommand words, so
+ * `DB_PASSWORD=x npm run build --token=y` is `npm run build`. Environment assignments, flags, paths, URLs and every other
+ * argument are dropped, because any of them may carry a secret or a user name. Empty when nothing safe is left.
+ */
+export function safeCommand(command: string): string {
+  const words = command.trim().split(/\s+/).filter(Boolean);
+  while (words[0] !== undefined && /^[A-Za-z_]\w*=/.test(words[0])) words.shift();
+  const program = words.shift()?.split('/').pop() ?? '';
+  if (!/^[\w.+-]{1,40}$/.test(program)) return '';
+  const out = [program];
+  if (SUBCOMMANDS.has(program)) {
+    for (const w of words.slice(0, 2)) {
+      if (!/^[a-z][a-z0-9:_-]{0,20}$/i.test(w)) break;
+      out.push(w);
+    }
+  }
+  return out.join(' ');
+}
+
+/** An episode is for one command in one directory of the repository: `npm test` in packages/a is not `npm test` in packages/b. */
+const key = (command: string, cwd: string): string => createHash('sha256').update(`${git(cwd, 'rev-parse', '--show-prefix')?.trim() ?? ''}\0${safeCommand(command)}`).digest('hex').slice(0, 16);
 
 /** The names of this repository's committers and authors, which no captured text may carry. */
 export function committerNames(cwd: string): string[] {
@@ -43,8 +68,11 @@ export function committerNames(cwd: string): string[] {
 
 /** Everything that must not be kept: credentials, emails, handles, webhook URLs, and the committers' names. */
 export function scrubFailure(text: string, names: string[]): string {
-  let out = scrub(text);
-  for (const n of names) out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'giu'), '[REDACTED:NAME]');
+  // Every home directory's user name goes to `u`; then the committers' names and this machine's user name anywhere.
+  // The user's directory name becomes `u`, so the line still normalises to the same path as the live error does.
+  let out = scrub(text).replace(/(\/(?:home|Users)\/|[A-Za-z]:\\Users\\)[^\s/\\'"():]+/g, '$1u');
+  const own = [userInfo().username, process.env['USER'], process.env['USERNAME']].filter((n): n is string => typeof n === 'string' && n.length >= 3);
+  for (const n of [...names, ...own]) out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'giu'), '[REDACTED:NAME]');
   return out;
 }
 
@@ -103,6 +131,8 @@ export function recordEpisode(data: string, input: Record<string, unknown>): voi
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) return;
   const names = committerNames(cwd);
+  const safe = scrubFailure(safeCommand(command), names);
+  if (safe === '') return;
   const code = /^Exit code (\d+)/.exec(error)?.[1];
   const { fingerprint, signature } = signatureOf(scrubFailure(error, names), code === undefined ? null : Number(code));
   const db = openStore(tenantFile(data, context.tenant), true, HOOK_BUSY_MS)!;
@@ -113,8 +143,8 @@ export function recordEpisode(data: string, input: Record<string, unknown>): voi
         `INSERT INTO episodes (id, session, command_key, command, fingerprint, signature, head, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (session, command_key, fingerprint) DO UPDATE SET at = excluded.at, head = excluded.head, repaired_at = NULL`,
       ).run(
-        `x-${randomBytes(5).toString('hex')}`, str(input['session_id']) ?? 'unknown', key(command),
-        scrubFailure(command, names).replace(/\s+/g, ' ').slice(0, MAX_COMMAND), fingerprint, signature ?? '', git(cwd, 'rev-parse', 'HEAD')?.trim() ?? '', new Date().toISOString(),
+        `x-${randomBytes(5).toString('hex')}`, str(input['session_id']) ?? 'unknown', key(command, cwd),
+        safe.slice(0, MAX_COMMAND), fingerprint, signature ?? '', git(cwd, 'rev-parse', 'HEAD')?.trim() ?? '', new Date().toISOString(),
       );
     });
   } finally {
@@ -143,7 +173,7 @@ export function commandPassed(data: string, input: Record<string, unknown>): str
   const command = commandOf(input);
   if (config === null || !covers(config, 'failures') || input['tool_name'] !== 'Bash' || command === undefined) return '';
   const commits = /\bgit\s+commit\b/.test(command);
-  const reverts = /\bgit\s+revert\b/.test(command);
+  const reverts = isGitRevert(command);
   const episodes = episodesOn(config) && !ownCommand(command);
   if (!commits && !reverts && !episodes) return '';
   const cwd = str(input['cwd']) ?? process.cwd();
@@ -172,13 +202,16 @@ export function commandPassed(data: string, input: Record<string, unknown>): str
 
 /** The same command passing in the same session as an open episode: the episode closes and, when its signature can be recalled, a repair is proposed. */
 function repairOpenEpisodes(db: DatabaseSync, repo: { tenant: string; repository: string }, session: string, command: string, cwd: string): void {
-  const open = db.prepare('SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?').all(session, key(command), cutoff()) as
+  const open = db.prepare('SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?').all(session, key(command, cwd), cutoff()) as
     { id: string; command: string; fingerprint: string; signature: string; head: string }[];
   if (open.length === 0) return;
   const now = git(cwd, 'rev-parse', 'HEAD')?.trim() ?? '';
+  // A pass at the commit the command failed at is a retry, not a repair: no proposal, and the episode stays open for a later commit.
+  const fixed = open.filter((e) => now !== '' && now !== e.head);
+  if (fixed.length === 0) return;
   inTransaction(db, () => {
-    for (const e of open) {
-      const fix = now !== '' && now !== e.head ? now.slice(0, 7) : 'worktree';
+    for (const e of fixed) {
+      const fix = now.slice(0, 7);
       if (e.signature !== '') {
         proposeRepair(db, repo, { signature: e.signature, fingerprint: e.fingerprint, fix, how: `\`${e.command}\` passed`, source: `session:${session} fingerprint:${e.fingerprint} passed-after:${fix}` });
       }

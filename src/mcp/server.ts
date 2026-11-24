@@ -330,6 +330,10 @@ async function call(name: unknown, args: Args, data: string, cwd: string): Promi
   const config = loadConfig(data);
   if (!consented(config)) throw new ToolError('memory is not set up, or its configuration changed since the owner agreed to it');
   const context = resolveContext(cwd, config, currentConfigDir());
+  // Recall is off after reverts (#18): nothing is read back, but an agent may still propose and give feedback.
+  if (config.recallOff !== undefined && (name === 'memory_search' || name === 'memory_get' || name === 'memory_related')) {
+    return `Recall is off: ${config.recallOff.reason}. The owner turns it on with memory init --recall on.`;
+  }
   switch (name) {
     case 'memory_search':
       return search(args, data, config, context, cwd);

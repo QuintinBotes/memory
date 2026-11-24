@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   observations show failing and then passing. A new `PostToolUse` hook on Bash
   (`command-passed`) turns a command that fails and then passes in a session
   into a proposal, only with the new opt-in `memory init --failing-commands on`:
-  the failed command is kept as a scrubbed episode for 30 days (removed by the
+  the failed command's program and subcommand (never its arguments) are kept as a scrubbed episode for 30 days (removed by the
   sweep, by the next failure and by `memory purge`). The hook also links a
   `git commit` to the items shown in the session and counts a `git revert` of
   that commit once as a contradiction of them; `memory reverts` does the same

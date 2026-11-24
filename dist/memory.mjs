@@ -1729,7 +1729,7 @@ var DATA_CATEGORIES = [
   { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
-  { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, a scrubbed command of at most 160 characters, a hash of the command, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit; a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" }
+  { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -1977,7 +1977,8 @@ var MIGRATIONS = [
   `,
   // v12 - failures and reverts (#18). An episode is one failed session command, scrubbed, kept 30 days (only with the
   // failing-commands opt-in); commit_items names the items shown in the session that made a commit, and reverts the
-  // reverts of such commits already counted, so one revert is never counted twice.
+  // reverts of such commits already counted, so one revert is never counted twice, and revert_counts the contradictions
+  // those reverts have added to an item (one per session that reverted it, none for a revert that was itself reverted).
   `
   CREATE TABLE IF NOT EXISTS episodes (
     id TEXT PRIMARY KEY,
@@ -2003,7 +2004,13 @@ var MIGRATIONS = [
     revert_sha TEXT PRIMARY KEY,
     reverted_sha TEXT NOT NULL,
     at TEXT NOT NULL,
-    seen_at TEXT NOT NULL
+    seen_at TEXT NOT NULL,
+    linked INTEGER NOT NULL DEFAULT 0,
+    cancelled_by TEXT
+  );
+  CREATE TABLE IF NOT EXISTS revert_counts (
+    item_id TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    applied INTEGER NOT NULL
   );
   `
 ];
@@ -2745,6 +2752,9 @@ async function call(name, args, data, cwd) {
   const config = loadConfig(data);
   if (!consented(config)) throw new ToolError("memory is not set up, or its configuration changed since the owner agreed to it");
   const context = resolveContext(cwd, config, currentConfigDir());
+  if (config.recallOff !== void 0 && (name === "memory_search" || name === "memory_get" || name === "memory_related")) {
+    return `Recall is off: ${config.recallOff.reason}. The owner turns it on with memory init --recall on.`;
+  }
   switch (name) {
     case "memory_search":
       return search(args, data, config, context, cwd);
@@ -3755,6 +3765,7 @@ import { execFileSync as execFileSync4 } from "node:child_process";
 // src/capture/failures.ts
 import { createHash as createHash6, randomBytes as randomBytes4 } from "node:crypto";
 import { execFileSync as execFileSync3 } from "node:child_process";
+import { userInfo } from "node:os";
 
 // src/fingerprint.ts
 import { createHash as createHash5 } from "node:crypto";
@@ -3927,37 +3938,62 @@ function failureRecall(data, input2, log) {
 import { execFileSync as execFileSync2 } from "node:child_process";
 var READ = 200;
 var WEEK = 7 * 864e5;
+var isGitRevert = (command) => /^\s*(?:[A-Za-z_]\w*=\S*\s+)*git\s+(?:-[Cc]\s+\S+\s+)*revert(?:\s|$)/.test(command);
 function scanReverts(db, cwd) {
+  const git3 = (...args) => execFileSync2("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 });
   let log;
+  let me;
   try {
-    log = execFileSync2("git", ["log", "-n", String(READ), "--format=%H%x1f%cI%x1f%B%x1e"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 });
+    me = /<([^>]*)>/.exec(git3("var", "GIT_AUTHOR_IDENT"))?.[1] ?? "";
+    log = git3("log", "-n", String(READ), "--format=%H%x1f%ae%x1f%cI%x1f%B%x1e");
   } catch {
     return { counted: 0, pair: null };
   }
+  if (me === "") return { counted: 0, pair: null };
   const found = [];
-  for (const entry of log.split("")) {
-    const [sha = "", at2 = "", body = ""] = entry.trim().split("");
-    const reverted = /This reverts commit ([0-9a-f]{7,40})/.exec(body)?.[1];
-    if (sha !== "" && reverted !== void 0 && db.prepare("SELECT 1 FROM reverts WHERE revert_sha = ?").get(sha) === void 0) found.push({ sha, at: Number.isNaN(Date.parse(at2)) ? (/* @__PURE__ */ new Date()).toISOString() : new Date(at2).toISOString(), reverted });
+  for (const entry of log.split("").reverse()) {
+    const [sha = "", email = "", at2 = "", body = ""] = entry.trim().split("");
+    const reverted = /^(?:Revert|Reapply) ".*"\s*\n[^]*?\bThis reverts commit ([0-9a-f]{7,40})/.exec(body)?.[1];
+    if (sha === "" || reverted === void 0 || email !== me) continue;
+    if (db.prepare("SELECT 1 FROM reverts WHERE revert_sha = ?").get(sha) === void 0) found.push({ sha, at: Number.isNaN(Date.parse(at2)) ? (/* @__PURE__ */ new Date()).toISOString() : new Date(at2).toISOString(), reverted });
   }
-  const linked = found.filter((f) => db.prepare("SELECT 1 FROM commit_items WHERE commit_sha LIKE ? || '%' LIMIT 1").get(f.reverted) !== void 0);
-  if (linked.length === 0) return { counted: 0, pair: null };
+  const known = (reverted) => db.prepare("SELECT 1 FROM commit_items WHERE commit_sha LIKE ? || '%' LIMIT 1").get(reverted) !== void 0;
+  const recorded = (reverted) => db.prepare("SELECT revert_sha, reverted_sha, linked FROM reverts WHERE revert_sha LIKE ? || '%' AND cancelled_by IS NULL LIMIT 1").get(reverted);
+  if (!found.some((f) => known(f.reverted) || recorded(f.reverted) !== void 0 || found.some((g) => g.sha.startsWith(f.reverted)))) return { counted: 0, pair: null };
+  const fresh = [];
   inTransaction(db, () => {
-    for (const f of linked.sort((a, b) => a.at.localeCompare(b.at))) {
-      const rows = db.prepare("SELECT DISTINCT item_id FROM commit_items WHERE commit_sha LIKE ? || '%'").all(f.reverted);
-      for (const r of rows) db.prepare("UPDATE items SET contradictions = contradictions + 1 WHERE id = ?").run(r.item_id);
-      db.prepare("INSERT OR IGNORE INTO reverts (revert_sha, reverted_sha, at, seen_at) VALUES (?, ?, ?, ?)").run(f.sha, f.reverted, f.at, (/* @__PURE__ */ new Date()).toISOString());
+    const seen = (/* @__PURE__ */ new Date()).toISOString();
+    for (const f of found) {
+      const cancelled = recorded(f.reverted);
+      if (cancelled !== void 0) {
+        db.prepare("UPDATE reverts SET cancelled_by = ? WHERE revert_sha = ?").run(f.sha, cancelled.revert_sha);
+        if (cancelled.linked === 0) db.prepare("UPDATE reverts SET cancelled_by = NULL WHERE revert_sha LIKE ? || '%'").run(cancelled.reverted_sha);
+        db.prepare("INSERT OR IGNORE INTO reverts (revert_sha, reverted_sha, at, seen_at, linked) VALUES (?, ?, ?, ?, 0)").run(f.sha, f.reverted, f.at, seen);
+      } else if (known(f.reverted)) {
+        db.prepare("INSERT OR IGNORE INTO reverts (revert_sha, reverted_sha, at, seen_at, linked) VALUES (?, ?, ?, ?, 1)").run(f.sha, f.reverted, f.at, seen);
+        fresh.push(f.sha);
+      }
+    }
+    const target = new Map(db.prepare(
+      `SELECT ci.item_id AS id, COUNT(DISTINCT ci.session) AS n FROM reverts r JOIN commit_items ci ON ci.commit_sha LIKE r.reverted_sha || '%'
+       WHERE r.linked = 1 AND r.cancelled_by IS NULL GROUP BY ci.item_id`
+    ).all().map((r) => [r.id, r.n]));
+    const applied = new Map(db.prepare("SELECT item_id AS id, applied FROM revert_counts").all().map((r) => [r.id, r.applied]));
+    for (const id of /* @__PURE__ */ new Set([...target.keys(), ...applied.keys()])) {
+      const delta = (target.get(id) ?? 0) - (applied.get(id) ?? 0);
+      if (delta === 0) continue;
+      db.prepare("UPDATE items SET contradictions = MAX(0, contradictions + ?) WHERE id = ?").run(delta, id);
+      db.prepare("INSERT INTO revert_counts (item_id, applied) VALUES (?, ?) ON CONFLICT (item_id) DO UPDATE SET applied = excluded.applied").run(id, target.get(id) ?? 0);
     }
   });
-  const all = db.prepare("SELECT revert_sha, at FROM reverts ORDER BY at, revert_sha").all();
+  const all = db.prepare("SELECT revert_sha, seen_at FROM reverts WHERE linked = 1 AND cancelled_by IS NULL ORDER BY seen_at, revert_sha").all();
   let pair = null;
-  const fresh = new Set(linked.map((f) => f.sha));
   for (let i = 1; i < all.length; i++) {
     const a = all[i - 1];
     const b = all[i];
-    if (Date.parse(b.at) - Date.parse(a.at) < WEEK && (fresh.has(a.revert_sha) || fresh.has(b.revert_sha))) pair = [a.revert_sha, b.revert_sha];
+    if (Date.parse(b.seen_at) - Date.parse(a.seen_at) < WEEK && (fresh.includes(a.revert_sha) || fresh.includes(b.revert_sha))) pair = [a.revert_sha, b.revert_sha];
   }
-  return { counted: linked.length, pair };
+  return { counted: fresh.length, pair };
 }
 
 // src/capture/failures.ts
@@ -3966,7 +4002,6 @@ var MAX_COMMAND = 160;
 var MAX_SIGNATURE = 150;
 var episodesOn = (config) => config !== null && config.optIns.failingCommands && covers(config, "failures");
 var ownCommand = (command) => /\bgit\s+(?:commit|push)\b|\bgh\s+(?:pr|issue|release|api)\b|memory\.mjs|\bmemory\s+\w/.test(command);
-var key = (command) => createHash6("sha256").update(command.replace(/\s+/g, " ").trim()).digest("hex").slice(0, 16);
 var git2 = (cwd, ...args) => {
   try {
     return execFileSync3("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 });
@@ -3974,13 +4009,30 @@ var git2 = (cwd, ...args) => {
     return null;
   }
 };
+var SUBCOMMANDS = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "bun", "npx", "cargo", "go", "dotnet", "make", "gradle", "mvn", "pip", "poetry", "uv", "pytest", "tsc", "node", "docker"]);
+function safeCommand(command) {
+  const words3 = command.trim().split(/\s+/).filter(Boolean);
+  while (words3[0] !== void 0 && /^[A-Za-z_]\w*=/.test(words3[0])) words3.shift();
+  const program = words3.shift()?.split("/").pop() ?? "";
+  if (!/^[\w.+-]{1,40}$/.test(program)) return "";
+  const out = [program];
+  if (SUBCOMMANDS.has(program)) {
+    for (const w of words3.slice(0, 2)) {
+      if (!/^[a-z][a-z0-9:_-]{0,20}$/i.test(w)) break;
+      out.push(w);
+    }
+  }
+  return out.join(" ");
+}
+var key = (command, cwd) => createHash6("sha256").update(`${git2(cwd, "rev-parse", "--show-prefix")?.trim() ?? ""}\0${safeCommand(command)}`).digest("hex").slice(0, 16);
 function committerNames(cwd) {
   const out = git2(cwd, "log", "-n", "500", "--format=%an%n%cn") ?? "";
   return [...new Set(out.split("\n").map((n) => n.trim()).filter((n) => n.length >= 3))];
 }
 function scrubFailure(text3, names) {
-  let out = scrub(text3);
-  for (const n of names) out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "giu"), "[REDACTED:NAME]");
+  let out = scrub(text3).replace(/(\/(?:home|Users)\/|[A-Za-z]:\\Users\\)[^\s/\\'"():]+/g, "$1u");
+  const own = [userInfo().username, process.env["USER"], process.env["USERNAME"]].filter((n) => typeof n === "string" && n.length >= 3);
+  for (const n of [...names, ...own]) out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "giu"), "[REDACTED:NAME]");
   return out;
 }
 function signatureOf(scrubbed, exitCode) {
@@ -4024,6 +4076,8 @@ function recordEpisode(data, input2) {
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) return;
   const names = committerNames(cwd);
+  const safe2 = scrubFailure(safeCommand(command), names);
+  if (safe2 === "") return;
   const code = /^Exit code (\d+)/.exec(error)?.[1];
   const { fingerprint, signature } = signatureOf(scrubFailure(error, names), code === void 0 ? null : Number(code));
   const db = openStore(tenantFile(data, context.tenant), true, HOOK_BUSY_MS);
@@ -4036,8 +4090,8 @@ function recordEpisode(data, input2) {
       ).run(
         `x-${randomBytes4(5).toString("hex")}`,
         str2(input2["session_id"]) ?? "unknown",
-        key(command),
-        scrubFailure(command, names).replace(/\s+/g, " ").slice(0, MAX_COMMAND),
+        key(command, cwd),
+        safe2.slice(0, MAX_COMMAND),
         fingerprint,
         signature ?? "",
         git2(cwd, "rev-parse", "HEAD")?.trim() ?? "",
@@ -4061,7 +4115,7 @@ function commandPassed(data, input2) {
   const command = commandOf(input2);
   if (config === null || !covers(config, "failures") || input2["tool_name"] !== "Bash" || command === void 0) return "";
   const commits = /\bgit\s+commit\b/.test(command);
-  const reverts = /\bgit\s+revert\b/.test(command);
+  const reverts = isGitRevert(command);
   const episodes = episodesOn(config) && !ownCommand(command);
   if (!commits && !reverts && !episodes) return "";
   const cwd = str2(input2["cwd"]) ?? process.cwd();
@@ -4088,12 +4142,14 @@ function commandPassed(data, input2) {
   }
 }
 function repairOpenEpisodes(db, repo, session, command, cwd) {
-  const open = db.prepare("SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?").all(session, key(command), cutoff());
+  const open = db.prepare("SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?").all(session, key(command, cwd), cutoff());
   if (open.length === 0) return;
   const now = git2(cwd, "rev-parse", "HEAD")?.trim() ?? "";
+  const fixed = open.filter((e) => now !== "" && now !== e.head);
+  if (fixed.length === 0) return;
   inTransaction(db, () => {
-    for (const e of open) {
-      const fix = now !== "" && now !== e.head ? now.slice(0, 7) : "worktree";
+    for (const e of fixed) {
+      const fix = now.slice(0, 7);
       if (e.signature !== "") {
         proposeRepair(db, repo, { signature: e.signature, fingerprint: e.fingerprint, fix, how: `\`${e.command}\` passed`, source: `session:${session} fingerprint:${e.fingerprint} passed-after:${fix}` });
       }
@@ -4159,12 +4215,18 @@ function captureCi(data, config, cwd, limit = 100) {
         out.push(`run ${failed.databaseId}: no line of its log names the failure well enough to recall it by`);
         continue;
       }
+      if (!/^[0-9a-f]{7,40}$/.test(passed.headSha)) {
+        out.push(`run ${passed.databaseId}: its commit is not a hash`);
+        continue;
+      }
       const fix = passed.headSha.slice(0, 7);
+      const clean = scrubFailure(String(failed.workflowName), names);
+      const flow = clean === failed.workflowName && /^[\w .-]{1,40}$/.test(clean) ? `the ${clean} run` : "a CI run";
       const id = proposeRepair(db, repo, {
         signature,
         fingerprint,
         fix,
-        how: `the ${failed.workflowName} run passed`,
+        how: `${flow} passed`,
         source: `ci failed-run:${failed.databaseId} passed-run:${passed.databaseId} fingerprint:${fingerprint} passed-after:${fix}`,
         evidenceAt: passed.createdAt
       });
@@ -5378,6 +5440,7 @@ function relatedCommand(args, data, cwd) {
   const target = relatedTarget(cwd, positionals[0]);
   if (target === null) throw new Refusal("give a path inside the repository, or a symbol key path#name#kind", 2);
   const config = setUp(data);
+  if (config.recallOff !== void 0) return void console.error(`Recall is off: ${config.recallOff.reason}. Run memory init --recall on to turn it on.`);
   const out = related(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, target, values.depth === void 0 ? void 0 : Number(values.depth));
   if (out === "") console.error(`No memory item is anchored at or under ${target}.`);
   else process.stdout.write(out);
@@ -5435,15 +5498,17 @@ function recallCommand(args, data, cwd) {
     args,
     options: { diff: { type: "string" }, orbit: { type: "boolean" }, path: { type: "string", multiple: true }, fingerprint: { type: "string", multiple: true }, check: { type: "string", multiple: true }, "max-tokens": { type: "string" } }
   });
+  const config = setUp(data);
+  if (config.recallOff !== void 0) return void console.error(`Recall is off: ${config.recallOff.reason}. Run memory init --recall on to turn it on.`);
   if (values.orbit === true) {
     const [paths, fingerprints, checks] = [values.path ?? [], values.fingerprint ?? [], values.check ?? []];
     if (paths.length + fingerprints.length + checks.length === 0) throw new Refusal("recall --orbit needs a context: --path, --fingerprint or --check", 2);
     const maxTokens = values["max-tokens"] === void 0 ? Infinity : Number(values["max-tokens"]);
     if (!(maxTokens > 0)) throw new Refusal("--max-tokens takes a positive number", 2);
-    return void process.stdout.write(orbitRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
+    return void process.stdout.write(orbitRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === void 0) throw new Refusal("recall needs --diff <base>..<head>", 2);
-  const found = diffRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, values.diff);
+  const found = diffRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ("reason" in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }

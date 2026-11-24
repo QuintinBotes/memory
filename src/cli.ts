@@ -607,6 +607,7 @@ function relatedCommand(args: string[], data: string, cwd: string): void {
   const target = relatedTarget(cwd, positionals[0]!);
   if (target === null) throw new Refusal('give a path inside the repository, or a symbol key path#name#kind', 2);
   const config = setUp(data);
+  if (config.recallOff !== undefined) return void console.error(`Recall is off: ${config.recallOff.reason}. Run memory init --recall on to turn it on.`);
   const out = related(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, target, values.depth === undefined ? undefined : Number(values.depth));
   if (out === '') console.error(`No memory item is anchored at or under ${target}.`);
   else process.stdout.write(out);
@@ -672,15 +673,17 @@ function recallCommand(args: string[], data: string, cwd: string): void {
     args,
     options: { diff: { type: 'string' }, orbit: { type: 'boolean' }, path: { type: 'string', multiple: true }, fingerprint: { type: 'string', multiple: true }, check: { type: 'string', multiple: true }, 'max-tokens': { type: 'string' } },
   });
+  const config = setUp(data);
+  if (config.recallOff !== undefined) return void console.error(`Recall is off: ${config.recallOff.reason}. Run memory init --recall on to turn it on.`);
   if (values.orbit === true) {
     const [paths, fingerprints, checks] = [values.path ?? [], values.fingerprint ?? [], values.check ?? []];
     if (paths.length + fingerprints.length + checks.length === 0) throw new Refusal('recall --orbit needs a context: --path, --fingerprint or --check', 2);
     const maxTokens = values['max-tokens'] === undefined ? Infinity : Number(values['max-tokens']);
     if (!(maxTokens > 0)) throw new Refusal('--max-tokens takes a positive number', 2);
-    return void process.stdout.write(orbitRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
+    return void process.stdout.write(orbitRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === undefined) throw new Refusal('recall needs --diff <base>..<head>', 2);
-  const found = diffRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, values.diff);
+  const found = diffRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ('reason' in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }
