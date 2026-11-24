@@ -731,10 +731,23 @@ setting; you do.
 
 Items can be anchored to code. Memory ships a provider that anchors by path,
 line range and a hash of the cited text. A code graph can plug in through a
-small interface: a stable key per symbol, the symbol enclosing a line, what
+small interface (a stable key per symbol, the symbol enclosing a line, what
 changed between two snapshots, what a change reaches, and the tests that
-prove a symbol. When a provider proves anchored code is identical after a
-move or rename, memory moves the anchor and logs the move so it can be undone.
+prove a symbol): the command named under `impactProvider` in `config.json`,
+run without a shell with one JSON line in and one out. Memory names no
+provider; the interface is in [docs/provider.md](docs/provider.md).
+
+`memory remember --anchor src/a.ts#Ledger.consume#method` anchors an item to a
+symbol. At session start a detached job follows the anchors: when the provider
+proves the anchored code is identical after a move or rename (the same content
+hash), memory moves the anchor, keeps the item's status and logs the move;
+`memory anchors undo <move-id>` puts the old anchor back exactly. A changed
+signature or a lost citation makes the item stale. When the key is gone and
+the answer is not certain (two candidates with the hash, or a candidate of the
+same name with another), the item goes stale and `memory review` lists a
+re-anchor proposal; `memory anchors adopt <item-id> <key>` accepts one. With
+no provider, or one that fails or times out, anchors are checked by path and
+hash and memory says so. The provider is named in the consent plan (version 9).
 
 ## Development
 

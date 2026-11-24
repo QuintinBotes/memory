@@ -118,7 +118,7 @@ export function rejections(text: string): Parsed {
 
 /** The note kinds that correct an agent, and the item type each becomes. Others describe code and stay in their tool. */
 const NOTE_TYPES: Record<string, string> = { gotcha: 'hazard', invariant: 'convention', decision: 'decision' };
-const SYMBOL_KEY = /^([^#\s]+)#[^#\n]+#[^#\s]+$/;
+export const SYMBOL_KEY = /^([^#\s]+)#[^#\n]+#[^#\s]+$/;
 
 /** Memory's notes import format: `{kind, text, symbol?, at?}` per line, `at` being when the evidence happened, the symbol key as `path#qualified_name#kind`. */
 export function notes(text: string): Parsed {

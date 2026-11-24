@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 /**
  * Memory's one configuration file, machine-wide, in the data directory.
@@ -33,6 +33,8 @@ export interface Config {
   automation?: boolean;
   /** Recall at the point of action (#14): items anchored where an agent reads or edits; off unless true. */
   pointOfAction?: boolean;
+  /** The code anchor provider `memory recall --diff` asks for a change's impact (#16): a command, run without a shell. */
+  impactProvider?: { command: string[] };
   /** Set by memory itself when two memory-linked reverts came within seven days (#18); every recall stays off until the owner runs `memory init --recall on`. */
   recallOff?: { reason: string; at: string };
 }
@@ -151,6 +153,13 @@ export function loadConfig(data: string): Config | null {
   }
   if (c.automation !== undefined && typeof c.automation !== 'boolean') throw new ConfigError('automation must be true or false');
   if (c.pointOfAction !== undefined && typeof c.pointOfAction !== 'boolean') throw new ConfigError('pointOfAction must be true or false');
+  const impact = c.impactProvider;
+  if (
+    impact !== undefined &&
+    !(typeof impact === 'object' && impact !== null && !Array.isArray(impact) && isList(impact.command) && impact.command.length > 0 && impact.command.every((a) => a !== '') && isAbsolute(impact.command[0]!))
+  ) {
+    throw new ConfigError('impactProvider must be {"command": [absolute program path, arguments...]}');
+  }
   const off = c.recallOff;
   if (off !== undefined && !(typeof off === 'object' && off !== null && typeof off.reason === 'string' && typeof off.at === 'string')) {
     throw new ConfigError('recallOff must be { reason: text, at: a time }');
@@ -167,6 +176,7 @@ export function loadConfig(data: string): Config | null {
     ...(capture !== undefined ? { capture } : {}),
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
+    ...(impact !== undefined ? { impactProvider: impact } : {}),
     ...(off !== undefined ? { recallOff: off } : {}),
   };
 }

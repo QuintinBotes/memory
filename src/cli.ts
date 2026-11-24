@@ -27,7 +27,9 @@ import { refusal } from './gate.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
-import { fileLines, rangeHash, recheck } from './anchors.ts';
+import { fileLines, headReader, rangeHash, recheck } from './anchors.ts';
+import { ForeignAnswer, ProviderError, impactOf, openProvider, resolveKey, symbolAt, testsFor } from './anchors/provider.ts';
+import { adoptCandidate, logAnchors, managedBy, providerConfig, refreshAnchors, setProviderFailed, symbolAnchor, undoMove } from './anchors/refresh.ts';
 import { networkFilesystem } from './store/filesystem.ts';
 import { withFileLock, withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
@@ -40,12 +42,13 @@ import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
 import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
+import { SYMBOL_KEY } from './import/silos.ts';
 import { renderReport, tenantReport } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
-import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
+import { declineSupersession, decide, isPendingSupersession, proposals, reanchorCandidates, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { captureCi } from './capture/ci.ts';
 import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './capture/failures.ts';
@@ -111,6 +114,16 @@ const USAGE = `usage: memory <command>
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
+  anchors refresh
+      follow symbol anchors to the code as it is now, through the code anchor provider in config.json (docs/provider.md): an anchor whose key
+      moved or was renamed with the same content hash moves with it, and the move is logged; a changed signature or lost
+      citation makes the item stale. The session start runs it as a detached job
+  anchors undo <move-id>
+      put back the anchor an automatic move replaced, exactly, by the audit id logged with the move
+  anchors adopt <item-id> <key>
+      the owner's yes to one candidate of a re-anchor proposal in memory review
+  anchors at <path:line> | impact <key>... | tests <key>
+      what the provider answers for the symbol enclosing a line, the symbols that depend on keys, and the tests that prove one
   related <path-or-symbol> [--depth <n>]
       the active items anchored at or under that path (or symbol key, path#name#kind) in this repository, as the session
       slice prints them, within its budget: whole rows only. --depth limits the path segments matched below it
@@ -303,6 +316,106 @@ function anchorAt(cwd: string, spec: string): Anchor {
   return { path: clean, start, end, commit, citedHash: rangeHash(lines, start, end) };
 }
 
+/**
+ * `--anchor` as given: `path[:start[-end]]`, or a symbol key `path#qualified_name#kind`. A key is resolved by the code anchor
+ * provider (docs/provider.md); with none configured, or one that fails, the item is anchored to the file and memory says so.
+ */
+async function anchorFor(cwd: string, data: string, repository: string | null, spec: string): Promise<Anchor> {
+  if (!SYMBOL_KEY.test(spec)) return anchorAt(cwd, spec);
+  const key = SYMBOL_KEY.exec(spec)!;
+  const file = anchorAt(cwd, key[1]!);
+  const config = providerConfig(data);
+  const fallback = (why: string): Anchor => {
+    console.error(`memory: ${why}; anchored to ${file.path} instead, which is checked by path anchors`);
+    return file;
+  };
+  if (config === undefined || repository === null) return fallback('no code anchor provider is configured');
+  const provider = openProvider(config, repository, cwd);
+  try {
+    const { symbol, snapshot } = await resolveKey(provider, spec);
+    if (symbol === null) throw new Refusal(`the code anchor provider does not know ${spec}`);
+    return symbolAnchor(symbol, snapshot, headReader(cwd).text(file.path), file.commit) ?? fallback(`the provider's lines for ${spec} are not in ${file.path} at HEAD`);
+  } catch (error) {
+    if (!(error instanceof ProviderError)) throw error;
+    return fallback(`the code anchor provider failed (${error.message})`);
+  } finally {
+    provider.close();
+  }
+}
+
+/** `memory anchors refresh|undo|adopt|at|impact|tests`: symbol anchors that follow the code. */
+async function anchorsCommand(args: string[], data: string, cwd: string): Promise<void> {
+  const [sub, ...rest] = args;
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null) throw new Refusal(`anchors needs a tenant, and ${context.reason}`);
+  const [tenant, repository] = [context.tenant, context.repository];
+  const file = tenantFile(data, tenant);
+  const provider = providerConfig(data);
+  const noProvider = 'memory: no code anchor provider is configured (or you have not agreed to the plan that lists it); anchors are checked by path and hash';
+  const withStore = async <T>(work: (db: NonNullable<ReturnType<typeof openStore>>) => Promise<T> | T): Promise<T> => {
+    const db = openStore(file, false);
+    if (db === null) throw new Refusal(`no anchored item in ${repository}`);
+    try {
+      return await work(db);
+    } finally {
+      db.close();
+    }
+  };
+  if (sub === 'undo') {
+    if (rest.length !== 1) throw new Refusal('give one move id', 2);
+    const done = await withStore((db) => undoMove(db, rest[0]!));
+    if (done === false) throw new Refusal(`nothing to undo for ${rest[0]}: it is not an automatic anchor move here, or it was already undone`);
+    return void console.log(`undone: ${done}`);
+  }
+  if (sub !== 'refresh' && sub !== 'adopt' && sub !== 'at' && sub !== 'impact' && sub !== 'tests') throw new Refusal('anchors takes refresh, undo <move-id>, adopt <item-id> <key>, at <path:line>, impact <key>... or tests <key>', 2);
+  if (provider === undefined) {
+    if (sub === 'refresh') return void console.error(noProvider);
+    throw new Refusal(noProvider);
+  }
+  const open = openProvider(provider, repository, cwd);
+  try {
+    if (sub === 'refresh') {
+      try {
+        const result = await withStore((db) => refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work)));
+        setProviderFailed(data, false);
+        return void console.log(JSON.stringify(result, null, 2));
+      } catch (error) {
+        if (error instanceof ForeignAnswer) {
+          logAnchors(data, { event: 'answer_dropped', reason: error.message });
+          return void console.error(`memory: ${error.message}; no anchor was changed`);
+        }
+        if (!(error instanceof ProviderError)) throw error;
+        logAnchors(data, { event: 'provider_failed', reason: error.message });
+        setProviderFailed(data, true);
+        return void console.error(`memory: the code anchor provider failed (${error.message}); every anchor keeps its last state and is checked by path anchors until it answers`);
+      }
+    }
+    const ask = async (): Promise<unknown> => {
+      if (sub === 'adopt') {
+        if (rest.length !== 2) throw new Refusal('give an item id and one candidate key', 2);
+        return await withStore((db) => adoptCandidate(db, rest[0]!, rest[1]!, cwd, open));
+      }
+      if (sub === 'at') {
+        const m = /^(.+):([1-9]\d*)$/.exec(rest[0] ?? '');
+        if (rest.length !== 1 || m === null) throw new Refusal('give one path:line', 2);
+        return await symbolAt(open, m[1]!, Number(m[2]));
+      }
+      if (rest.length === 0 || (sub === 'tests' && rest.length !== 1)) throw new Refusal(sub === 'tests' ? 'give one symbol key' : 'give at least one symbol key', 2);
+      return sub === 'impact' ? await impactOf(open, repository, rest) : await testsFor(open, rest[0]!);
+    };
+    try {
+      const answer = await ask();
+      console.log(typeof answer === 'string' ? answer : JSON.stringify(answer, null, 2));
+    } catch (error) {
+      if (error instanceof ProviderError) throw new Refusal(`memory: ${error.message}`);
+      throw error;
+    }
+  } finally {
+    open.close();
+  }
+}
+
 async function remember(args: string[], data: string, cwd: string): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
@@ -345,7 +458,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
   if ((values.type === 'failure-pattern' || values.type === 'repair-recipe') && weakSignature(statement)) {
     console.error("memory: this will never be recalled at a failing command: its signature (the statement up to ' => ') has fewer than two words other than error, failed, fail, warning, exit, code and placeholders such as paths and numbers");
   }
-  const anchors = values.anchor === undefined ? [] : [anchorAt(cwd, values.anchor)];
+  const anchors = values.anchor === undefined ? [] : [await anchorFor(cwd, data, context.repository, values.anchor)];
   const tenant = personal ? '' : context.tenant!;
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true)!;
@@ -567,6 +680,9 @@ async function decideCommand(args: string[], data: string, cwd: string, decision
     try {
       const [p] = proposals(db, tenant, id);
       if (p === undefined) continue;
+      if (decision === 'approve' && reanchorCandidates(p).length > 0) {
+        throw new Refusal(`${id} is stale because its symbol is gone; choose a new anchor with memory anchors adopt ${id} <key> (candidates: ${reanchorCandidates(p).join(', ')}), or memory reject ${id}`);
+      }
       if (decision === 'reject') {
         // A reason kept in the person file follows the owner into every organisation, as the statement does.
         const why = reason === '' ? null : refusal(reason, tenant === '' ? organisationTerms(config, context.repository) : undefined);
@@ -658,7 +774,7 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   const db = openStore(file, false);
   if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { id, window: Infinity }));
+    const result = withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { id, window: Infinity, managed: managedBy(data) }));
     if (result === undefined) return console.log(JSON.stringify({ skipped: 'another refresh holds the lock; nothing was changed' }, null, 2));
     if (id !== undefined && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
@@ -747,6 +863,16 @@ function sessionStart(data: string): void {
     const withheld: Withheld[] = [];
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, withheld).text);
     logWithheld(data, config, 'session-start', typeof input['session_id'] === 'string' ? input['session_id'] : 'unknown', withheld);
+    // The anchor refresh talks to another program, so it never runs here: a detached job, as capture is.
+    try {
+      if (providerConfig(data) !== undefined) {
+        const child = spawn(process.execPath, [process.argv[1]!, 'anchors', 'refresh'], { cwd: typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd(), detached: true, stdio: 'ignore' });
+        child.on('error', () => undefined);
+        child.unref();
+      }
+    } catch {
+      // A failed start costs the session nothing; the next session starts it again.
+    }
     // After the slice, in its own try: a slow or failing sweep never costs the session its slice.
     try {
       sweepCommand(data, typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd(), true);
@@ -1111,6 +1237,8 @@ async function main(argv: string[]): Promise<void> {
       return sweepCommand(data, process.cwd(), false);
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
+    case 'anchors':
+      return anchorsCommand(rest, data, process.cwd());
     case 'related':
       return relatedCommand(rest, data, process.cwd());
     case 'close':

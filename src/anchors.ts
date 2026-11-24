@@ -45,6 +45,34 @@ export function checkAnchor(anchor: Anchor, text: string | null, window = WINDOW
   return { ok: false, reason: 'cited text gone' };
 }
 
+/** An anchor a code anchor provider follows: a symbol key with the facts it was last resolved to. */
+export const isManaged = (a: Anchor): a is Anchor & { symbol: string; snapshot: string } => a.symbol !== undefined && a.snapshot !== undefined;
+
+/**
+ * Reads files at HEAD of the checkout at `cwd`, once each. `text` is the file, null when HEAD has no such path, undefined
+ * when git could not read it; a directory (a precedent's path glob) reads as an empty file. `head` is HEAD's commit, or null.
+ */
+export function headReader(cwd: string): { head(): string | null; text(path: string): string | null | undefined } {
+  // HEAD:<path> is relative to the tree root, whatever directory git runs in.
+  const files = new Map<string, string | null | undefined>();
+  return {
+    head: () => git(cwd, 'rev-parse', '--verify', '-q', 'HEAD')?.trim() ?? null,
+    text: (path) => {
+      if (!files.has(path)) {
+        let text: string | null | undefined;
+        try {
+          text = git(cwd, 'cat-file', 'blob', `HEAD:${path}`);
+          if (text === null && git(cwd, 'cat-file', '-t', `HEAD:${path}`)?.trim() === 'tree') text = '';
+        } catch {
+          text = undefined;
+        }
+        files.set(path, text);
+      }
+      return files.get(path);
+    },
+  };
+}
+
 export interface Recheck {
   checked: number;
   current: number;
@@ -76,7 +104,8 @@ function transition(db: DatabaseSync, apply: () => boolean, audit: () => void): 
  * subdirectory or a bare clone). A failing citation makes an active item
  * stale; a holding one restores a stale item and updates moved lines. Session
  * start searches 50 lines either side; `memory recheck` passes a wider window,
- * so an item whose lines moved further can be restored by asking. Both happen without the
+ * so an item whose lines moved further can be restored by asking. With `managed`, anchors a code anchor provider follows are
+ * left to its refresh job. Both happen without the
  * owner's yes: stale only lowers influence, and a restore returns an item to
  * the state the owner approved. A repository with no HEAD, or a file git
  * cannot read, changes nothing.
@@ -86,7 +115,7 @@ export function recheck(
   tenant: string,
   repository: string,
   cwd: string,
-  { id, window = WINDOW }: { id?: string | undefined; window?: number } = {},
+  { id, window = WINDOW, managed = false }: { id?: string | undefined; window?: number; managed?: boolean } = {},
 ): Recheck {
   const result: Recheck = { checked: 0, current: 0, stale: 0, restored: 0, staleItems: [] };
   const rows = db
@@ -98,29 +127,16 @@ export function recheck(
     )
     .all(tenant, repository, ...(id === undefined ? [] : [id])) as { id: string; status: string; anchors_json: string }[];
   // No anchored items, no git; no HEAD, nothing can be checked.
-  if (rows.length === 0 || git(cwd, 'rev-parse', '--verify', '-q', 'HEAD') === null) return result;
-
-  // HEAD:<path> is relative to the tree root, whatever directory git runs in.
-  const files = new Map<string, string | null | undefined>();
-  const read = (path: string): string | null | undefined => {
-    if (!files.has(path)) {
-      let text: string | null | undefined;
-      try {
-        text = git(cwd, 'cat-file', 'blob', `HEAD:${path}`);
-        // A directory anchor (a precedent holds for a path glob) holds while the directory exists at HEAD.
-        if (text === null && git(cwd, 'cat-file', '-t', `HEAD:${path}`)?.trim() === 'tree') text = '';
-      } catch {
-        text = undefined;
-      }
-      files.set(path, text);
-    }
-    return files.get(path);
-  };
+  const reader = headReader(cwd);
+  if (rows.length === 0 || reader.head() === null) return result;
+  const read = reader.text;
   const toStale = db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ? AND status = 'active'");
   const toActive = db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'");
 
   for (const row of rows) {
     const anchors = JSON.parse(row.anchors_json) as Anchor[];
+    // The refresh job owns anchors a provider follows, while one answers (src/anchors/refresh.ts).
+    if (managed && anchors.some(isManaged)) continue;
     const texts = anchors.map((a) => read(a.path));
     if (texts.includes(undefined)) continue; // could not read: leave the item as it is
     result.checked++;
