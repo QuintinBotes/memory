@@ -37,6 +37,7 @@ import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
 import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
+import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
@@ -63,6 +64,9 @@ const USAGE = `usage: memory <command>
       conflicts with one queues a supersession in review; --supersedes replaces that item at once
   list
       every item visible here
+  export --markdown <dir>
+      write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
+      for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository
   import [--dry-run]
       read the silos (each bound config's auto memory, and the files under "imports" in config.json)
       and store each statement as a proposal; with --dry-run, list the files and write nothing
@@ -323,6 +327,28 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
 function list(data: string, cwd: string): void {
   const config = setUp(data);
   process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd)));
+}
+
+/** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
+function exportCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: 'string' } } });
+  if (values.markdown === undefined || positionals.length > 0) throw new Refusal('memory export needs --markdown <dir>', 2);
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const tenant = context.tenant;
+  if (tenant === null) throw new Refusal(`there is no tenant to export here: ${context.reason}`);
+  const why = foreignRepository(values.markdown, config, tenant);
+  if (why !== null) throw new Refusal(`not exported: ${why}`);
+  const stores: { db: DatabaseSync; tenant: string }[] = [];
+  for (const { file, tenant: t } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db !== null) stores.push({ db, tenant: t });
+  }
+  try {
+    console.log(`exported ${exportMarkdown(stores, values.markdown)} items of tenant ${tenant} and the person file to ${values.markdown}`);
+  } finally {
+    for (const { db } of stores) db.close();
+  }
 }
 
 function importCommand(args: string[], data: string): void {
@@ -791,6 +817,8 @@ async function main(argv: string[]): Promise<void> {
       return remember(rest, data, process.cwd());
     case 'list':
       return list(data, process.cwd());
+    case 'export':
+      return exportCommand(rest, data, process.cwd());
     case 'import':
       return importCommand(rest, data);
     case 'review':

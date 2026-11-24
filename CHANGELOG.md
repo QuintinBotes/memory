@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `memory export --markdown <dir>` (#27): this repository's tenant and the
+  person file as a deterministic Markdown folder, one file per item and an
+  index by status, for reading and diffing. Read only; strings are code spans;
+  quarantined text is withheld and a tombstone shows its hash; refuses a folder
+  inside another tenant's repository.
 - Standing red-team suite (#22): `test/poison.test.mjs` replays one test per
   published poisoning attack class against every capture path (owner
   `remember`, `memory_propose`, automatic capture, auto memory and silo

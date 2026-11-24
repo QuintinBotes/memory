@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { appendFileSync as appendFileSync2, existsSync as existsSync7, mkdirSync as mkdirSync6, readFileSync as readFileSync8, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname7, isAbsolute as isAbsolute4, join as join9, normalize as normalize2 } from "node:path";
+import { appendFileSync as appendFileSync2, existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync9, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname8, isAbsolute as isAbsolute4, join as join10, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -315,11 +315,11 @@ function redact(input2) {
       const captured = match[group];
       if (captured === void 0 || captured.length === 0) continue;
       if (isPlaceholder(captured)) continue;
-      const span = match.indices?.[group];
-      if (span === void 0) throw new Error(`the ${label} pattern lacks the d flag`);
+      const span2 = match.indices?.[group];
+      if (span2 === void 0) throw new Error(`the ${label} pattern lacks the d flag`);
       counts[label] = (counts[label] ?? 0) + 1;
-      redacted += `${text2.slice(copied, span[0])}[REDACTED:${label}]`;
-      copied = span[1];
+      redacted += `${text2.slice(copied, span2[0])}[REDACTED:${label}]`;
+      copied = span2[1];
     }
     text2 = redacted + text2.slice(copied);
   }
@@ -987,15 +987,15 @@ var location = (a) => a.symbol !== void 0 ? `${a.symbol.split("#")[1]} ${a.path}
 var cut = (text2, room) => text2.length <= room ? text2 : `${text2.slice(0, Math.max(0, room - 1))}\u2026`;
 var cutLeft = (text2, room) => text2.length <= room ? text2 : `\u2026${text2.slice(text2.length - room + 1)}`;
 function leanRow(item, why = "", maxTokens = Infinity) {
-  const where = safe(item.anchors.map(location).join(", "));
+  const where2 = safe(item.anchors.map(location).join(", "));
   const source = item.source !== "" && item.source !== "remember" ? safe(item.source) : "";
   const statement = safe(item.statement);
   const taint = item.taint === void 0 ? "" : ` \xB7 tainted: ${safe(taintList(item.taint))}`;
   const build = (s, src2, loc2) => `[${item.id}] ${item.type}${loc2 === "" ? "" : ` \xB7 ${loc2}`} \xB7 ${s}${src2 === "" ? "" : ` (${src2})`}${taint}${why === "" ? "" : ` \xB7 why: ${why}`}`;
-  const row3 = build(statement, source, where);
+  const row3 = build(statement, source, where2);
   const room = maxTokens * 4;
   if (row3.length <= room) return row3;
-  const [src, loc] = [cutLeft(source, 40), cutLeft(where, 40)];
+  const [src, loc] = [cutLeft(source, 40), cutLeft(where2, 40)];
   return build(cut(statement, room - build("", src, loc).length), src, loc);
 }
 
@@ -1082,7 +1082,7 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
   ).all(tenant, repository, ...id === void 0 ? [] : [id]);
   if (rows.length === 0 || git(cwd, "rev-parse", "--verify", "-q", "HEAD") === null) return result;
   const files = /* @__PURE__ */ new Map();
-  const read = (path) => {
+  const read2 = (path) => {
     if (!files.has(path)) {
       let text2;
       try {
@@ -1099,7 +1099,7 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
   const toActive = db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'");
   for (const row3 of rows) {
     const anchors = JSON.parse(row3.anchors_json);
-    const texts = anchors.map((a) => read(a.path));
+    const texts = anchors.map((a) => read2(a.path));
     if (texts.includes(void 0)) continue;
     result.checked++;
     const checks = anchors.map((a, i) => checkAnchor(a, texts[i], window));
@@ -2261,8 +2261,8 @@ function propose(args, data, config, context) {
     const id = stored.id;
     const flag = quarantineOf(candidate);
     recordAudit(db, "proposal_received", { type: "item", id }, { origin, ...flag === null ? {} : { quarantined: flag } });
-    const where = `${scope}${scopeKey === "" ? "" : ` ${scopeKey}`}, trust ${origin}`;
-    return flag === null ? `proposed ${id} (${where})${stored.kind === "inserted" && stored.supersedes !== void 0 ? `, as a supersession of ${stored.supersedes}` : ""}; it waits for the owner in memory review and is not active until approved` : `proposed ${id} (${where}), quarantined: it reads as an instruction (${flag}), so it is never searched; the owner sees the flag in memory review`;
+    const where2 = `${scope}${scopeKey === "" ? "" : ` ${scopeKey}`}, trust ${origin}`;
+    return flag === null ? `proposed ${id} (${where2})${stored.kind === "inserted" && stored.supersedes !== void 0 ? `, as a supersession of ${stored.supersedes}` : ""}; it waits for the owner in memory review and is not active until approved` : `proposed ${id} (${where2}), quarantined: it reads as an instruction (${flag}), so it is never searched; the owner sees the flag in memory review`;
   } finally {
     db.close();
   }
@@ -2499,9 +2499,9 @@ function markdown(text2) {
     if (/^\s*(?:```|~~~)/.test(line)) fenced = !fenced;
     const item = fenced ? null : /^\s*[-*+]\s+(.*\S)\s*$/.exec(line);
     if (!item) return;
-    const link = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(item[1]);
-    if (link === null) statements.push({ line: i + 1, text: item[1] });
-    else if (!/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(link[1])) links.push(link[1]);
+    const link2 = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(item[1]);
+    if (link2 === null) statements.push({ line: i + 1, text: item[1] });
+    else if (!/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(link2[1])) links.push(link2[1]);
   });
   return parsed(statements, { links });
 }
@@ -2640,10 +2640,10 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 function readInside(path, root) {
   try {
     if (!existsSync5(path)) return { reason: "not there" };
-    const link = lstatSync(path).isSymbolicLink();
+    const link2 = lstatSync(path).isSymbolicLink();
     const real = realpathSync2(path);
     const top = realpathSync2(root);
-    if (!real.startsWith(top + sep2)) return { reason: link ? "a symbolic link outside its folder" : "outside its folder" };
+    if (!real.startsWith(top + sep2)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
     if (!statSync3(real).isFile()) return { reason: "not a file" };
     return { text: readFileSync6(real, "utf8") };
   } catch (error) {
@@ -2664,7 +2664,7 @@ function importSilos(config, data, configDir, dryRun) {
   const report = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
   const candidates = [];
   const terms = organisationTerms(config, null);
-  const read = (path, root, parse) => {
+  const read2 = (path, root, parse) => {
     const file = readInside(path, root);
     if ("reason" in file) {
       report.skippedFiles.push({ path, reason: file.reason });
@@ -2688,9 +2688,9 @@ function importSilos(config, data, configDir, dryRun) {
       if (!existsSync5(folder) || !statSync3(folder).isDirectory()) continue;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
         const path = join5(folder, name);
-        const parsed2 = read(path, folder, markdown);
+        const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link of parsed2.links) if (!existsSync5(join5(folder, link))) report.danglingLinks.push({ file: path, link });
+        for (const link2 of parsed2.links) if (!existsSync5(join5(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line, text: text2 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -2760,7 +2760,7 @@ function importSilos(config, data, configDir, dryRun) {
         }
         continue;
       }
-      const parsed2 = read(path, checkout, parsers[silo]);
+      const parsed2 = read2(path, checkout, parsers[silo]);
       for (const { line, text: text2, type, symbol, at: at2 } of parsed2?.statements ?? []) {
         const source = `${path}:${line}`;
         if (refused(source, refusal(text2)) || symbol !== void 0 && refused(source, refusal(symbol))) continue;
@@ -2831,6 +2831,116 @@ function importSilos(config, data, configDir, dryRun) {
   return report;
 }
 
+// src/export/markdown.ts
+import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname6, join as join6, resolve as resolve3 } from "node:path";
+var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "rejected", "expired"];
+var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
+  anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
+function span(text2) {
+  const s = safe(text2);
+  const longest = Math.max(0, ...(s.match(/`+/g) ?? []).map((r) => r.length));
+  const ticks = "`".repeat(longest + 1);
+  return `${ticks} ${s} ${ticks}`;
+}
+var anchorLine = (a) => {
+  const where2 = a.symbol !== void 0 ? a.symbol : a.start === void 0 ? a.path : `${a.path}:${a.start}${a.end === void 0 || a.end === a.start ? "" : `-${a.end}`}`;
+  return `- ${span(where2)}${a.commit === void 0 ? "" : ` at ${span(a.commit)}`}${a.citedHash === void 0 ? "" : `, cited hash ${span(a.citedHash)}`}`;
+};
+var link = (id) => {
+  const clean = id.replace(/[^\w-]/g, "_");
+  return `[${clean}](${clean}.md)`;
+};
+var where = (r) => r.scope_key === "" ? r.scope : `${r.scope} ${r.scope_key}`;
+function itemFile(r, evidence, supersededBy) {
+  const tombstone = r.statement === "";
+  const quarantined = r.quarantine !== null;
+  const lines2 = [`# ${r.id}`, "", `- type: ${span(r.type)}`, `- scope: ${span(where(r))}`, `- status: ${span(r.status)}`];
+  if (r.status_reason !== null) lines2.push(`- why: ${span(r.status_reason)}`);
+  lines2.push(`- trust: ${span(r.origin_trust)}`);
+  if (quarantined) lines2.push(`- quarantined: ${span(r.quarantine)}`);
+  lines2.push(`- valid from: ${span(r.valid_from)}`);
+  if (r.valid_to !== null) lines2.push(`- valid to: ${span(r.valid_to)}`);
+  if (r.supersedes !== null) lines2.push(`- supersedes: ${link(r.supersedes)}`);
+  if (supersededBy.length > 0) lines2.push(`- superseded by: ${supersededBy.map(link).join(", ")}`);
+  if (r.promoted_to !== null) lines2.push(`- promoted to: ${span(r.promoted_to)}`);
+  lines2.push(`- support: ${r.support}, helped ${r.helped}, wrong ${r.wrong}, contradictions ${r.contradictions}, stale reports ${r.stale_reports}`, "");
+  if (tombstone) {
+    lines2.push("Tombstone: the text was removed.", "", `- statement hash: ${span(r.statement_key ?? "")}`);
+    return `${lines2.join("\n")}
+`;
+  }
+  if (quarantined) {
+    lines2.push("Statement withheld: quarantined as text that reads as an instruction.");
+    return `${lines2.join("\n")}
+`;
+  }
+  lines2.push("## Statement", "", span(r.statement), "");
+  if (r.rationale !== null) lines2.push("## Rationale", "", span(r.rationale), "");
+  const anchors = JSON.parse(r.anchors_json);
+  if (anchors.length > 0) lines2.push("## Anchors", "", ...anchors.map(anchorLine), "");
+  lines2.push("## Evidence", "");
+  for (const e of evidence) {
+    lines2.push(`- ${span(e.source_ref)}, ${span(e.author_role)}, captured ${span(e.captured_at)}${e.taint === null ? "" : `, tainted by ${span(taintList(e.taint))}`}`);
+  }
+  return `${lines2.join("\n")}
+`;
+}
+function read(db, tenant) {
+  const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE tenant = ? ORDER BY id`).all(tenant);
+  const evidence = db.prepare("SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE tenant = ?) ORDER BY item_id, captured_at, source_ref, author_role, taint, id").all(tenant);
+  const byItem = /* @__PURE__ */ new Map();
+  for (const e of evidence) byItem.set(e.item_id, [...byItem.get(e.item_id) ?? [], e]);
+  return rows.map((row3) => ({ row: row3, evidence: byItem.get(row3.id) ?? [] }));
+}
+function writeIfChanged(path, content, mayExist) {
+  if (mayExist) {
+    try {
+      if (readFileSync7(path, "utf8") === content) return;
+    } catch {
+    }
+  }
+  writeFileSync3(path, content);
+}
+function exportMarkdown(stores2, dir) {
+  const all = stores2.flatMap(({ db, tenant }) => read(db, tenant)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
+  const successors = /* @__PURE__ */ new Map();
+  for (const { row: row3 } of all) if (row3.supersedes !== null) successors.set(row3.supersedes, [...successors.get(row3.supersedes) ?? [], row3.id]);
+  const items = join6(dir, "items");
+  mkdirSync5(items, { recursive: true });
+  const current = new Set(all.map((a) => a.row.id));
+  let previous = "";
+  try {
+    previous = readFileSync7(join6(dir, "index.md"), "utf8");
+  } catch {
+  }
+  const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
+  for (const id of listed) if (!current.has(id)) rmSync(join6(items, `${id}.md`), { force: true });
+  for (const { row: row3, evidence } of all) writeIfChanged(join6(items, `${row3.id}.md`), itemFile(row3, evidence, successors.get(row3.id) ?? []), listed.size > 0);
+  const index = ["# Memory export", "", "Read only: editing these files changes nothing in memory.", ""];
+  const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
+  for (const status of statuses) {
+    const group = all.filter((a) => a.row.status === status);
+    index.push(`## ${status} (${group.length})`, "");
+    for (const { row: row3 } of group) index.push(`- [${row3.id}](items/${row3.id}.md) ${span(row3.type)} ${span(where(row3))}`);
+    index.push("");
+  }
+  writeIfChanged(join6(dir, "index.md"), `${index.join("\n")}
+`, previous !== "");
+  return all.length;
+}
+function foreignRepository(dir, config, tenant) {
+  let at2 = resolve3(dir);
+  while (!existsSync6(at2)) at2 = dirname6(at2);
+  const top = git(at2, "rev-parse", "--show-toplevel")?.trim();
+  if (top === void 0) return null;
+  const url = git(top, "config", "--get", "remote.origin.url");
+  const parsed2 = url === null ? null : parseGitHubRemote(url);
+  if (parsed2 === null) return null;
+  const other = matchingTenants(config, parsed2.owner, parsed2.repo).filter((t) => t !== tenant);
+  return other.length === 0 ? null : `${top} is a repository of tenant ${other[0]}`;
+}
+
 // src/recall/diff.ts
 import { posix as posix3 } from "node:path";
 var DIFF_BUDGET = 600;
@@ -2883,11 +2993,11 @@ var evidenceLine = (indent, e) => safe(`${indent}evidence: ${e.source_ref} (${e.
 function renderProposals(list2) {
   return list2.map((p) => {
     const g = shadow(p);
-    const where = p.scope_key === "" ? p.scope : `${p.scope} ${p.scope_key}`;
+    const where2 = p.scope_key === "" ? p.scope : `${p.scope} ${p.scope_key}`;
     const taint = taintOf(p.evidence);
     return [
       // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
-      safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${taint === null ? "" : `, tainted by ${taint}`}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? ", hidden by an agent through an older install" : p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
+      safe(`- [${p.id}] ${p.type}, ${where2}, trust ${p.origin_trust}${taint === null ? "" : `, tainted by ${taint}`}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? ", hidden by an agent through an older install" : p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
       ...p.evidence.map((e) => evidenceLine("  ", e)),
       ...p.older === null ? [] : [
         safe(`  supersedes [${p.older.id}] ${p.older.type}: ${JSON.stringify(safe(p.older.statement))}`),
@@ -3018,9 +3128,9 @@ function falseRecall(version, events) {
 }
 
 // src/eval/replay.ts
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync as rmSync2 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text2) {
   const doc = JSON.parse(text2);
@@ -3047,9 +3157,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats) {
   if (learned.length === 0 || repeats.length === 0) return 0;
-  const dir = mkdtempSync(join6(tmpdir(), "memory-replay-"));
+  const dir = mkdtempSync(join7(tmpdir(), "memory-replay-"));
   try {
-    const db = openStore(join6(dir, "replay.sqlite"), true);
+    const db = openStore(join7(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -3074,7 +3184,7 @@ function held(learned, repeats) {
       db.close();
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync2(dir, { recursive: true, force: true });
   }
 }
 function replay(version, pulls, since) {
@@ -3101,9 +3211,9 @@ function replay(version, pulls, since) {
 }
 
 // src/eval/poison.ts
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -3229,13 +3339,13 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync2(join7(tmpdir2(), "memory-poison-"));
-  const db = openStore(join7(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync2(join8(tmpdir2(), "memory-poison-"));
+  const db = openStore(join8(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
     db.close();
-    rmSync2(dir, { recursive: true, force: true });
+    rmSync3(dir, { recursive: true, force: true });
   }
 }
 function measure(f) {
@@ -3307,19 +3417,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync6, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync3, readFileSync as readFileSync7, readdirSync as readdirSync2, rmSync as rmSync3 } from "node:fs";
+import { cpSync, existsSync as existsSync7, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync3, readFileSync as readFileSync8, readdirSync as readdirSync2, rmSync as rmSync4 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname6, join as join8 } from "node:path";
+import { dirname as dirname7, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
-var ROOT = dirname6(dirname6(fileURLToPath2(import.meta.url)));
-var TASKS = join8(ROOT, "lab", "tasks");
-var BUNDLE = join8(ROOT, "dist", "memory.mjs");
+var ROOT = dirname7(dirname7(fileURLToPath2(import.meta.url)));
+var TASKS = join9(ROOT, "lab", "tasks");
+var BUNDLE = join9(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync6(join8(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync7(join9(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -3329,7 +3439,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join8(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join9(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -3348,7 +3458,7 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync6(file) ? jsonLines2(readFileSync7(file, "utf8")) : [];
+var readLines = (file) => existsSync7(file) ? jsonLines2(readFileSync8(file, "utf8")) : [];
 var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -3362,12 +3472,12 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync3(join8(base2, "run-"));
-  const repo = join8(dir, "repo");
-  const data = join8(dir, "data");
-  const out = join8(dir, "out");
-  mkdirSync5(data);
-  mkdirSync5(out);
+  const dir = mkdtempSync3(join9(base2, "run-"));
+  const repo = join9(dir, "repo");
+  const data = join9(dir, "data");
+  const out = join9(dir, "out");
+  mkdirSync6(data);
+  mkdirSync6(out);
   fixtureRepository(task, repo);
   if (arm === "on") seed(task, t, repo, data);
   const env = cleanEnv({
@@ -3390,8 +3500,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join8(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join8(hidden, f));
+  const hidden = join9(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join9(hidden, f));
   const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -3399,7 +3509,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join8(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join9(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
@@ -3428,12 +3538,12 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync3(join8(tmpdir3(), "memory-lab-"));
+  const base2 = mkdtempSync3(join9(tmpdir3(), "memory-lab-"));
   try {
-    const plugin = join8(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync6(join8(ROOT, part))) cpSync(join8(ROOT, part), join8(plugin, part), { recursive: true });
+    const plugin = join9(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync7(join9(ROOT, part))) cpSync(join9(ROOT, part), join9(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync7(join8(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync8(join9(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -3444,7 +3554,7 @@ function lab(version, agent, model, only) {
       ];
     });
   } finally {
-    rmSync3(base2, { recursive: true, force: true });
+    rmSync4(base2, { recursive: true, force: true });
   }
 }
 function parseRows(text2) {
@@ -3486,6 +3596,9 @@ var USAGE = `usage: memory <command>
       conflicts with one queues a supersession in review; --supersedes replaces that item at once
   list
       every item visible here
+  export --markdown <dir>
+      write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
+      for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository
   import [--dry-run]
       read the silos (each bound config's auto memory, and the files under "imports" in config.json)
       and store each statement as a proposal; with --dry-run, list the files and write nothing
@@ -3700,12 +3813,12 @@ async function remember(args, data, cwd) {
       anchors,
       source: values.source?.trim() || "remember"
     };
-    const where = `${scope}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""}`;
+    const where2 = `${scope}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""}`;
     if (values.supersedes !== void 0) {
       const done = supersedeNow(db, candidate, values.supersedes);
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, "item_remembered", { type: "item", id: done.id }, { scope });
-      console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      console.log(`remembered ${done.id} (${where2}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
       await embedAfterWrite(db, config);
       return;
     }
@@ -3716,7 +3829,7 @@ async function remember(args, data, cwd) {
       console.log(`${stored.id} already holds this statement from this source`);
     } else if (stored.kind === "inserted") {
       recordAudit(db, "item_remembered", { type: "item", id: stored.id }, { scope });
-      console.log(`remembered ${stored.id} (${where})${stored.supersedes === void 0 ? "" : `; it conflicts with ${stored.supersedes}, and the supersession waits in memory review`}`);
+      console.log(`remembered ${stored.id} (${where2})${stored.supersedes === void 0 ? "" : `; it conflicts with ${stored.supersedes}, and the supersession waits in memory review`}`);
     } else {
       throw new Refusal("this statement was already placed as superseded");
     }
@@ -3728,6 +3841,26 @@ async function remember(args, data, cwd) {
 function list(data, cwd) {
   const config = setUp(data);
   process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd)));
+}
+function exportCommand(args, data, cwd) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: "string" } } });
+  if (values.markdown === void 0 || positionals.length > 0) throw new Refusal("memory export needs --markdown <dir>", 2);
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const tenant = context.tenant;
+  if (tenant === null) throw new Refusal(`there is no tenant to export here: ${context.reason}`);
+  const why = foreignRepository(values.markdown, config, tenant);
+  if (why !== null) throw new Refusal(`not exported: ${why}`);
+  const stores2 = [];
+  for (const { file, tenant: t } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db !== null) stores2.push({ db, tenant: t });
+  }
+  try {
+    console.log(`exported ${exportMarkdown(stores2, values.markdown)} items of tenant ${tenant} and the person file to ${values.markdown}`);
+  } finally {
+    for (const { db } of stores2) db.close();
+  }
 }
 function importCommand(args, data) {
   const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" } } });
@@ -3862,7 +3995,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync8(0, "utf8"));
+    const v = JSON.parse(readFileSync9(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -3920,7 +4053,7 @@ var LOG_LOCK_PURGE_MS = 1e4;
 var injectionLock = (data) => `${injectionLog(data)}.lock`;
 function appendInjections(data, lines2) {
   const file = injectionLog(data);
-  mkdirSync6(dirname7(file), { recursive: true, mode: 448 });
+  mkdirSync7(dirname8(file), { recursive: true, mode: 448 });
   withFileLock(injectionLock(data), () => appendFileSync2(file, lines2.join(""), { mode: 384 }), LOG_LOCK_HOOK_MS);
 }
 async function captureCommand(args, data) {
@@ -3946,7 +4079,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync7(file)) return;
+  if (!existsSync8(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -3960,7 +4093,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync8(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync9(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -3971,7 +4104,7 @@ function pruneLog(data, files, before) {
         }
       });
       const tmp = `${file}.${process.pid}.tmp`;
-      writeFileSync3(tmp, kept.map((l) => `${l}
+      writeFileSync4(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
       renameSync3(tmp, file);
       return true;
@@ -4015,8 +4148,8 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join9(data, "tenants");
-  const every = existsSync7(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const tenantsDir = join10(data, "tenants");
+  const every = existsSync8(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -4048,7 +4181,7 @@ function purge(args, data, cwd) {
     }
   }
   if (values.confirm === true) {
-    if (values.all === true) rmSync4(injectionLog(data), { force: true });
+    if (values.all === true) rmSync5(injectionLog(data), { force: true });
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
@@ -4060,7 +4193,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync8(file, "utf8"));
+    return parse(readFileSync9(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
@@ -4139,6 +4272,8 @@ async function main(argv) {
       return remember(rest, data, process.cwd());
     case "list":
       return list(data, process.cwd());
+    case "export":
+      return exportCommand(rest, data, process.cwd());
     case "import":
       return importCommand(rest, data);
     case "review":
