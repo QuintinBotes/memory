@@ -35,6 +35,8 @@ export interface Config {
   pointOfAction?: boolean;
   /** The code anchor provider `memory recall --diff` asks for a change's impact (#16): a command, run without a shell. */
   impactProvider?: { command: string[] };
+  /** Set by memory itself when two memory-linked reverts came within seven days (#18); every recall stays off until the owner runs `memory init --recall on`. */
+  recallOff?: { reason: string; at: string };
 }
 
 export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
@@ -158,6 +160,10 @@ export function loadConfig(data: string): Config | null {
   ) {
     throw new ConfigError('impactProvider must be {"command": [program, arguments...]}');
   }
+  const off = c.recallOff;
+  if (off !== undefined && !(typeof off === 'object' && off !== null && typeof off.reason === 'string' && typeof off.at === 'string')) {
+    throw new ConfigError('recallOff must be { reason: text, at: a time }');
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -171,6 +177,7 @@ export function loadConfig(data: string): Config | null {
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
     ...(impact !== undefined ? { impactProvider: impact } : {}),
+    ...(off !== undefined ? { recallOff: off } : {}),
   };
 }
 
@@ -197,6 +204,9 @@ export function planHash(config: Config): string {
   });
   return createHash('sha256').update(canonical).digest('hex');
 }
+
+/** Whether recall may show anything: consent holds and memory has not turned itself off after reverts. */
+export const recallOn = (config: Config | null): config is Config => consented(config) && config.recallOff === undefined;
 
 export const consented = (config: Config | null): config is Config =>
   config !== null && config.consent?.planHash === planHash(config);

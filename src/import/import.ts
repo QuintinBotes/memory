@@ -167,11 +167,11 @@ export function importSilos(config: Config, data: string, configDir: string, dry
     report.files.push({ path, statements: found.findings.length });
     for (const reason of found.unreadable) report.refused.push({ source: path, reason });
     for (const f of found.findings) {
-      const source = `orbit run ${f.run}`;
+      const source = f.evidence ?? `orbit run ${f.run}`;
       if (refused(source, refusal(f.statement))) continue;
       candidates.push({
         tenant: context.tenant, scope: 'repository', scopeKey: context.repository, type: f.type, statement: f.statement, rationale: null,
-        anchors: f.anchorPath === null ? [] : [{ path: f.anchorPath }], source, trust: 'agent', status: 'proposed', evidenceAt: f.at, orbit: f, ...(f.kind === 'observation' ? { exactOnly: true } : {}),
+        anchors: f.anchorPath === null ? [] : [{ path: f.anchorPath }], source, trust: 'agent', status: 'proposed', evidenceAt: f.at, orbit: f, ...(f.kind !== 'lesson' ? { exactOnly: true } : {}),
       });
     }
   };
