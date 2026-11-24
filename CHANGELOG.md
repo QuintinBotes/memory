@@ -21,8 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   items that share its rarest words, with the same result. New tests cover the
   eight-writer, killed-writer, held-lock and 10,000-item scenarios by the work
   done, and `node scripts/bench-hook.mjs` measures hook latency on demand.
-  Not in this change: the network-file-system refusal at `memory init` and a
-  separate lock for background anchor refreshes.
+  `memory init` refuses a data directory on a network file system (NFS, SMB,
+  AFP and similar, read from /proc/mounts or `mount`), where SQLite's locking is
+  not reliable, and names the reason. The anchor refresh (session start,
+  `memory recheck`, the MCP re-check) takes its own lock file beside the store,
+  `<store>.refresh.lock`: a refresh that finds it held skips and never waits, so
+  it cannot hold up the slice or a writer, and two refreshes never apply the
+  same change twice. A lock older than 30 s is taken over.
 
 ## [0.4.0] - 2026-11-24
 

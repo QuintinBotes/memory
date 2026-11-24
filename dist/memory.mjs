@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { appendFileSync as appendFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname5, isAbsolute as isAbsolute3, join as join8, normalize as normalize2 } from "node:path";
+import { appendFileSync as appendFileSync2, existsSync as existsSync7, mkdirSync as mkdirSync6, readFileSync as readFileSync7, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname7, isAbsolute as isAbsolute3, join as join8, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -1114,6 +1114,78 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
   return result;
 }
 
+// src/store/filesystem.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync2, readFileSync as readFileSync3, realpathSync } from "node:fs";
+import { dirname as dirname2, resolve as resolve2, sep } from "node:path";
+var NETWORK_TYPES = /^(nfs\d*|cifs|smb\w*|smbfs|afpfs|afs|ncpfs|webdav|davfs\w*|9p|fuse\.(sshfs|davfs\w*|rclone)|sshfs|ceph|glusterfs|lustre)$/i;
+function parseMounts(table) {
+  const mounts = [];
+  for (const line of table.split("\n")) {
+    const mac = /^.+ on (.+) \(([^,)]+)/.exec(line);
+    if (mac !== null) {
+      mounts.push({ point: mac[1], type: mac[2].trim() });
+      continue;
+    }
+    const linux = /^\S+ (\S+) (\S+) /.exec(line);
+    if (linux !== null) mounts.push({ point: linux[1].replace(/\\040/g, " "), type: linux[2] });
+  }
+  return mounts;
+}
+function mountTypeOf(path, table) {
+  const contains = (m) => m.point === "/" || path === m.point || path.startsWith(m.point + sep);
+  return parseMounts(table).filter(contains).sort((a, b) => b.point.length - a.point.length)[0]?.type;
+}
+function mountTable() {
+  const file = process.env["MEMORY_MOUNT_TABLE_FILE"];
+  if (file !== void 0 && file.length > 0) return readFileSync3(file, "utf8");
+  try {
+    if (process.platform === "linux") return readFileSync3("/proc/mounts", "utf8");
+    if (process.platform === "darwin") return execFileSync("mount", { encoding: "utf8", timeout: 3e3 });
+  } catch {
+  }
+  return "";
+}
+function networkFilesystem(dir) {
+  let probe = resolve2(dir);
+  while (!existsSync2(probe) && dirname2(probe) !== probe) probe = dirname2(probe);
+  const type = mountTypeOf(realpathSync(probe), mountTable());
+  return type !== void 0 && NETWORK_TYPES.test(type) ? type : void 0;
+}
+
+// src/store/refresh-lock.ts
+import { closeSync, mkdirSync as mkdirSync2, openSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { dirname as dirname3 } from "node:path";
+var STALE_MS = 3e4;
+function withRefreshLock(storeFile, work) {
+  const lock = `${storeFile}.refresh.lock`;
+  mkdirSync2(dirname3(lock), { recursive: true, mode: 448 });
+  let fd;
+  for (let attempt = 0; attempt < 2 && fd === void 0; attempt++) {
+    try {
+      fd = openSync(lock, "wx", 384);
+    } catch {
+      try {
+        if (Date.now() - statSync(lock).mtimeMs <= STALE_MS) return void 0;
+        unlinkSync(lock);
+      } catch {
+        return void 0;
+      }
+    }
+  }
+  if (fd === void 0) return void 0;
+  try {
+    writeSync(fd, String(process.pid));
+    return work();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lock);
+    } catch {
+    }
+  }
+}
+
 // src/mcp/server.ts
 import { isAbsolute, relative } from "node:path";
 import { createInterface } from "node:readline";
@@ -1303,8 +1375,8 @@ function sweepIfDue(db, now = Date.now()) {
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
-import { appendFileSync, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, statSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { basename, dirname as dirname3, join as join4 } from "node:path";
+import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { basename, dirname as dirname5, join as join4 } from "node:path";
 
 // src/consent/plan.ts
 var DATA_CATEGORIES = [
@@ -1341,8 +1413,8 @@ function buildConsentPlan(config, storageLocation) {
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync as existsSync2, mkdirSync as mkdirSync2 } from "node:fs";
-import { dirname as dirname2 } from "node:path";
+import { chmodSync, existsSync as existsSync3, mkdirSync as mkdirSync3 } from "node:fs";
+import { dirname as dirname4 } from "node:path";
 var MIGRATIONS = [
   `
   CREATE TABLE items (
@@ -1458,9 +1530,9 @@ var SECURE_DELETE = 6;
 var WRITE_BUSY_MS = 5e3;
 var HOOK_BUSY_MS = 250;
 function openStore(path, create, busyMs = WRITE_BUSY_MS) {
-  if (!existsSync2(path)) {
+  if (!existsSync3(path)) {
     if (!create) return null;
-    mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
+    mkdirSync3(dirname4(path), { recursive: true, mode: 448 });
   }
   const db = new DatabaseSync(path);
   chmodSync(path, 384);
@@ -1578,7 +1650,7 @@ function scrub(text2) {
   return redact(text2).text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, "[REDACTED:PRIVATE_KEY]").replace(new RegExp(WEBHOOK.source, "gi"), "[REDACTED:WEBHOOK]").replace(new RegExp(EMAIL.source, "g"), "[REDACTED:EMAIL]").replace(new RegExp(HANDLE.source, "g"), "[REDACTED:HANDLE]");
 }
 function transcriptLines(file) {
-  return readFileSync3(file, "utf8").split("\n").map((line, i) => {
+  return readFileSync4(file, "utf8").split("\n").map((line, i) => {
     try {
       const o = JSON.parse(line);
       if (o.type !== "user" && o.type !== "assistant") return "";
@@ -1594,22 +1666,22 @@ function transcriptLines(file) {
 var stateFile = (data) => join4(data, "logs", "capture-state.json");
 var readState = (data) => {
   try {
-    return JSON.parse(readFileSync3(stateFile(data), "utf8"));
+    return JSON.parse(readFileSync4(stateFile(data), "utf8"));
   } catch {
     return {};
   }
 };
 var LOCK_STALE_MS = 5 * 6e4;
 function tryLock(file) {
-  mkdirSync3(dirname3(file), { recursive: true, mode: 448 });
+  mkdirSync4(dirname5(file), { recursive: true, mode: 448 });
   try {
     writeFileSync2(file, String(process.pid), { flag: "wx", mode: 384 });
     return true;
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
     try {
-      if (Date.now() - statSync(file).mtimeMs <= LOCK_STALE_MS) return false;
-      unlinkSync(file);
+      if (Date.now() - statSync2(file).mtimeMs <= LOCK_STALE_MS) return false;
+      unlinkSync2(file);
     } catch {
       return false;
     }
@@ -1618,7 +1690,7 @@ function tryLock(file) {
 }
 var unlock = (file) => {
   try {
-    unlinkSync(file);
+    unlinkSync2(file);
   } catch {
   }
 };
@@ -1647,7 +1719,7 @@ async function capture(data, input2) {
   if (context.tenant === null || context.repository === null) return `nothing captured: ${context.reason}`;
   const path = input2["transcript_path"];
   const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
-  if (typeof path !== "string" || !existsSync3(path)) return "nothing captured: no transcript";
+  if (typeof path !== "string" || !existsSync4(path)) return "nothing captured: no transcript";
   const lock = join4(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
   if (!tryLock(lock)) return "nothing captured: another capture of this session is already running";
   try {
@@ -1698,7 +1770,7 @@ async function captureLocked(data, config, context, path, session, input2) {
     db.close();
   }
   const usage2 = model.usage ?? { input: 0, output: 0 };
-  mkdirSync3(join4(data, "logs"), { recursive: true, mode: 448 });
+  mkdirSync4(join4(data, "logs"), { recursive: true, mode: 448 });
   appendFileSync(
     join4(data, "logs", "capture.jsonl"),
     `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), session, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, candidates: candidates.length, saved, merged })}
@@ -1865,10 +1937,11 @@ function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS) {
   const out = [];
   const add = (items, matches) => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
-    const db = openStore(tenantFile(data, context.tenant), false, busyMs);
+    const file = tenantFile(data, context.tenant);
+    const db = openStore(file, false, busyMs);
     if (db !== null) {
       try {
-        recheck(db, context.tenant, context.repository, cwd);
+        withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd));
         add(tenantItems(db, context.tenant, context.repository, context.owner), textMatches(db, terms));
       } finally {
         db.close();
@@ -2005,7 +2078,7 @@ function get(args, data, context, cwd) {
   const id = text(args, "id");
   const format = args["format"] === void 0 ? "rows" : oneOf(args["format"], ["rows", "json"], "format");
   const found = first(data, context, (db, store) => {
-    const checked = store.tenant === "" ? void 0 : recheck(db, store.tenant, context.repository, cwd, { id });
+    const checked = store.tenant === "" ? void 0 : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id }));
     const row4 = db.prepare(
       `SELECT *, coalesce(reinforced_at, valid_from) AS reinforced, (${READS_EXPIRED}) AS expired FROM items
          WHERE id = ? AND ${store.where} AND status NOT IN ('proposed', 'rejected') AND statement != ''`
@@ -2098,7 +2171,7 @@ function feedback(args, data, context, cwd) {
     stale: "stale_reports = stale_reports + 1"
   }[signal];
   const done = first(data, context, (db, store) => {
-    const gone = signal === "stale" && store.tenant !== "" ? recheck(db, store.tenant, context.repository, cwd, { id }).staleItems.find((i) => i.id === id) : void 0;
+    const gone = signal === "stale" && store.tenant !== "" ? withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id }))?.staleItems.find((i) => i.id === id) : void 0;
     if (gone !== void 0) return `${id} is stale: its citation fails at HEAD (${gone.reason}), so it leaves recall until the citation holds again`;
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -2267,8 +2340,8 @@ function executePurge(db, scope) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync4, lstatSync, readFileSync as readFileSync4, readdirSync, realpathSync, statSync as statSync2 } from "node:fs";
-import { join as join5, sep } from "node:path";
+import { existsSync as existsSync5, lstatSync, readFileSync as readFileSync5, readdirSync, realpathSync as realpathSync2, statSync as statSync3 } from "node:fs";
+import { join as join5, sep as sep2 } from "node:path";
 
 // src/import/silos.ts
 import { isAbsolute as isAbsolute2, normalize } from "node:path";
@@ -2368,13 +2441,13 @@ var inside2 = (path) => !isAbsolute2(path) && !normalize(path).split(/[\\/]/).in
 // src/import/import.ts
 function readInside(path, root) {
   try {
-    if (!existsSync4(path)) return { reason: "not there" };
+    if (!existsSync5(path)) return { reason: "not there" };
     const link = lstatSync(path).isSymbolicLink();
-    const real = realpathSync(path);
-    const top = realpathSync(root);
-    if (!real.startsWith(top + sep)) return { reason: link ? "a symbolic link outside its folder" : "outside its folder" };
-    if (!statSync2(real).isFile()) return { reason: "not a file" };
-    return { text: readFileSync4(real, "utf8") };
+    const real = realpathSync2(path);
+    const top = realpathSync2(root);
+    if (!real.startsWith(top + sep2)) return { reason: link ? "a symbolic link outside its folder" : "outside its folder" };
+    if (!statSync3(real).isFile()) return { reason: "not a file" };
+    return { text: readFileSync5(real, "utf8") };
   } catch (error) {
     return { reason: `cannot be read (${error.code ?? "error"})` };
   }
@@ -2411,15 +2484,15 @@ function importSilos(config, data, configDir, dryRun) {
   };
   for (const dir of Object.keys(config.configs).sort()) {
     const projects = join5(dir, "projects");
-    if (!existsSync4(projects)) continue;
+    if (!existsSync5(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
       const folder = join5(projects, project, "memory");
-      if (!existsSync4(folder) || !statSync2(folder).isDirectory()) continue;
+      if (!existsSync5(folder) || !statSync3(folder).isDirectory()) continue;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
         const path = join5(folder, name);
         const parsed2 = read(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link of parsed2.links) if (!existsSync4(join5(folder, link))) report.danglingLinks.push({ file: path, link });
+        for (const link of parsed2.links) if (!existsSync5(join5(folder, link))) report.danglingLinks.push({ file: path, link });
         for (const { line, text: text2 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -2772,19 +2845,19 @@ function replay(version, pulls, since) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync5, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync2, readFileSync as readFileSync5, readdirSync as readdirSync2, rmSync as rmSync2 } from "node:fs";
+import { cpSync, existsSync as existsSync6, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readFileSync as readFileSync6, readdirSync as readdirSync2, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { dirname as dirname4, join as join7 } from "node:path";
+import { dirname as dirname6, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
-var ROOT = dirname4(dirname4(fileURLToPath2(import.meta.url)));
+var ROOT = dirname6(dirname6(fileURLToPath2(import.meta.url)));
 var TASKS = join7(ROOT, "lab", "tasks");
 var BUNDLE = join7(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync5(join7(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync6(join7(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -2813,7 +2886,7 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync5(file) ? jsonLines2(readFileSync5(file, "utf8")) : [];
+var readLines = (file) => existsSync6(file) ? jsonLines2(readFileSync6(file, "utf8")) : [];
 var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -2831,8 +2904,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base) {
   const repo = join7(dir, "repo");
   const data = join7(dir, "data");
   const out = join7(dir, "out");
-  mkdirSync4(data);
-  mkdirSync4(out);
+  mkdirSync5(data);
+  mkdirSync5(out);
   fixtureRepository(task, repo);
   if (arm === "on") seed(task, t, repo, data);
   const env = cleanEnv({
@@ -2896,9 +2969,9 @@ function lab(version, agent, model, only) {
   const base = mkdtempSync2(join7(tmpdir2(), "memory-lab-"));
   try {
     const plugin = join7(base, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync5(join7(ROOT, part))) cpSync(join7(ROOT, part), join7(plugin, part), { recursive: true });
+    for (const part of PLUGIN_PARTS) if (existsSync6(join7(ROOT, part))) cpSync(join7(ROOT, part), join7(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync5(join7(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync6(join7(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base))));
       const [off, on] = arms;
       return [
@@ -3013,6 +3086,10 @@ function init(args, data) {
     args,
     options: { tenant: { type: "string", multiple: true }, bind: { type: "string" }, confirm: { type: "boolean" } }
   });
+  const network = networkFilesystem(data);
+  if (network !== void 0) {
+    throw new Refusal(`the data directory ${data} is on a network file system (${network}), where SQLite's locking is not reliable; set MEMORY_DATA_DIR to a local disk`, 2);
+  }
   const config = loadConfig(data) ?? emptyConfig();
   for (const spec of values.tenant ?? []) {
     const [name = "", patterns = ""] = spec.split("=", 2);
@@ -3274,10 +3351,12 @@ function recheckCommand(args, data, cwd) {
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
-  const db = openStore(tenantFile(data, context.tenant), false);
+  const file = tenantFile(data, context.tenant);
+  const db = openStore(file, false);
   if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity });
+    const result = withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity }));
+    if (result === void 0) return console.log(JSON.stringify({ skipped: "another refresh holds the lock; nothing was changed" }, null, 2));
     if (id !== void 0 && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
   } finally {
@@ -3300,7 +3379,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync6(0, "utf8"));
+    const v = JSON.parse(readFileSync7(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -3340,7 +3419,7 @@ function subagentStart(data) {
 `
     );
     const file = injectionLog(data);
-    mkdirSync5(dirname5(file), { recursive: true, mode: 448 });
+    mkdirSync6(dirname7(file), { recursive: true, mode: 448 });
     appendFileSync2(file, lines2.join(""), { mode: 384 });
   } catch {
   }
@@ -3368,7 +3447,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync6(file)) return;
+  if (!existsSync7(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -3379,7 +3458,7 @@ function pruneLog(data, files, before) {
       db.close();
     }
   }
-  const kept = readFileSync6(file, "utf8").split("\n").filter((line) => {
+  const kept = readFileSync7(file, "utf8").split("\n").filter((line) => {
     if (line.trim() === "") return false;
     try {
       const e = JSON.parse(line);
@@ -3430,7 +3509,7 @@ function purge(args, data, cwd) {
     all: values.all
   };
   const tenantsDir = join8(data, "tenants");
-  const every = existsSync6(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const every = existsSync7(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -3468,7 +3547,7 @@ function purge(args, data, cwd) {
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync6(file, "utf8"));
+    return parse(readFileSync7(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }

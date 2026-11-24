@@ -27,6 +27,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
+import { networkFilesystem } from './store/filesystem.ts';
+import { withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
 import { EmbedError, WRITE_TIMEOUT_MS, providerFor } from './embed/provider.ts';
 import { embedPending } from './embed/vectors.ts';
@@ -127,6 +129,10 @@ function init(args: string[], data: string): void {
     args,
     options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, confirm: { type: 'boolean' } },
   });
+  const network = networkFilesystem(data);
+  if (network !== undefined) {
+    throw new Refusal(`the data directory ${data} is on a network file system (${network}), where SQLite's locking is not reliable; set MEMORY_DATA_DIR to a local disk`, 2);
+  }
   const config = loadConfig(data) ?? emptyConfig();
   for (const spec of values.tenant ?? []) {
     const [name = '', patterns = ''] = spec.split('=', 2);
@@ -414,10 +420,12 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
-  const db = openStore(tenantFile(data, context.tenant), false);
+  const file = tenantFile(data, context.tenant);
+  const db = openStore(file, false);
   if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity });
+    const result = withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { id, window: Infinity }));
+    if (result === undefined) return console.log(JSON.stringify({ skipped: 'another refresh holds the lock; nothing was changed' }, null, 2));
     if (id !== undefined && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
   } finally {

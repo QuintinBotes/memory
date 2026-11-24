@@ -8,10 +8,11 @@ import { setup, run, runAsync, remember, sessionStart } from './helpers.mjs';
 
 // Gap 4 (#24), user stories 1 and 2: parallel agents never lose a write, and a hook never fails because the store is busy.
 // The issue's run is eight writers of 500 proposals, 500 feedback signals and 500 ledger rows; this suite runs the same
-// shape smaller (PER_WRITER of each from four MCP writers, plus remember, capture, sweep and ledger writers) so it stays
-// inside a normal test run. Raise MEMORY_TEST_PER_WRITER for the full run.
-const PER_WRITER = Number(process.env.MEMORY_TEST_PER_WRITER ?? 150);
-const MCP_WRITERS = 4;
+// shape smaller in count, not in writers (PER_WRITER of each from eight MCP writers, plus remember, capture, sweep and
+// ledger writers): at 500 each the run takes minutes, far past the 60 s a CI test may take. Raise MEMORY_TEST_PER_WRITER
+// for the full run.
+const PER_WRITER = Number(process.env.MEMORY_TEST_PER_WRITER ?? 100);
+const MCP_WRITERS = 8;
 const SEED = 'The ledger consume call holds the lock before it writes';
 const BUSY = /SQLITE_BUSY|database is locked|database table is locked/i;
 

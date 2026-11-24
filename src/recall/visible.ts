@@ -1,4 +1,5 @@
 import { recheck } from '../anchors.ts';
+import { withRefreshLock } from '../store/refresh-lock.ts';
 import { narrowerWins } from '../consolidate.ts';
 import type { Context } from '../context.ts';
 import { personItems, tenantItems, textMatches, type Visible } from '../items.ts';
@@ -24,10 +25,12 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
   const out: Visible[] = [];
   const add = (items: Visible[], matches: Map<string, number>): void => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
-    const db = openStore(tenantFile(data, context.tenant), false, busyMs);
+    const file = tenantFile(data, context.tenant);
+    const db = openStore(file, false, busyMs);
     if (db !== null) {
       try {
-        recheck(db, context.tenant, context.repository, cwd);
+        // A refresh already running elsewhere does the work; this hook goes on without waiting for it.
+        withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd));
         add(tenantItems(db, context.tenant, context.repository, context.owner), textMatches(db, terms));
       } finally {
         db.close();

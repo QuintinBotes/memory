@@ -76,6 +76,10 @@ later makes memory inert until you confirm the new plan. A release that adds
 a kind of data keeps it off until you run `memory init` again, which lists
 what is new, and confirm; what you agreed to before keeps working.
 
+`memory init` refuses a data directory on a network file system (NFS, SMB, AFP
+and similar), because SQLite's locking is not reliable there; point
+`MEMORY_DATA_DIR` at a local disk.
+
 Then, in a session, `/memory:remember Releases are cut from the main branch
 only`, or from a terminal:
 
@@ -83,7 +87,7 @@ only`, or from a terminal:
 memory remember --scope repository --type convention -- 'Releases are cut from the main branch only'
 memory remember --scope person --type preference -- 'Explain changes in plain English'
 memory list
-memory recheck                          # re-check anchored items, stale ones included
+memory recheck                          # re-check anchored items, stale ones included (skips if another refresh is running)
 memory embed --backfill                 # embed active items that have no vector
 memory sweep                            # queue merges of active repeats for review
 memory purge --repo acme/api            # preview; add --confirm to delete
