@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Standing red-team suite (#22): `test/poison.test.mjs` replays one test per
+  published poisoning attack class against every capture path (owner
+  `remember`, `memory_propose`, automatic capture, auto memory and silo
+  import) and runs in CI with `npm test`: imperative text from non-owner
+  sources, query-only injection, a delayed trigger over 100 sessions, attacks
+  split over several items, instructions in captured text, fence escape with
+  homoglyphs and invisible or bidirectional characters, trust laundering
+  through merged evidence, role spoofing, planted auto memory, credentials and
+  emails, cross-tenant reads and writes, and secrets or quarantined text
+  reaching an embedding provider. A registry test fails when a new source file
+  stores items without a family. The 50 benign owner items are all recalled.
+- `memory eval poison` (#22, FR-001 to FR-004): the red-team families offline
+  in a throwaway store, one JSON line per family with attacks attempted,
+  reached active, rendered outside the fence and raised support, then the 50
+  benign owner items and a summary; exit 1 when any attack got through.
+- Taint labels (#22, FR-006): evidence records the external content its session
+  read (migration 8). `memory_propose` takes `evidence.tainted_by` and names an
+  `external` or `bot` source itself; capture reads web fetches, searches and
+  MCP tool calls from the transcript and labels what it keeps; the items stay
+  active, and imperative text is quarantined as before. The label shows in review, `memory_get`, search
+  and the session slice, and survives merges and supersession.
+- Automation sessions (#22, FR-008): a session started by automation (headless
+  entrypoint, GitHub Actions; a bare `CI=true` is not read) neither captures nor proposes unless the consent plan names
+  it (`memory init --automation on`); the plan shows `automationSessions`.
+  Consent given before this stays valid.
+
+### Fixed
+
+- Text carrying a model control token (`<|im_start|>`, `[INST]`, `<<SYS>>`,
+  `</s>`) or a leading `System:` or `Assistant:` was stored by every capture
+  path; the refusal check now refuses it. Code spans are ignored, and your own
+  `memory remember` is refused only a full chat-template sequence.
+
 ### Changed
 
 - Many writers and 10,000 items (#24). Every store file now runs in write-ahead

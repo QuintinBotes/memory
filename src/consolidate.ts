@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { visibleText } from './codefree.ts';
-import { insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
+import { cleanTaint, insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
 import { recordAudit } from './store/audit.ts';
 import { inTransaction } from './store/transaction.ts';
 
@@ -117,9 +117,9 @@ function mergeEvidence(db: DatabaseSync, id: string, c: NewItem): Stored {
     // Asked under the lock: the same source arriving twice at once is one piece of evidence.
     if (db.prepare('SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?').get(id, c.source) !== undefined) return { kind: 'known', id };
     db.prepare(
-      `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
-       VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`,
-    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? new Date().toISOString());
+      `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
+       VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`,
+    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? new Date().toISOString(), cleanTaint(c.taint));
     db.prepare('UPDATE items SET support = support + ? WHERE id = ?').run(delta, id);
     const audit = recordAudit(db, 'evidence_merged', { type: 'item', id }, { evidenceId, supportDelta: delta, trust });
     const { support } = db.prepare('SELECT support FROM items WHERE id = ?').get(id) as { support: number };

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { automationRefusal } from '../automation.ts';
 import { captureSettings, consented, loadConfig, type Config } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { resolveContext } from '../context.ts';
@@ -12,7 +13,8 @@ import { redact } from '../redact/redact.ts';
 import { recordAudit } from '../store/audit.ts';
 import { openStore } from '../store/db.ts';
 import { tenantFile } from '../store/paths.ts';
-import { filterModel } from './model.ts';
+import type { DatabaseSync } from 'node:sqlite';
+import { filterModel, type Candidate } from './model.ts';
 
 /** The newest this many characters of a session go to the model. */
 export const MAX_TRANSCRIPT_CHARS = 48_000;
@@ -48,6 +50,42 @@ function transcriptLines(file: string): string[] {
         return '';
       }
     });
+}
+
+/**
+ * FR-006 of #22: the external content a session read, from the tool calls its transcript records: web pages and
+ * searches, and the tools of any MCP server but memory's own. Named by host or server, sorted, at most three.
+ * shortcut: a tool result from inside the tenant (a self-hosted tracker's MCP server) and a page read through a shell
+ * command (curl, gh) are not told apart or seen; revisit when Claude Code marks tool results by origin.
+ */
+export function externalSources(file: string): string[] {
+  const found = new Set<string>();
+  const label = (s: string): string => s.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 60);
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    try {
+      const o = JSON.parse(line) as { message?: { content?: unknown } };
+      const content = o.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const b of content as { type?: string; name?: string; input?: { url?: unknown } }[]) {
+        if (b?.type !== 'tool_use' || typeof b.name !== 'string') continue;
+        if (b.name === 'WebFetch' || b.name === 'WebSearch') {
+          let host = 'search';
+          try {
+            if (typeof b.input?.url === 'string') host = new URL(b.input.url).hostname;
+          } catch {
+            // A url that does not parse names no host.
+          }
+          found.add(`web:${label(host)}`);
+        } else if (b.name.startsWith('mcp__')) {
+          const server = b.name.split('__')[1] ?? '';
+          if (!/^(?:plugin_memory_)?memory$/.test(server)) found.add(`mcp:${label(server)}`);
+        }
+      }
+    } catch {
+      // Not a JSON line.
+    }
+  }
+  return [...found].sort().slice(0, 3);
 }
 
 const stateFile = (data: string): string => join(data, 'logs', 'capture-state.json');
@@ -114,6 +152,8 @@ function commitWatermark(data: string, session: string, lines: number): void {
 export async function capture(data: string, input: Record<string, unknown>): Promise<string> {
   const config = loadConfig(data);
   if (!captureWanted(config)) return 'capture is off';
+  const automated = automationRefusal(config, process.env, typeof input['transcript_path'] === 'string' ? input['transcript_path'] : undefined);
+  if (automated !== null) return `nothing captured: ${automated}`;
   const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) return `nothing captured: ${context.reason}`;
@@ -129,6 +169,48 @@ export async function capture(data: string, input: Record<string, unknown>): Pro
   } finally {
     unlock(lock);
   }
+}
+
+/**
+ * Stores what the filter kept as agent-trust items, merging repeats as evidence. Text that reads as an instruction,
+ * waits for the owner as a proposal; the rest is active. A session that read external content (`taint` names it) only
+ * labels what it kept: the label is evidence, not a reason to queue.
+ */
+export function keepCandidates(
+  db: DatabaseSync,
+  context: { tenant: string; repository: string },
+  candidates: Candidate[],
+  from: { session: string; source: string; taint: string[] },
+): { saved: number; merged: number; queued: number } {
+  let saved = 0;
+  let merged = 0;
+  let queued = 0;
+  for (const c of candidates) {
+    const statement = c.statement.replace(/\s+/g, ' ').trim();
+    if (refusal(statement) !== null) continue;
+    const evidence = `Evidence: ${c.evidence.replace(/\s+/g, ' ').trim()}`.slice(0, 200);
+    const item = {
+      tenant: context.tenant,
+      scope: 'repository' as const,
+      scopeKey: context.repository,
+      type: c.kind === 'decision' ? 'decision' : 'precedent',
+      statement,
+      rationale: refusal(evidence) === null ? evidence : null,
+      anchors: [],
+      source: from.source,
+      trust: 'agent' as const,
+      ...(from.taint.length === 0 ? {} : { taint: from.taint.join(';') }),
+    };
+    const status = quarantineOf({ ...item, status: 'proposed' }) === null ? ('active' as const) : ('proposed' as const);
+    const stored = addItem(db, { ...item, status });
+    if (stored.kind === 'merged') merged++;
+    else if (stored.kind === 'inserted') {
+      saved++;
+      if (status === 'proposed') queued++;
+      recordAudit(db, 'item_captured', { type: 'item', id: stored.id }, { session: from.session, agent: 'claude-code', status });
+    }
+  }
+  return { saved, merged, queued };
 }
 
 async function captureLocked(
@@ -149,39 +231,15 @@ async function captureLocked(
   const model = filterModel(settings);
   const candidates = (await model.extract(scrub(text))).slice(0, settings.maxCandidates);
 
+  const taint = externalSources(path);
   const db = openStore(tenantFile(data, context.tenant), true)!;
-  let saved = 0;
-  let merged = 0;
-  let queued = 0;
+  let kept;
   try {
-    for (const c of candidates) {
-      const statement = c.statement.replace(/\s+/g, ' ').trim();
-      if (refusal(statement) !== null) continue;
-      const evidence = `Evidence: ${c.evidence.replace(/\s+/g, ' ').trim()}`.slice(0, 200);
-      const item = {
-        tenant: context.tenant,
-        scope: 'repository' as const,
-        scopeKey: context.repository,
-        type: c.kind === 'decision' ? 'decision' : 'precedent',
-        statement,
-        rationale: refusal(evidence) === null ? evidence : null,
-        anchors: [],
-        source: `capture:claude-code:${session}:${basename(path)}`,
-        trust: 'agent' as const,
-      };
-      // Text that reads as an instruction waits for the owner, as any non-owner proposal does.
-      const status = quarantineOf({ ...item, status: 'proposed' }) === null ? ('active' as const) : ('proposed' as const);
-      const stored = addItem(db, { ...item, status });
-      if (stored.kind === 'merged') merged++;
-      else if (stored.kind === 'inserted') {
-        saved++;
-        if (status === 'proposed') queued++;
-        recordAudit(db, 'item_captured', { type: 'item', id: stored.id }, { session, agent: 'claude-code', status });
-      }
-    }
+    kept = keepCandidates(db, context, candidates, { session, source: `capture:claude-code:${session}:${basename(path)}`, taint });
   } finally {
     db.close();
   }
+  const { saved, merged, queued } = kept;
   const usage = model.usage ?? { input: 0, output: 0 };
   mkdirSync(join(data, 'logs'), { recursive: true, mode: 0o700 });
   appendFileSync(

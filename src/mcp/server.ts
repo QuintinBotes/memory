@@ -3,11 +3,12 @@ import { createInterface } from 'node:readline';
 import type { DatabaseSync } from 'node:sqlite';
 import { recheck } from '../anchors.ts';
 import { withRefreshLock } from '../store/refresh-lock.ts';
+import { automationRefusal } from '../automation.ts';
 import { ConfigError, consented, currentConfigDir, loadConfig, organisationTerms, type Config } from '../config.ts';
 import { git, resolveContext, type Context } from '../context.ts';
 import { refusal } from '../gate.ts';
 import { addItem } from '../consolidate.ts';
-import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
+import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, taintList, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
 import { READS_EXPIRED, band, confidence, rank, searchTerms } from '../recall/rank.ts';
 import { similarities } from '../recall/semantic.ts';
 import { visibleItems } from '../recall/visible.ts';
@@ -68,6 +69,7 @@ const TOOLS = [
           properties: {
             source: { type: 'string', description: 'A link or reference: a comment URL, commit, run or session.' },
             origin: { type: 'string', enum: [...ORIGINS], description: 'Who wrote the source. Default agent.' },
+            tainted_by: { type: 'string', description: 'Name the external content this session read (a web page, an outside comment, another server\'s tool result), such as web:example.com. The owner sees it in review. A source from outside the owner is named automatically.' },
           },
           required: ['source'],
           additionalProperties: false,
@@ -185,8 +187,8 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
       .get(id, ...store.params) as ItemRow | undefined;
     if (row === undefined) return undefined;
     const evidence = db
-      .prepare('SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt FROM evidence WHERE item_id = ? ORDER BY captured_at, id')
-      .all(id) as { source: string; role: string; capturedAt: string }[];
+      .prepare('SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id')
+      .all(id) as { source: string; role: string; capturedAt: string; taint: string | null }[];
     return { row, evidence, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
   });
   if (found === undefined) throw new ToolError(`no item ${id} here; memory_search finds the items this repository may see`);
@@ -196,24 +198,27 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
   // The re-check's own answer, not the stored reason.
   const anchorStatus = anchors.length === 0 ? 'none' : gone ?? 'current';
   const level = band(confidence(row));
+  const taint = [...new Set(evidence.flatMap((e) => (e.taint === null ? [] : [e.taint])))].join(',');
   if (format === 'json') {
     return fence(ITEMS_LABEL, `${safeJson({
       id: row.id, type: row.type, scope: row.scope, scopeKey: row.scope_key, statement: row.statement, rationale: row.rationale,
       status, statusReason: row.status_reason, trust: row.origin_trust, quarantine: row.quarantine, anchors, anchorStatus,
       support: row.support, helped: row.helped, wrong: row.wrong, contradictions: row.contradictions, confidence: level,
-      validFrom: row.valid_from, evidence,
+      validFrom: row.valid_from, taint: taint === '' ? null : taintList(taint), evidence,
     })}\n`);
   }
-  const item = { ...row, anchors, source: evidence[0]?.source ?? '' };
+  const item = { ...row, anchors, source: evidence[0]?.source ?? '', ...(taint === '' ? {} : { taint }) };
   return fence(ITEMS_LABEL, [
     leanRow(item),
     ...(row.rationale === null ? [] : [safe(`because: ${row.rationale}`)]),
     safe(`status ${status}${row.status_reason === null ? '' : ` (${row.status_reason})`} · confidence ${level} · support ${row.support} · helped ${row.helped} · wrong ${row.wrong} · contradicted ${row.contradictions} · anchor ${anchorStatus}`),
-    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}`)),
+    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`)),
   ].map((l) => `${l}\n`).join(''));
 }
 
 function propose(args: Args, data: string, config: Config, context: Context): string {
+  const automated = automationRefusal(config);
+  if (automated !== null) throw new ToolError(`not proposed: ${automated}`);
   const statement = text(args, 'statement');
   const scope = oneOf(args['scope'], SCOPES, 'scope');
   const type = oneOf(args['type'], TYPES, 'type');
@@ -221,19 +226,25 @@ function propose(args: Args, data: string, config: Config, context: Context): st
   if (typeof evidence !== 'object' || evidence === null || Array.isArray(evidence)) throw new ToolError('evidence is an object with a source');
   const source = text(evidence as Args, 'source');
   const origin: Trust = (evidence as Args)['origin'] === undefined ? 'agent' : oneOf((evidence as Args)['origin'], ORIGINS, 'evidence.origin');
+  const named = (evidence as Args)['tainted_by'];
+  if (named !== undefined && (typeof named !== 'string' || named.trim() === '')) throw new ToolError('evidence.tainted_by is a non-empty string');
 
   const personal = scope === 'person' || scope === 'global';
   if (!personal && context.tenant === null) {
     throw new ToolError(`a ${scope} proposal needs a tenant, and ${context.reason}; only person and global items can be proposed here`);
   }
   const terms = personal ? organisationTerms(config, context.repository) : undefined;
-  for (const [what, value] of [['the statement', statement], ['the source', source]] as const) {
+  for (const [what, value] of [['the statement', statement], ['the source', source], ['the taint label', named as string | undefined]] as const) {
+    if (value === undefined) continue;
     const why = refusal(value, terms);
     if (why !== null) throw new ToolError(`not proposed: ${what} is refused because ${why}`);
   }
   const tenant = personal ? '' : context.tenant!;
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';
   const candidate: NewItem = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: 'proposed', trust: origin };
+  // Someone outside the owner wrote the source: the agent read content from them, so the proposal is tainted by it.
+  const taint = [...(typeof named === 'string' ? [named.trim()] : []), ...(origin === 'external' || origin === 'bot' ? [`${origin}:${source}`] : [])];
+  if (taint.length > 0) candidate.taint = taint.join(';');
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true)!;
   try {
     const stored = addItem(db, candidate);

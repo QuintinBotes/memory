@@ -33,6 +33,8 @@ export interface ConsentPlan {
   dataCategories: string[];
   /** Separate opt-ins, each off until the owner turns it on. */
   optIns: { transcripts: boolean; failingCommands: boolean };
+  /** Whether sessions started by automation (headless runs, CI jobs) may capture and propose; off unless you turn it on. */
+  automationSessions: boolean;
   storageLocation: string;
   retention: string[];
 }
@@ -48,6 +50,7 @@ export function buildConsentPlan(config: Config, storageLocation: string): Conse
     configs: config.configs,
     dataCategories: DATA_CATEGORIES.map((c) => c.text),
     optIns: { ...config.optIns },
+    automationSessions: config.automation === true,
     storageLocation,
     retention: [
       'Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored',

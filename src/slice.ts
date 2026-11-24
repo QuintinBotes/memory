@@ -1,4 +1,4 @@
-import type { Visible } from './items.ts';
+import { taintList, type Visible } from './items.ts';
 import { ITEMS_LABEL, fence, safe } from './render/rows.ts';
 
 const SCOPE_POINTS: Record<string, number> = { repository: 2, organisation: 1, person: 1, global: 0.5 };
@@ -21,7 +21,8 @@ export function row(item: Visible): string {
     .map((a) => a.symbol ?? (a.start === undefined ? a.path : `${a.path}:${a.start}-${a.end ?? a.start}`))
     .join(', ');
   const source = item.source !== '' && item.source !== 'remember' ? ` ${item.source}` : '';
-  return safe(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ''}${source}`) + '\n';
+  const taint = item.taint === undefined ? '' : ` [tainted: ${taintList(item.taint)}]`;
+  return safe(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ''}${source}${taint}`) + '\n';
 }
 
 function compose(rows: string[], more: number): string {

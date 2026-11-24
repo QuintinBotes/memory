@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { taintList } from '../items.ts';
 import { safe } from '../render/rows.ts';
 import { applySupersession } from '../consolidate.ts';
 import { recordAudit } from '../store/audit.ts';
@@ -26,7 +27,7 @@ export interface Proposal {
   quarantine: string | null;
   contradictions: number;
   anchors_json: string;
-  evidence: { source_ref: string; author_role: string }[];
+  evidence: { source_ref: string; author_role: string; taint: string | null }[];
   /** The active item this one would replace, when the owner has not yet decided. */
   supersedes: string | null;
   older: { id: string; type: string; statement: string; evidence: Proposal['evidence'] } | null;
@@ -55,7 +56,7 @@ export function proposals(db: DatabaseSync, tenant: string, id?: string): Propos
        ORDER BY created_at, id`,
     )
     .all(tenant, ...(id === undefined ? [] : [id])) as unknown as Proposal[];
-  const evidence = db.prepare('SELECT source_ref, author_role FROM evidence WHERE item_id = ? ORDER BY captured_at, id');
+  const evidence = db.prepare('SELECT source_ref, author_role, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id');
   const older = db.prepare("SELECT id, type, statement FROM items WHERE id = ? AND status = 'active'");
   for (const r of rows) {
     r.evidence = evidence.all(r.id) as Proposal['evidence'];
@@ -65,20 +66,29 @@ export function proposals(db: DatabaseSync, tenant: string, id?: string): Propos
   return rows;
 }
 
+/** The distinct taint labels of a proposal's evidence, as a reader sees them, or null. */
+const taintOf = (evidence: Proposal['evidence']): string | null => {
+  const all = [...new Set(evidence.flatMap((e) => (e.taint === null ? [] : [e.taint])))];
+  return all.length === 0 ? null : taintList(all.join(','));
+};
+const evidenceLine = (indent: string, e: Proposal['evidence'][number]): string =>
+  safe(`${indent}evidence: ${e.source_ref} (${e.author_role})${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`);
+
 export function renderProposals(list: Proposal[]): string {
   return list
     .map((p) => {
       const g = shadow(p);
       const where = p.scope_key === '' ? p.scope : `${p.scope} ${p.scope_key}`;
+      const taint = taintOf(p.evidence);
       return [
         // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
-        safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}${p.status === 'stale' ? ', hidden by an agent through an older install' : p.stale_reports === 0 ? '' : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? '' : 's'}`}: ${JSON.stringify(safe(p.statement))}`),
-        ...p.evidence.map((e) => safe(`  evidence: ${e.source_ref} (${e.author_role})`)),
+        safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${taint === null ? '' : `, tainted by ${taint}`}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}${p.status === 'stale' ? ', hidden by an agent through an older install' : p.stale_reports === 0 ? '' : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? '' : 's'}`}: ${JSON.stringify(safe(p.statement))}`),
+        ...p.evidence.map((e) => evidenceLine('  ', e)),
         ...(p.older === null
           ? []
           : [
               safe(`  supersedes [${p.older.id}] ${p.older.type}: ${JSON.stringify(safe(p.older.statement))}`),
-              ...p.older.evidence.map((e) => safe(`    evidence: ${e.source_ref} (${e.author_role})`)),
+              ...p.older.evidence.map((e) => evidenceLine('    ', e)),
             ]),
         ...(p.status !== 'proposed' ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? '' : 's'}, ${g.owner} from the owner)`]),
       ].join('\n');
