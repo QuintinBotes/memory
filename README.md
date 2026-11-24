@@ -238,6 +238,7 @@ statement with agent trust that reads as an instruction arrives quarantined
 
 ```bash
 memory review                          # proposals for this repository's tenant and you
+memory report [--tenant <name>]        # which items help and which mislead, per bound tenant
 memory approve m-1a2b3c4d5e            # add --scope organisation to widen it
 memory reject m-1a2b3c4d5e --reason 'too broad'
 ```
@@ -469,6 +470,15 @@ shown as low (below 0.4), medium or high (0.7 or more). These constants are
 provisional until the evaluation slice
 ([#8](https://github.com/QuintinBotes/memory/issues/8)) tunes them. An item
 with no reinforcement for 90 days reads as expired and leaves every recall.
+
+`memory report [--tenant <name>]` ranks the active items of each tenant bound to
+this Claude Code config by net score (`helped` minus `wrong` minus agents'
+`stale` reports), then by the confidence above, then by id, so the same store
+always prints the same bytes. Items with no feedback are listed apart under
+"No feedback", by id. Each tenant is read from its own store only: with
+`--tenant`, no other store is opened, and an unbound tenant is refused. A
+quarantined item is listed without its statement. It needs the consent plan
+and changes nothing.
 
 Everything memory renders sits inside one fence, `~~~text memory...`, that
 item text cannot close: each item is one line, invisible characters are
