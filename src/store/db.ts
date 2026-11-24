@@ -178,6 +178,17 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     UNIQUE (item_id, kind, file, old_line)
   );
   `,
+
+  // v11 - the failure fingerprints and check ids an item applies to (#11), read from Orbit's lessons and run-end
+  // observations, so a run that repeats one finds the item. Deleted with its item.
+  `
+  CREATE TABLE IF NOT EXISTS item_keys (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('fingerprint', 'check')),
+    key TEXT NOT NULL,
+    PRIMARY KEY (kind, key, item_id)
+  ) WITHOUT ROWID;
+  `,
 ];
 const SECURE_DELETE = 6;
 
