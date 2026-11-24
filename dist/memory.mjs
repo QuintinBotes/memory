@@ -3,7 +3,7 @@
 // src/cli.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync12, readFileSync as readFileSync12, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync5 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join14, normalize as normalize3 } from "node:path";
+import { isAbsolute as isAbsolute8, join as join14, normalize as normalize3 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -36,7 +36,7 @@ function pluginVersion() {
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join as join2, resolve } from "node:path";
+import { isAbsolute, join as join2, resolve } from "node:path";
 var EMBEDDING_PROVIDERS = ["voyage", "fake"];
 var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5" };
 var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
@@ -105,6 +105,13 @@ function loadConfig(data) {
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
   if (c.pointOfAction !== void 0 && typeof c.pointOfAction !== "boolean") throw new ConfigError("pointOfAction must be true or false");
+  const impact2 = c.impactProvider;
+  if (impact2 !== void 0 && !(typeof impact2 === "object" && impact2 !== null && !Array.isArray(impact2) && isList(impact2.command) && impact2.command.length > 0 && impact2.command.every((a) => a !== ""))) {
+    throw new ConfigError('impactProvider must be {"command": [absolute program path, arguments...]}');
+  }
+  if (impact2 !== void 0 && !isAbsolute(impact2.command[0])) {
+    throw new ConfigError("impactProvider.command[0] must be an absolute path");
+  }
   const off = c.recallOff;
   if (off !== void 0 && !(typeof off === "object" && off !== null && typeof off.reason === "string" && typeof off.at === "string")) {
     throw new ConfigError("recallOff must be { reason: text, at: a time }");
@@ -121,6 +128,7 @@ function loadConfig(data) {
     ...capture2 !== void 0 ? { capture: capture2 } : {},
     ...c.automation !== void 0 ? { automation: c.automation } : {},
     ...c.pointOfAction !== void 0 ? { pointOfAction: c.pointOfAction } : {},
+    ...impact2 !== void 0 ? { impactProvider: impact2 } : {},
     ...off !== void 0 ? { recallOff: off } : {}
   };
 }
@@ -747,11 +755,14 @@ var RANKING = {
   /** An item sharing an anchored path with one of the `graphTop` best hits. */
   graph: 1,
   graphTop: 3,
+  /** An item anchored on a depth-1 dependent of a change (#16); `untested` is added when that dependent is neither changed nor tested. Provisional until the review replay shows dependent false recall under 10%. */
+  dependent: 2,
+  untested: 1,
   /** Most rows one search returns. */
   limit: 10
 };
 var tenth = (n) => Math.round(n * 10) / 10;
-function rank(items, paths, now = Date.now(), similarity2, keyed) {
+function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = []) {
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\/?$|^\.\//, "").replace(/\/+$/, ""));
   const score = (item, near) => {
     const parts = [];
@@ -762,13 +773,18 @@ function rank(items, paths, now = Date.now(), similarity2, keyed) {
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === "" || a.path === p || a.path.startsWith(`${p}/`) || p.startsWith(`${a.path}/`))).length;
     if (overlap > 0) add("anchor", Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
+    const reached = overlap > 0 ? [] : dependents.filter((d) => item.anchors.some((a) => a.path === d.path || a.path.startsWith(`${d.path}/`)));
+    if (reached.length > 0) {
+      add("dependent", RANKING.dependent);
+      if (reached.some((d) => d.neither)) add("neither changed nor tested", RANKING.untested);
+    }
     const key2 = keyed?.has(item.id) === true;
     if (key2) add("key", RANKING.key);
     const ratio = item.textRatio ?? 0;
     const text3 = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity2?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth(RANKING.semantic * (cos - RANKING.minSimilarity) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && text3 === 0 && semantic === 0 && !near && !key2) return null;
+    if (overlap === 0 && reached.length === 0 && text3 === 0 && semantic === 0 && !near && !key2) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text3 > 0) add("text", text3);
     if (semantic > 0) add("semantic", semantic);
@@ -1253,7 +1269,7 @@ function withFileLock(lock, work, waitMs = 0) {
 var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lock`, work);
 
 // src/mcp/server.ts
-import { isAbsolute as isAbsolute3, relative as relative3 } from "node:path";
+import { isAbsolute as isAbsolute4, relative as relative3 } from "node:path";
 import { createInterface } from "node:readline";
 
 // src/automation.ts
@@ -1471,7 +1487,7 @@ function sweepIfDue(db, now = Date.now()) {
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { chmodSync, existsSync as existsSync3, lstatSync, readFileSync as readFileSync5, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname4, isAbsolute, join as join3, relative, resolve as resolve3, sep as sep2 } from "node:path";
+import { basename, dirname as dirname4, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve3, sep as sep2 } from "node:path";
 var ROOT_FILES = ["AGENTS.md", "GEMINI.md", ".github/copilot-instructions.md"];
 var DIR_FILES = ["CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md"];
 var MAX_BYTES = 256 * 1024;
@@ -1542,7 +1558,7 @@ function loadInstructions(cwd, configDir) {
     lines2.push(...linesOf(abs, text3));
     if (depth >= MAX_IMPORT_DEPTH) return;
     for (const target of importsOf(text3)) {
-      const to = target.startsWith("~/") ? join3(homedir2(), target.slice(2)) : isAbsolute(target) ? target : resolve3(dirname4(abs), target);
+      const to = target.startsWith("~/") ? join3(homedir2(), target.slice(2)) : isAbsolute2(target) ? target : resolve3(dirname4(abs), target);
       read2(to, root, depth + 1);
     }
   };
@@ -1729,7 +1745,8 @@ var DATA_CATEGORIES = [
   { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
-  { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" }
+  { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" },
+  { id: "impact", since: 8, text: "When impactProvider is set in config.json, memory recall --diff runs that command, without a shell, once per call and sends it on standard input the repository's owner/name, the range and the paths the range changes; what it answers (dependents' paths and symbol keys) is used to rank items and is not stored. A provider backed by a code graph may start an index job of its own to answer, and a graph that has no snapshot yet answers pending, which memory reads as no snapshot. Without impactProvider, or before you agree to this plan, nothing is run" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -2427,11 +2444,11 @@ async function similarities(data, context, config, query, items) {
 }
 
 // src/recall/related.ts
-import { isAbsolute as isAbsolute2, normalize, relative as relative2 } from "node:path";
+import { isAbsolute as isAbsolute3, normalize, relative as relative2 } from "node:path";
 function relatedTarget(cwd, target) {
-  const top = isAbsolute2(target) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
-  const clean = normalize(isAbsolute2(target) && top !== void 0 ? relative2(top, target) : target).replace(/\/+$/, "");
-  return clean === "" || clean === "." || isAbsolute2(clean) || clean.split(/[\\/]/).includes("..") ? null : clean;
+  const top = isAbsolute3(target) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
+  const clean = normalize(isAbsolute3(target) && top !== void 0 ? relative2(top, target) : target).replace(/\/+$/, "");
+  return clean === "" || clean === "." || isAbsolute3(clean) || clean.split(/[\\/]/).includes("..") ? null : clean;
 }
 function related(data, config, context, cwd, target, depth) {
   if (context.tenant === null || context.repository === null || context.owner === null) return "";
@@ -2602,8 +2619,8 @@ async function search(args, data, config, context, cwd) {
   const query = text(args, "query");
   const paths = args["paths"] ?? [];
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string")) throw new ToolError("paths is a list of strings");
-  const top = paths.some((p) => isAbsolute3(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
-  const relativePaths = paths.map((p) => isAbsolute3(p) && top !== void 0 ? relative3(top, p) : p);
+  const top = paths.some((p) => isAbsolute4(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
+  const relativePaths = paths.map((p) => isAbsolute4(p) && top !== void 0 ? relative3(top, p) : p);
   const withheld = [];
   const items = visibleItems(data, context, cwd, searchTerms(query), void 0, withheld);
   logWithheld(data, config, "memory_search", "mcp", withheld);
@@ -2924,14 +2941,14 @@ function truncateLog(db) {
 
 // src/import/import.ts
 import { existsSync as existsSync7, lstatSync as lstatSync2, readFileSync as readFileSync7, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join7, sep as sep3 } from "node:path";
+import { isAbsolute as isAbsolute6, join as join7, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
 import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 import { posix as posix2 } from "node:path";
 
 // src/import/silos.ts
-import { isAbsolute as isAbsolute4, normalize as normalize2 } from "node:path";
+import { isAbsolute as isAbsolute5, normalize as normalize2 } from "node:path";
 var parsed = (statements, rest = {}) => ({ statements, links: [], unreadable: [], skippedNotes: 0, ...rest });
 function unquote(v) {
   if (/^'.*'$/.test(v)) return v.slice(1, -1).replace(/''/g, "'");
@@ -3023,7 +3040,7 @@ function notes(text3) {
   return parsed(statements, { unreadable, skippedNotes });
 }
 var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
-var inside3 = (path) => !isAbsolute4(path) && !normalize2(path).split(/[\\/]/).includes("..");
+var inside3 = (path) => !isAbsolute5(path) && !normalize2(path).split(/[\\/]/).includes("..");
 
 // src/import/review-voice.ts
 var REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/;
@@ -3337,7 +3354,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     for (const silo of SILOS) {
       const rel = silos[silo];
       if (rel === void 0 || silo === "orbit") continue;
-      const path = silo === "decisions" && isAbsolute5(rel) ? rel : join7(checkout, rel);
+      const path = silo === "decisions" && isAbsolute6(rel) ? rel : join7(checkout, rel);
       if (silo !== "decisions" && !inside3(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
@@ -3592,24 +3609,90 @@ function foreignRepository(dir, config, tenant) {
 }
 
 // src/recall/diff.ts
+import { posix as posix4 } from "node:path";
+
+// src/recall/impact.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
 import { posix as posix3 } from "node:path";
+var RELATIONS = {
+  caller: "caller",
+  calls: "caller",
+  implementer: "implementer",
+  implements: "implementer",
+  overrides: "implementer",
+  inherits: "implementer",
+  importer: "importer",
+  imports: "importer"
+};
+var PROVIDER_TIMEOUT_MS = 5e3;
+var MAX_DEPENDENTS = 1e3;
+function impact(config, context, cwd, range, changed) {
+  if (config.impactProvider === void 0) return null;
+  if (!covers(config, "impact")) return { note: "The impact provider was not run: agree to the current plan with memory init, then recall again. Path overlap only." };
+  const [program, ...args] = config.impactProvider.command;
+  const env = { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" };
+  const r = spawnSync2(program, args, {
+    cwd,
+    env,
+    input: `${JSON.stringify({ op: "impact", repository: context.repository, range, changed })}
+`,
+    encoding: "utf8",
+    timeout: PROVIDER_TIMEOUT_MS,
+    // SIGTERM can be trapped; a provider must not be able to hold a recall.
+    killSignal: "SIGKILL",
+    maxBuffer: 4 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "ignore"]
+  });
+  const failed = { note: "The impact provider failed or answered unexpectedly. Path overlap only." };
+  if (r.error !== void 0 || r.status !== 0) return failed;
+  let answer;
+  try {
+    answer = JSON.parse(r.stdout);
+  } catch {
+    return failed;
+  }
+  if (answer?.status === "no_snapshot") return { note: "No impact snapshot for this change yet. Path overlap only." };
+  if (answer?.status !== "ok" || !Array.isArray(answer.dependents)) return failed;
+  const head = range.split("..").pop() || "HEAD";
+  const files = new Set((git(cwd, "ls-tree", "-r", "--name-only", "-z", head) ?? "").split("\0"));
+  const dependents = [];
+  for (const d of answer.dependents.slice(0, MAX_DEPENDENTS)) {
+    const [path, relation, status, repository] = [d?.["path"], d?.["relation"], d?.["status"], d?.["repository"]];
+    if (typeof path !== "string" || typeof relation !== "string" || typeof status !== "string") continue;
+    if (!Object.hasOwn(RELATIONS, relation)) continue;
+    if (status !== "neither" && status !== "tested" && !status.startsWith("tested: ")) continue;
+    if (repository !== void 0 && (typeof repository !== "string" || repository.toLowerCase() !== context.repository)) continue;
+    const slashed = path.replace(/\\/g, "/");
+    if (slashed.startsWith("/") || slashed.split("/").includes("..")) continue;
+    const file = posix3.normalize(slashed);
+    if (files.has(file)) dependents.push({ path: file, neither: status === "neither" });
+  }
+  return { dependents };
+}
+
+// src/recall/diff.ts
 var DIFF_BUDGET = 600;
 var TYPES3 = /* @__PURE__ */ new Set(["precedent", "hazard"]);
-function diffRecall(data, context, cwd, range) {
+function diffRecall(data, config, context, cwd, range) {
   if (!range.includes("..") || range.startsWith("-")) return { reason: `--diff takes a range <base>..<head>, not "${range}"` };
   const out = git(cwd, "diff", "--name-only", "--no-renames", "-z", range, "--");
   if (out === null) return { reason: `the range ${range} does not resolve to two commits here` };
   const changed = out.split("\0").filter((p) => p !== "");
-  const terms = searchTerms(changed.map((p) => posix3.basename(p, posix3.extname(p))).join(" "));
-  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed);
+  const terms = searchTerms(changed.map((p) => posix4.basename(p, posix4.extname(p))).join(" "));
+  const reach = impact(config, context, cwd, range, changed);
+  const dependents = reach !== null && "dependents" in reach ? reach.dependents : [];
+  const note = reach !== null && "note" in reach ? `${reach.note}
+` : "";
+  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed, Date.now(), void 0, void 0, dependents);
   const rows = [];
+  const render = (list2) => (list2.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, list2.join(""))) + note;
   for (const h of hits) {
     const row4 = `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
 `;
-    if (estimate(fence(ITEMS_LABEL, [...rows, row4].join(""))) > DIFF_BUDGET) break;
+    if (estimate(render([...rows, row4])) > DIFF_BUDGET) break;
     rows.push(row4);
   }
-  return { text: rows.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, rows.join("")) };
+  return { text: render(rows) };
 }
 
 // src/recall/orbit.ts
@@ -4240,7 +4323,7 @@ function captureCi(data, config, cwd, limit = 100) {
 
 // src/hooks/point-of-action.ts
 import { existsSync as existsSync10, readFileSync as readFileSync10, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute6, join as join10, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
+import { dirname as dirname9, isAbsolute as isAbsolute7, join as join10, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
 var str3 = (v) => typeof v === "string" && v !== "" ? v : void 0;
@@ -4256,7 +4339,7 @@ function locate(abs) {
   if (top === void 0 || top === "") return null;
   const root = realpathSync4(top);
   const path = relative4(root, join10(realpathSync4(dir), relative4(dir, abs)));
-  return path.startsWith("..") || isAbsolute6(path) ? null : { root, path: path.split(sep4).join("/") };
+  return path.startsWith("..") || isAbsolute7(path) ? null : { root, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
   const tool = input2["tool_name"];
@@ -4395,7 +4478,7 @@ function afterCompaction(data, input2) {
 }
 
 // src/eval/scorecard.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
   measure: m.measure,
   arm,
@@ -4413,7 +4496,7 @@ var seededRecall = (version) => notRun(
   ["recall"]
 );
 function orbitArm(version) {
-  const r = spawnSync2("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
+  const r = spawnSync3("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
   const found = r.status === 0 ? r.stdout.trim().split("\n")[0] : void 0;
   const note = r.error?.code === "ENOENT" ? "Orbit is not installed (no orbit on PATH), so its arm is skipped" : found === void 0 ? "orbit --version failed, so its arm is skipped" : `Orbit ${found} is installed, but its benchmark has no memory switch until QuintinBotes/orbit#233; a live run calls a model and spends money, which this harness never does`;
   return notRun(
@@ -4770,7 +4853,7 @@ function poison(version) {
 }
 
 // src/eval/lab.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync4 } from "node:child_process";
 import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync4, readFileSync as readFileSync11, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname10, join as join13 } from "node:path";
@@ -4796,11 +4879,11 @@ function fixtureRepository(task, repo) {
   cpSync(join13(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
-    check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
+    check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
   }
 }
 function seed(task, t, repo, data) {
-  const memory = (args) => check(`seed ${task}'s memory`, spawnSync3(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
+  const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
 }
@@ -4844,7 +4927,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   if (arm === "on") env["MEMORY_LAB_PLUGIN"] = plugin;
   else delete env["MEMORY_LAB_PLUGIN"];
-  const r = spawnSync3("/bin/sh", ["-c", agent], {
+  const r = spawnSync4("/bin/sh", ["-c", agent], {
     cwd: repo,
     env,
     input: t.prompt,
@@ -4856,7 +4939,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join13(TASKS, task, "hidden");
   const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join13(hidden, f));
-  const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const grade = agentFailed ? null : spawnSync4(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
     agentFailed,
@@ -5150,7 +5233,7 @@ function anchorAt(cwd, spec) {
   const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(spec);
   const path = m?.[1] ?? "";
   const clean = normalize3(path);
-  if (!m || isAbsolute7(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
+  if (!m || isAbsolute8(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
     throw new Refusal("an anchor is a path inside the repository, as path or path:start-end");
   }
   const top = git(cwd, "rev-parse", "--show-toplevel")?.trim();
@@ -5508,7 +5591,7 @@ function recallCommand(args, data, cwd) {
     return void process.stdout.write(orbitRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === void 0) throw new Refusal("recall needs --diff <base>..<head>", 2);
-  const found = diffRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
+  const found = diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ("reason" in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }
