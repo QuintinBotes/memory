@@ -180,10 +180,25 @@ the files you name there:
     "standards": ".stack/review-standards.md",
     "rejections": ".git/stack/retro-rejected.jsonl",
     "policy": ".review-voice/policy.yaml",
-    "notes": "notes.jsonl"
+    "notes": "notes.jsonl",
+    "decisions": "/home/you/.local/share/review-voice/review-voice.db"
   }
 }
 ```
+
+`decisions` names Review Voice's store (an absolute path, or one relative to
+the checkout). Memory opens it read-only, with no second sync of GitHub, and
+turns the owner's decisions on findings of this repository into `precedent`
+proposals: `keep`, `dismiss`, `never_flag` and `rewrite`, with owner trust
+for the decision, the finding's directory as the path glob and the pull
+request link as the source. The store holds every repository's findings, so
+reading it is its own consent category (`decisions`, plan version 5): import
+skips it, and says why, until you run `memory init --confirm` again. Finding
+text was written by a model, so text that reads as an instruction arrives
+quarantined with agent trust. A strong dismissal a teammate made, with no owner
+row for it, arrives with team trust, and one with no `decided_by` with agent
+trust. Review Voice keeps its own precedents; memory never writes
+back, and never imports the review comments other tools made.
 
 A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
 "...", "symbol": "path#qualified_name#kind"}`; only `gotcha`, `invariant` and
@@ -206,6 +221,22 @@ A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal
 commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)` and `Bash(*memory.mjs*reject*)`.
+
+### Precedents for every reviewer
+
+An approved precedent reaches reviewers that are not Review Voice when they
+ask. Review Voice's agents never get the session slice (a reviewer primed with
+your preferences is no longer independent), so nothing is pushed to them:
+
+```bash
+memory recall --diff origin/main..HEAD
+```
+
+prints the precedents and hazards for the paths that range changes, ranked as
+`memory_search` ranks them, with their citations re-checked first, as lean rows
+inside the advisory fence and within 600 estimated tokens, whole rows only. A
+precedent anchored to a directory covers every path under it. A range that does
+not resolve exits 2 with the reason.
 
 ## Repeats and conflicts
 

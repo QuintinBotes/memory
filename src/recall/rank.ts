@@ -71,7 +71,7 @@ export function rank(items: Visible[], paths: string[], now = Date.now(), simila
       total += points;
       parts.push(`${label} ${points}`);
     };
-    const overlap = item.anchors.filter((a) => want.some((p) => p === '' || a.path === p || a.path.startsWith(`${p}/`))).length;
+    const overlap = item.anchors.filter((a) => want.some((p) => p === '' || a.path === p || a.path.startsWith(`${p}/`) || p.startsWith(`${a.path}/`))).length;
     if (overlap > 0) add('anchor', Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
     const ratio = item.textRatio ?? 0;
     const text = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
