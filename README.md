@@ -209,6 +209,50 @@ Data lives in `~/Library/Application Support/claude-code-memory` on macOS,
 on Linux, or wherever `MEMORY_DATA_DIR` points: `config.json`, one
 `tenants/<name>.sqlite` per tenant, and `person.sqlite`.
 
+### Failures and reverts become proposals
+
+A fixed failure is worth remembering, so memory proposes it. These are always
+proposals: `memory review` and `memory approve` as ever.
+
+- `memory ci` reads this repository's runs with `gh run list`. A failed run
+  followed by a passing run on another commit (same workflow and branch) gives
+  a repair recipe whose evidence names the fingerprint, the fix commit and both
+  runs (`passed-after:<sha>`). Its signature is one line of the failed log,
+  scrubbed of credentials, emails, handles and the repository's committers'
+  names, and normalised; no line fit to recall by means no proposal. A failure
+  with no later pass gives nothing.
+- `memory import --orbit` proposes the same for a check Orbit's observations
+  show failing and then passing. Orbit stores a fingerprint hash, not error
+  text, so these are keyed by it: they are recalled only through
+  `memory recall --orbit` (by fingerprint or check), never at a Bash failure.
+- `memory init --failing-commands on --confirm` is a separate opt-in, off by
+  default. With it, a failed Bash command is kept as an episode (scrubbed error
+  line, the command's program and subcommand only such as `npm run build`, never
+  its arguments, flags, paths or environment, a hash of that and the directory
+  it ran in, fingerprint, session, HEAD) for 30 days, and the same command in the
+  same directory passing later in that session, after a new commit, becomes a
+  proposal with `passed-after:<sha>`. A pass at the commit it failed at is a retry,
+  not a repair: no proposal, and the episode stays open. User names and home
+  directories are normalised out of every kept line. Pushes, commits, `gh pr`, `gh issue`,
+  `gh api` and memory's own commands are never captured. With it off, nothing
+  from a session command is stored.
+- Commits and reverts need no opt-in. A `git commit` is linked to the items shown
+  in that session (at a failing command or at the point of action). A revert of
+  that commit counts as a contradiction of each, once per session however many
+  of its commits are reverted, and a revert that is itself reverted takes it back.
+  Only a commit by the local git user whose subject is `Revert "..."` (or git's
+  `Reapply "..."`) and whose body names the hash counts, and only a command that
+  is a `git revert` triggers the scan. Two such reverts first seen less than
+  seven days apart turn recall off in every recall path (the hooks, `memory_search`,
+  `memory_get`, `memory_related`, `memory recall`, `memory related`); proposing and
+  feedback still work. Memory says why, `memory init` repeats it and
+  `memory init --recall on` turns it back on. `memory reverts` scans on demand,
+  for reverts made outside a session.
+
+The `PostToolUse` hook on Bash runs after every command: it opens no store for
+one that is not a `git commit`, a `git revert` or (with the opt-in) a command
+with an open episode, and takes the write lock only to write.
+
 ## Reading memory as files
 
 `memory export --markdown <dir>` writes this repository's tenant and the person

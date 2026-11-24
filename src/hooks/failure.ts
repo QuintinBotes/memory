@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { consented, currentConfigDir, loadConfig, subagentAllowed } from '../config.ts';
+import { recallOn, currentConfigDir, loadConfig, subagentAllowed } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { resolveContext } from '../context.ts';
 import { errorLines, fingerprintFailure, normalizeLine } from '../fingerprint.ts';
@@ -89,7 +89,7 @@ export function failureRecall(data: string, input: Record<string, unknown>, log:
   const config = loadConfig(data);
   const agentType = str(input['agent_type']);
   const error = str(input['error']);
-  if (!consented(config) || input['tool_name'] !== 'Bash' || input['is_interrupt'] === true || error === undefined) return '';
+  if (!recallOn(config) || input['tool_name'] !== 'Bash' || input['is_interrupt'] === true || error === undefined) return '';
   if (agentType !== undefined && !subagentAllowed(config, agentType)) return '';
   const context = resolveContext(str(input['cwd']) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null || context.repository === null || context.owner === null) return '';
