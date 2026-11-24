@@ -833,6 +833,24 @@ function recordAudit(db, action, subject, metadata = {}) {
   return id;
 }
 
+// src/store/transaction.ts
+var inside = /* @__PURE__ */ new WeakSet();
+function inTransaction(db, work) {
+  if (inside.has(db)) return work();
+  db.exec("BEGIN IMMEDIATE");
+  inside.add(db);
+  try {
+    const result = work();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    inside.delete(db);
+  }
+}
+
 // src/items.ts
 var SCOPES = ["repository", "organisation", "person", "global"];
 var TYPES = ["preference", "convention", "decision", "hazard", "precedent", "failure-pattern", "repair-recipe"];
@@ -848,8 +866,7 @@ function insertItem(db, item) {
   const id = `m-${randomBytes(5).toString("hex")}`;
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const trust = item.trust ?? "owner";
-  db.exec("BEGIN");
-  try {
+  inTransaction(db, () => {
     db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
          authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes)
@@ -877,11 +894,7 @@ function insertItem(db, item) {
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`
     ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
   return id;
 }
 var SELECT = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
@@ -1116,11 +1129,19 @@ function similarity(a, b) {
   const union = a.size + b.size - shared;
   return union === 0 ? 0 : shared / union;
 }
-var sameNumbers = (a, b) => {
-  const n = (s) => [...s].filter((w) => /\d/.test(w)).sort().join(" ");
-  return n(a) === n(b);
-};
+var numberKey = (s) => [...s].filter((w) => /\d/.test(w)).sort().join(" ");
+var sameNumbers = (a, b) => numberKey(a) === numberKey(b);
 var anchorsOverlap = (a, b) => a.length === 0 || b.length === 0 || a.some((x) => b.some((y) => x.path === y.path));
+function place(db, c, key, write) {
+  return inTransaction(db, () => {
+    const same = db.prepare(
+      `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
+           AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?)) ORDER BY created_at, id`
+    ).all(c.tenant, key, c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
+    const repeat = same.find((r) => anchorsOverlap(c.anchors, JSON.parse(r.anchors_json)));
+    return repeat === void 0 ? write() : mergeEvidence(db, repeat.id, c);
+  });
+}
 function addItem(db, c) {
   const was = knownItem(db, c);
   if (c.status !== "active" && was !== void 0 && (was.status === "rejected" || was.status === "expired")) return { kind: "rejected", id: was.id };
@@ -1143,21 +1164,19 @@ function addItem(db, c) {
     if (sim >= REPEAT && sameNumbers(mine, theirs)) return mergeEvidence(db, r.id, c);
     if (sim >= CONFLICT && r.status === "active" && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (conflict?.sim ?? 0)) conflict = { row: r, sim };
   }
-  if (conflict === void 0) return { kind: "inserted", id: insertItem(db, c) };
+  if (conflict === void 0) return place(db, c, key, () => ({ kind: "inserted", id: insertItem(db, c) }));
   const older = db.prepare("SELECT min(captured_at) AS at FROM evidence WHERE item_id = ?").get(conflict.row.id).at;
   if (c.evidenceAt !== void 0 && older !== null && c.evidenceAt < older) {
-    const id = insertItem(db, { ...c, status: "superseded", validTo: older, statusReason: `superseded by ${conflict.row.id}` });
-    return { kind: "superseded-on-arrival", id, by: conflict.row.id };
+    return place(db, c, key, () => ({ kind: "superseded-on-arrival", id: insertItem(db, { ...c, status: "superseded", validTo: older, statusReason: `superseded by ${conflict.row.id}` }), by: conflict.row.id }));
   }
-  return { kind: "inserted", id: insertItem(db, { ...c, supersedes: conflict.row.id }), supersedes: conflict.row.id };
+  return place(db, c, key, () => ({ kind: "inserted", id: insertItem(db, { ...c, supersedes: conflict.row.id }), supersedes: conflict.row.id }));
 }
 function mergeEvidence(db, id, c) {
-  if (db.prepare("SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?").get(id, c.source) !== void 0) return { kind: "known", id };
   const trust = c.trust ?? "owner";
   const delta = trust === "owner" ? 1 : 0;
   const evidenceId = `e-${randomBytes2(5).toString("hex")}`;
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return inTransaction(db, () => {
+    if (db.prepare("SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?").get(id, c.source) !== void 0) return { kind: "known", id };
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`
@@ -1165,12 +1184,8 @@ function mergeEvidence(db, id, c) {
     db.prepare("UPDATE items SET support = support + ? WHERE id = ?").run(delta, id);
     const audit = recordAudit(db, "evidence_merged", { type: "item", id }, { evidenceId, supportDelta: delta, trust });
     const { support } = db.prepare("SELECT support FROM items WHERE id = ?").get(id);
-    db.exec("COMMIT");
     return { kind: "merged", id, audit, support };
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 function applySupersession(db, newerId, olderId, newerWas, pending) {
   const { changes } = db.prepare("UPDATE items SET status = 'superseded', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'active'").run((/* @__PURE__ */ new Date()).toISOString(), `superseded by ${newerId}`, olderId);
@@ -1221,12 +1236,31 @@ function undo(db, auditId) {
 var NARROWNESS = ["person", "repository", "organisation", "global"];
 function narrowerWins(items) {
   const w = items.map((i) => words(i.statement));
-  return items.filter(
-    (a, i) => !items.some((b, j) => {
-      if (i === j || a.type !== b.type || a.scope === b.scope || NARROWNESS.indexOf(b.scope) >= NARROWNESS.indexOf(a.scope)) return false;
-      return anchorsOverlap(a.anchors, b.anchors) && sameNumbers(w[i], w[j]) && similarity(w[i], w[j]) >= CONFLICT;
-    })
+  const keys = items.map((item, i) => `${item.type}\0${numberKey(w[i])}`);
+  const frequency = /* @__PURE__ */ new Map();
+  for (const set of w) for (const word of set) frequency.set(word, (frequency.get(word) ?? 0) + 1);
+  const prefixes = w.map(
+    (set) => [...set].sort((x, y) => frequency.get(x) - frequency.get(y) || (x < y ? -1 : 1)).slice(0, set.size - Math.ceil(set.size * CONFLICT) + 1)
   );
+  const index = /* @__PURE__ */ new Map();
+  for (const [i, item] of items.entries()) {
+    for (const word of prefixes[i]) {
+      const posting = index.get(`${keys[i]}\0${item.scope}`) ?? /* @__PURE__ */ new Map();
+      (posting.get(word) ?? posting.set(word, []).get(word)).push(i);
+      index.set(`${keys[i]}\0${item.scope}`, posting);
+    }
+  }
+  return items.filter((a, i) => {
+    for (const scope of NARROWNESS.slice(0, NARROWNESS.indexOf(a.scope))) {
+      const posting = index.get(`${keys[i]}\0${scope}`);
+      if (posting === void 0) continue;
+      for (const j of new Set(prefixes[i].flatMap((word) => posting.get(word) ?? []))) {
+        if (Math.min(w[i].size, w[j].size) < CONFLICT * Math.max(w[i].size, w[j].size)) continue;
+        if (anchorsOverlap(a.anchors, items[j].anchors) && similarity(w[i], w[j]) >= CONFLICT) return false;
+      }
+    }
+    return true;
+  });
 }
 var DAY = 864e5;
 function sweep(db) {
@@ -1421,14 +1455,17 @@ var MIGRATIONS = [
   `
 ];
 var SECURE_DELETE = 6;
-function openStore(path, create) {
+var WRITE_BUSY_MS = 5e3;
+var HOOK_BUSY_MS = 250;
+function openStore(path, create, busyMs = WRITE_BUSY_MS) {
   if (!existsSync2(path)) {
     if (!create) return null;
     mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
   }
   const db = new DatabaseSync(path);
   chmodSync(path, 384);
-  db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000; PRAGMA secure_delete = ON;");
+  db.exec(`PRAGMA busy_timeout = ${Math.trunc(busyMs)}; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL;`);
+  if (db.prepare("PRAGMA journal_mode").get().journal_mode !== "wal") db.exec("PRAGMA journal_mode = WAL");
   const version = () => db.prepare("PRAGMA user_version").get().user_version;
   if (version() > 0 && version() < SECURE_DELETE) db.exec("VACUUM");
   if (version() < MIGRATIONS.length) {
@@ -1824,11 +1861,11 @@ function withTextRatio(items, matches) {
     return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
   });
 }
-function visibleItems(data, context, cwd, terms = []) {
+function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS) {
   const out = [];
   const add = (items, matches) => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
-    const db = openStore(tenantFile(data, context.tenant), false);
+    const db = openStore(tenantFile(data, context.tenant), false, busyMs);
     if (db !== null) {
       try {
         recheck(db, context.tenant, context.repository, cwd);
@@ -1838,7 +1875,7 @@ function visibleItems(data, context, cwd, terms = []) {
       }
     }
   }
-  const person = openStore(personFile(data), false);
+  const person = openStore(personFile(data), false, busyMs);
   if (person !== null) {
     try {
       add(personItems(person), textMatches(person, terms));
@@ -2313,7 +2350,7 @@ function notes(text2) {
   const unreadable = jsonLines(text2, (e, line) => {
     const { kind, text: body, symbol } = e;
     if (typeof kind !== "string" || typeof body !== "string" || body.trim() === "") return false;
-    if (symbol !== void 0 && (typeof symbol !== "string" || !SYMBOL_KEY.test(symbol) || !inside(symbolPath(symbol)))) return false;
+    if (symbol !== void 0 && (typeof symbol !== "string" || !SYMBOL_KEY.test(symbol) || !inside2(symbolPath(symbol)))) return false;
     const type = Object.hasOwn(NOTE_TYPES, kind) ? NOTE_TYPES[kind] : void 0;
     if (type === void 0) {
       skippedNotes++;
@@ -2326,7 +2363,7 @@ function notes(text2) {
   return parsed(statements, { unreadable, skippedNotes });
 }
 var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
-var inside = (path) => !isAbsolute2(path) && !normalize(path).split(/[\\/]/).includes("..");
+var inside2 = (path) => !isAbsolute2(path) && !normalize(path).split(/[\\/]/).includes("..");
 
 // src/import/import.ts
 function readInside(path, root) {
@@ -2414,7 +2451,7 @@ function importSilos(config, data, configDir, dryRun) {
       const rel = silos[silo];
       if (rel === void 0) continue;
       const path = join5(checkout, rel);
-      if (!inside(rel)) {
+      if (!inside2(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
       }
@@ -3251,7 +3288,7 @@ function sweepCommand(data, cwd, due) {
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   let proposed = 0;
   for (const { file } of proposalStores(data, context)) {
-    const db = openStore(file, false);
+    const db = openStore(file, false, due ? HOOK_BUSY_MS : void 0);
     if (db === null) continue;
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
@@ -3271,7 +3308,7 @@ function hookInput() {
 }
 function hookSlice(data, config, input2, budget) {
   const cwd = typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd();
-  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd), budget);
+  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS), budget);
 }
 function sessionStart(data) {
   try {

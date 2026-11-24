@@ -131,11 +131,15 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
 ];
 const SECURE_DELETE = 6;
 
+/** How long a writer waits for the store's one write lock before it fails; a hook waits far less, so a busy store never costs a tool call. */
+export const WRITE_BUSY_MS = 5000;
+export const HOOK_BUSY_MS = 250;
+
 /**
  * Opens one store file. Readers pass `create: false` and get null for a file
  * that does not exist, so reading never creates a store for a tenant.
  */
-export function openStore(path: string, create: boolean): DatabaseSync | null {
+export function openStore(path: string, create: boolean, busyMs = WRITE_BUSY_MS): DatabaseSync | null {
   if (!existsSync(path)) {
     if (!create) return null;
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -143,7 +147,10 @@ export function openStore(path: string, create: boolean): DatabaseSync | null {
   const db = new DatabaseSync(path);
   chmodSync(path, 0o600);
   // Deleted content is overwritten, not left in free pages (#23); the full-text index has its own option, set in v4.
-  db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000; PRAGMA secure_delete = ON;');
+  db.exec(`PRAGMA busy_timeout = ${Math.trunc(busyMs)}; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL;`);
+  // Write-ahead log: readers see a snapshot and are never blocked by the writer, and writers queue on one lock.
+  // The mode is stored in the file, so it is switched once, and only a store not yet in it takes the lock to do so.
+  if ((db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode !== 'wal') db.exec('PRAGMA journal_mode = WAL');
   const version = (): number => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
   // A store written before secure deletion is rewritten once, before the version that records it, so text deleted
   // earlier is gone too; a rewrite that fails is tried again on the next open.

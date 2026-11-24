@@ -80,6 +80,8 @@ function assertNoNetwork({ net, netLog }) {
 function childEnv({ data, config, path, env: extra, netLog }) {
   const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv, ...extra };
   env.NODE_OPTIONS = `--import ${pathToFileURL(join(root, 'test', 'no-network.mjs')).href}`;
+  // WORK_LOG names the file that receives this run's SQLite work (test/work-count.mjs).
+  if (env.WORK_LOG) env.NODE_OPTIONS += ` --import ${pathToFileURL(join(root, 'test', 'work-count.mjs')).href}`;
   env.NO_NET_LOG = netLog ?? netDefault;
   if (data) env.MEMORY_DATA_DIR = data;
   if (config) env.CLAUDE_CONFIG_DIR = config;

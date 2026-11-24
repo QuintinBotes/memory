@@ -38,7 +38,7 @@ import { importSilos } from './import/import.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { capture, captureWanted } from './capture/capture.ts';
-import { openStore } from './store/db.ts';
+import { HOOK_BUSY_MS, openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
@@ -430,7 +430,7 @@ function sweepCommand(data: string, cwd: string, due: boolean): void {
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   let proposed = 0;
   for (const { file } of proposalStores(data, context)) {
-    const db = openStore(file, false);
+    const db = openStore(file, false, due ? HOOK_BUSY_MS : undefined);
     if (db === null) continue;
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
@@ -454,7 +454,7 @@ function hookInput(): Record<string, unknown> {
 /** The slice for the hook's working directory: the subagent's own, for a subagent, so its tenant is resolved there. */
 function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number) {
   const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
-  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd), budget);
+  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS), budget);
 }
 
 /**

@@ -4,6 +4,7 @@ import { authorityViolations } from './authority.ts';
 import { visibleText } from './codefree.ts';
 import { READS_EXPIRED } from './recall/rank.ts';
 import { recordAudit } from './store/audit.ts';
+import { inTransaction } from './store/transaction.ts';
 
 export const SCOPES = ['repository', 'organisation', 'person', 'global'] as const;
 export const TYPES = ['preference', 'convention', 'decision', 'hazard', 'precedent', 'failure-pattern', 'repair-recipe'] as const;
@@ -88,8 +89,7 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
   const id = `m-${randomBytes(5).toString('hex')}`;
   const now = new Date().toISOString();
   const trust = item.trust ?? 'owner';
-  db.exec('BEGIN');
-  try {
+  inTransaction(db, () => {
     db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
          authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes)
@@ -103,11 +103,7 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`,
     ).run(`e-${randomBytes(5).toString('hex')}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
   return id;
 }
 

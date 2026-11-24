@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Many writers and 10,000 items (#24). Every store file now runs in write-ahead
+  log mode, so a reader never waits for a writer, and writers queue on one lock
+  for up to 5 s instead of failing on a lock upgrade. A statement proposed by
+  two sessions at once is one item with both pieces of evidence: the exact-match
+  check is repeated under the write lock, and the same source arriving twice is
+  one piece of evidence. The SessionStart and SubagentStart hooks wait at most
+  250 ms for a lock; a hook that cannot get the store prints nothing and exits 0.
+  Recall's narrower-scope-wins rule compared every pair of visible items (about
+  2.7 s at 10,000); it now compares a statement only with the narrower-scope
+  items that share its rarest words, with the same result. New tests cover the
+  eight-writer, killed-writer, held-lock and 10,000-item scenarios by the work
+  done, and `node scripts/bench-hook.mjs` measures hook latency on demand.
+  Not in this change: the network-file-system refusal at `memory init` and a
+  separate lock for background anchor refreshes.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added
