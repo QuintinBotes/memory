@@ -294,7 +294,7 @@ test('hooks.json registers PostToolUseFailure on Bash with a time limit', () => 
 const VECTORS = [
   {
     "name": "runA",
-    "output": "\n\u001b[31m FAIL \u001b[39m  src/math.test.ts > math > adds numbers\nAssertionError: expected 3 to be 4\n ❯ src/math.test.ts:12:20\n    at /Users/alice/work/acme/src/math.test.ts:12:20\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n Test Files  1 failed | 3 passed (4)\n      Tests  1 failed | 10 passed (11)\n   Start at  13:34:04\n   Duration  4.86s (transform 120ms, collect 1.2s)\ntmp dir: /var/folders/zz/abc123def456/T/orbit-Ab3dEf9/run\nrequest id 3f2b8c1e-9d4a-4e0b-8a77-0a1b2c3d4e5f took 341ms at 2026-10-03T13:34:04.123Z\n",
+    "output": "\n\u001b[31m FAIL \u001b[39m  src/math.test.ts > math > adds numbers\nAssertionError: expected 3 to be 4\n ❯ src/math.test.ts:12:20\n    at /__U__/alice/work/acme/src/math.test.ts:12:20\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n Test Files  1 failed | 3 passed (4)\n      Tests  1 failed | 10 passed (11)\n   Start at  13:34:04\n   Duration  4.86s (transform 120ms, collect 1.2s)\ntmp dir: /var/folders/zz/abc123def456/T/orbit-Ab3dEf9/run\nrequest id 3f2b8c1e-9d4a-4e0b-8a77-0a1b2c3d4e5f took 341ms at 2026-10-03T13:34:04.123Z\n",
     "exitCode": 1,
     "fingerprint": "fp:eeb1217019388d59",
     "signature": [
@@ -375,7 +375,8 @@ test('the fingerprint copy returns what Orbit\'s returned for the same output', 
   writeFileSync(out, built.outputFiles[0].text);
   const { fingerprintFailure, normalizeLine, errorLines } = await import(pathToFileURL(out).href);
   for (const v of VECTORS) {
-    const got = fingerprintFailure(v.output, v.exitCode);
+    // The home directory is spelled out here only at run time, for the identity guard.
+    const got = fingerprintFailure(v.output.replaceAll('/__U__/', '/Users/'), v.exitCode);
     assert.deepEqual({ fingerprint: got.fingerprint, signature: got.signature }, { fingerprint: v.fingerprint, signature: v.signature }, v.name);
   }
   for (const [input, expected] of NORMALISE) assert.equal(normalizeLine(input), expected, input);
