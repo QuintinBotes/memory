@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Related items and open questions (#39): `memory_related(path_or_symbol,
+  depth?)` and `memory related <path> [--depth n]` return the active items
+  anchored at or under a path or symbol prefix, read through the anchor-path
+  index, as whole rows within the session budget. A new item type,
+  `open_question`, can be proposed by an agent and is inactive until the owner
+  approves it; `memory close <id>` (owner only, no MCP tool) closes it and
+  removes it from recall. No schema change and no new consent category.
 - `memory report [--tenant <name>]` (#41) ranks each bound tenant's active
   items by helped minus wrong minus stale, then confidence, then id, with items
   that have no feedback listed apart. Per tenant, never across tenants;

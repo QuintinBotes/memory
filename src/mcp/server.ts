@@ -13,6 +13,7 @@ import { logWithheld } from '../store/injections.ts';
 import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, taintList, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
 import { READS_EXPIRED, band, confidence, rank, searchTerms } from '../recall/rank.ts';
 import { similarities } from '../recall/semantic.ts';
+import { related, relatedTarget } from '../recall/related.ts';
 import { visibleItems } from '../recall/visible.ts';
 import { ITEMS_LABEL, LEAN_ROW_TOKENS, fence, leanRow, safe, safeJson } from '../render/rows.ts';
 import { recordAudit } from '../store/audit.ts';
@@ -20,7 +21,7 @@ import { openStore } from '../store/db.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
 
 /**
- * Memory's MCP server: newline-delimited JSON-RPC over stdio, four tools.
+ * Memory's MCP server: newline-delimited JSON-RPC over stdio, five tools.
  * An agent can search, read, propose and give feedback. No tool approves,
  * rejects, purges or configures, and nothing a tool writes is active: those
  * stay terminal commands for the owner.
@@ -56,9 +57,22 @@ const TOOLS = [
     },
   },
   {
+    name: 'memory_related',
+    description: `Every active item anchored at or under a path or symbol of this repository, as rows within the session budget, whole rows only. For "what do we know about this module". ${FACTS}`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path_or_symbol: { type: 'string', description: 'A path relative to the repository root, or a symbol key path#name#kind; a directory matches everything under it.' },
+        depth: { type: 'integer', minimum: 0, description: 'How many path segments below the prefix to match; 0 is the prefix itself. Default: all.' },
+      },
+      required: ['path_or_symbol'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'memory_propose',
     description:
-      'Propose one short factual statement with its evidence. It waits for the owner in memory review and is never active until the owner approves it. Write a fact ("releases are cut from main"), not an instruction: text that reads as an instruction is quarantined.',
+      'Propose one short factual statement with its evidence, or, with type open_question, a question the team has not settled (not a fact; the owner closes it). It waits for the owner in memory review and is never active until the owner approves it. Write a fact ("releases are cut from main"), not an instruction: text that reads as an instruction is quarantined.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -153,6 +167,14 @@ async function search(args: Args, data: string, config: Config, context: Context
   const note = 'note' in semantic ? `${semantic.note}\n` : '';
   if (hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
+}
+
+function relatedTool(args: Args, data: string, config: Config, context: Context, cwd: string): string {
+  const target = relatedTarget(cwd, text(args, 'path_or_symbol'));
+  if (target === null) throw new ToolError('path_or_symbol is a path inside the repository, or a symbol key path#name#kind');
+  const depth = args['depth'];
+  if (depth !== undefined && (typeof depth !== 'number' || !Number.isInteger(depth) || depth < 0)) throw new ToolError('depth is a whole number, 0 or more');
+  return related(data, config, context, cwd, target, depth) || `No memory item is anchored at or under ${target}.`;
 }
 
 interface ItemRow {
@@ -313,6 +335,8 @@ async function call(name: unknown, args: Args, data: string, cwd: string): Promi
       return search(args, data, config, context, cwd);
     case 'memory_get':
       return get(args, data, context, cwd);
+    case 'memory_related':
+      return relatedTool(args, data, config, context, cwd);
     case 'memory_propose':
       return propose(args, data, config, context, cwd);
     case 'memory_feedback':

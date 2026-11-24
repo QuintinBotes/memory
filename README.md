@@ -11,7 +11,7 @@ one client's repositories never reaches another organisation's work.
 **Status: early.** Slices 1 to 4 of eighteen are in: the tenant-isolated
 store, `remember`, the slice printed at session start, the re-check of every
 cited file and line before an item is shown, the import of what your
-existing silos already hold, as proposals you approve, and four MCP tools
+existing silos already hold, as proposals you approve, and five MCP tools
 through which agents search, read, propose and give feedback. The plan is tracked in
 [#1](https://github.com/QuintinBotes/memory/issues/1), one issue per slice.
 
@@ -246,7 +246,8 @@ memory reject m-1a2b3c4d5e --reason 'too broad'
 A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal
 commands. To be asked before an agent runs one, add ask rules such as
-`Bash(*memory.mjs*approve*)` and `Bash(*memory.mjs*reject*)`.
+`Bash(*memory.mjs*approve*)`, `Bash(*memory.mjs*reject*)` and
+`Bash(*memory.mjs*close*)` (an agent's shell can run `memory close`).
 
 ### Precedents for every reviewer
 
@@ -397,7 +398,7 @@ deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
 
 ## What agents can do
 
-The plugin runs an MCP server with four tools. None of them can approve,
+The plugin runs an MCP server with five tools. None of them can approve,
 reject, purge or change the configuration, and nothing they write is active.
 
 - `memory_search(query, paths?)` returns at most 10 rows,
@@ -416,6 +417,15 @@ reject, purge or change the configuration, and nothing they write is active.
   tunes them. Budgets, the 10-row limit and the advisory fence do not change.
 - `memory_get(id, format?)` returns one item whole, with its evidence and
   anchor status, as rows or as JSON with `format: "json"`.
+- `memory_related(path_or_symbol, depth?)` returns every active item anchored
+  at or under a path of this repository (a directory matches everything below
+  it; a symbol key `path#name#kind` matches that symbol and what it prefixes),
+  as the same rows the session slice prints, within the session budget: whole
+  rows are dropped, never cut, with a `+N more` line. `depth` limits the path
+  segments matched below the prefix (0 is the prefix itself). It reads the
+  anchor-path index after the usual re-check, so stale, superseded, proposed
+  and quarantined items never appear. `memory related <path> [--depth n]` is the
+  same from the terminal.
 - `memory_propose(statement, scope, type, evidence)` stores a proposal for
   `memory review`. `evidence` is `{source, origin}`, where origin is `agent`
   (the default), `team`, `external` or `bot`; only your own `remember` gives
@@ -429,6 +439,12 @@ reject, purge or change the configuration, and nothing they write is active.
   `test/poison.test.mjs` and `memory eval poison` are the standing red-team
   suite for these gates (see SECURITY.md); `npm test` runs it in CI on every
   pull request.
+  `type` may be `open_question`: a question the team has not settled, not a
+  fact. It is inactive like every proposal until you approve it; once approved
+  it is recalled in the session slice with its type shown, and `memory close
+  <id>` (terminal only, no MCP tool) takes it out of recall and keeps it on
+  record as `closed`. It needs no new consent: it is the same agent-proposed
+  text, in the same stores.
 - `memory_feedback(id, helped|wrong|stale)` changes only the counts behind an
   item's confidence. `stale` re-checks the item's citation at HEAD at once: if
   it fails, the item goes stale as the re-check would make it, and comes back

@@ -24,7 +24,7 @@ import {
 import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
 import type { DatabaseSync } from 'node:sqlite';
-import { SCOPES, TYPES, sha256, type Anchor, type Scope } from './items.ts';
+import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { networkFilesystem } from './store/filesystem.ts';
@@ -42,6 +42,7 @@ import { importSilos } from './import/import.ts';
 import { renderReport, tenantReport } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
+import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
@@ -98,11 +99,17 @@ const USAGE = `usage: memory <command>
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
+  related <path-or-symbol> [--depth <n>]
+      the active items anchored at or under that path (or symbol key, path#name#kind) in this repository, as the session
+      slice prints them, within its budget: whole rows only. --depth limits the path segments matched below it
+  close <id>
+      close an open question, an owner action: it leaves recall at once and stays on record as closed. Only an approved
+      (active) open_question can be closed; an agent proposes one with memory_propose and it waits for memory approve
   recall --diff <base>..<head>
       the precedents and hazards for the paths that range changes, within 600 estimated tokens, for any reviewer to
       read before it reports findings. Exits 2 when the range does not resolve
   mcp
-      the MCP server over stdio: memory_search, memory_get, memory_propose, memory_feedback
+      the MCP server over stdio: memory_search, memory_get, memory_related, memory_propose, memory_feedback
   session-start
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
@@ -553,6 +560,35 @@ async function decideCommand(args: string[], data: string, cwd: string, decision
   throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
 }
 
+/** `memory related <path-or-symbol> [--depth <n>]`: what is anchored at or under it. */
+function relatedCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { depth: { type: 'string' } } });
+  if (positionals.length !== 1) throw new Refusal('give one path or symbol', 2);
+  if (values.depth !== undefined && !/^\d+$/.test(values.depth)) throw new Refusal('--depth takes a whole number', 2);
+  const target = relatedTarget(cwd, positionals[0]!);
+  if (target === null) throw new Refusal('give a path inside the repository, or a symbol key path#name#kind', 2);
+  const config = setUp(data);
+  const out = related(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, target, values.depth === undefined ? undefined : Number(values.depth));
+  if (out === '') console.error(`No memory item is anchored at or under ${target}.`);
+  else process.stdout.write(out);
+}
+
+/** `memory close <id>`: the owner closes an approved open question. */
+function closeCommand(args: string[], data: string, cwd: string): void {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length !== 1) throw new Refusal('give one open question id', 2);
+  for (const { file } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      if (closeQuestion(db, positionals[0]!)) return void console.log(`closed ${positionals[0]}; it stays on record and is no longer recalled`);
+    } finally {
+      db.close();
+    }
+  }
+  throw new Refusal(`no active open question ${positionals[0]} here; a proposed one is decided with memory approve or memory reject`);
+}
+
 /** `memory undo <audit-id>`: reverses a merge or a supersession in whichever store holds the event. */
 function undoCommand(args: string[], data: string, cwd: string): void {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
@@ -977,6 +1013,10 @@ async function main(argv: string[]): Promise<void> {
       return sweepCommand(data, process.cwd(), false);
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
+    case 'related':
+      return relatedCommand(rest, data, process.cwd());
+    case 'close':
+      return closeCommand(rest, data, process.cwd());
     case 'recall':
       return recallCommand(rest, data, process.cwd());
     case 'mcp':

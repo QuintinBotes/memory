@@ -43,7 +43,7 @@ interface EvidenceRow {
   taint: string | null;
 }
 
-const STATUS_ORDER = ['active', 'proposed', 'stale', 'superseded', 'promoted', 'rejected', 'expired'];
+const STATUS_ORDER = ['active', 'proposed', 'stale', 'superseded', 'promoted', 'closed', 'rejected', 'expired'];
 const COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
   anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
 

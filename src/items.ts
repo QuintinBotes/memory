@@ -7,7 +7,7 @@ import { recordAudit } from './store/audit.ts';
 import { inTransaction } from './store/transaction.ts';
 
 export const SCOPES = ['repository', 'organisation', 'person', 'global'] as const;
-export const TYPES = ['preference', 'convention', 'decision', 'hazard', 'precedent', 'failure-pattern', 'repair-recipe'] as const;
+export const TYPES = ['preference', 'convention', 'decision', 'hazard', 'precedent', 'failure-pattern', 'repair-recipe', 'open_question'] as const;
 export type Scope = (typeof SCOPES)[number];
 /** Who an item came from. Only the owner's own `remember`, and the owner's silos, carry owner trust. */
 export const ORIGINS = ['agent', 'team', 'external', 'bot'] as const;
@@ -185,8 +185,41 @@ export function anchoredItems(db: DatabaseSync, tenant: string, repository: stri
   return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE} AND id IN (${ids.map(() => '?').join(', ')})`).all(tenant, repository, owner, ...ids) as unknown as Row[]);
 }
 
+/**
+ * Active items of `tenant` for this repository and its owner with an anchor at `target` or under it, read through the
+ * anchor-path index. A target with `#` is a symbol key: its file's items whose symbol starts with it. `depth` limits the
+ * path segments below the target (0 is the target itself).
+ */
+export function anchoredUnder(db: DatabaseSync, tenant: string, repository: string, owner: string, target: string, depth = Infinity): Visible[] {
+  const file = target.split('#')[0]!;
+  const rows = db
+    .prepare('SELECT DISTINCT item_id FROM item_anchors WHERE path = ? OR (path >= ? AND path < ?)')
+    .all(file, `${file}/`, `${file}0`) as { item_id: string }[];
+  if (rows.length === 0) return [];
+  const items = visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE} AND id IN (${rows.map(() => '?').join(', ')})`).all(tenant, repository, owner, ...rows.map((r) => r.item_id)) as unknown as Row[]);
+  const inside = (a: Anchor): boolean =>
+    target.includes('#')
+      ? a.path === file && a.symbol?.startsWith(target) === true
+      : a.path === target || (a.path.startsWith(`${target}/`) && a.path.slice(target.length + 1).split('/').length <= depth);
+  return items.filter((i) => i.anchors.some(inside));
+}
+
 export function personItems(db: DatabaseSync): Visible[] {
   return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all() as unknown as Row[]);
+}
+
+/**
+ * Closes an active open question: it leaves recall at once and stays on record as closed. Only the owner's
+ * `memory close` calls this; no MCP tool does. False when no active open question of that id is in `tenant`'s file.
+ */
+export function closeQuestion(db: DatabaseSync, id: string): boolean {
+  return inTransaction(db, () => {
+    const { changes } = db
+      .prepare("UPDATE items SET status = 'closed', valid_to = ?, status_reason = 'closed by the owner' WHERE id = ? AND type = 'open_question' AND status = 'active'")
+      .run(new Date().toISOString(), id);
+    if (changes === 1) recordAudit(db, 'question_closed', { type: 'item', id }, {});
+    return changes === 1;
+  });
 }
 
 /** bm25 of each item whose statement or rationale holds any of `terms`, by id. */

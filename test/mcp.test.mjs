@@ -226,7 +226,7 @@ test('an untenanted repository or an unbound config searches person and global i
 test('no tool can approve, reject, purge or configure, and no tool call makes an item active', () => {
   const s = seeded();
   const list = rpc(s.acmeApi, s.data, s.configA, [{ jsonrpc: '2.0', id: 1, method: 'tools/list' }]);
-  assert.deepEqual(list.byId(1).result.tools.map((t) => t.name).sort(), ['memory_feedback', 'memory_get', 'memory_propose', 'memory_search']);
+  assert.deepEqual(list.byId(1).result.tools.map((t) => t.name).sort(), ['memory_feedback', 'memory_get', 'memory_propose', 'memory_related', 'memory_search']);
 
   const [proposed] = tools(s.acmeApi, s.data, s.configA, [
     ['memory_propose', { statement: 'The ledger is rebuilt every night', scope: 'repository', type: 'convention', evidence: { source: 'run-1' } }],
