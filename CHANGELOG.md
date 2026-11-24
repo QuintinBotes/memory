@@ -7,11 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-11-24
-
 ### Added
 
-- Symbol anchors that follow the code (#10). A code anchor provider is an
+- Symbol anchors that follow the code (#10). A code anchor provider is the
   command named under `impactProvider` in `config.json` (the one command, run
   without a shell with one JSON line in and one out, that diff recall uses too;
   `docs/provider.md`: a stable key per symbol, the symbol at a line, changes
@@ -25,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`memory anchors adopt`). An answer about another repository is dropped; a
   failing provider changes nothing and anchors are checked by path. Consent
   plan 9 adds the `symbols` category. No schema change.
+
+## [0.7.0] - 2026-11-24
+
+### Added
+
 - Failures and reverts become proposals (#18). `memory ci` reads this
   repository's GitHub Actions runs with `gh`: a failed run followed by a
   passing run on another commit gives a `repair-recipe` proposal whose evidence
