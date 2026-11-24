@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changed nor tested, within the same 600 tokens. No snapshot, a failing
   provider or no consent to the new plan item falls back to path overlap and
   says so. Dependents of another repository are dropped. Consent plan version
-  9 adds the `impact` category; no schema change.
+  8 adds the `impact` category; no schema change.
 - Failures and reverts become proposals (#18). `memory ci` reads this
   repository's GitHub Actions runs with `gh`: a failed run followed by a
   passing run on another commit gives a `repair-recipe` proposal whose evidence

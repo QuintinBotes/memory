@@ -370,23 +370,54 @@ A hazard on a caller the change did not touch is where breakage hides. With a
 code anchor provider set in `config.json`,
 
 ```json
-"impactProvider": { "command": ["node", "/path/to/provider.mjs"] }
+"impactProvider": { "command": ["/absolute/path/to/provider", "arg"] }
 ```
 
-`memory recall --diff` runs that command once, without a shell, with only `PATH`
-and `HOME` in its environment, and writes one line to its standard input:
-`{"op": "impact", "repository": "owner/repo", "range": "<base>..<head>", "changed": ["path", ...]}`.
-It answers `{"status": "no_snapshot"}` or `{"status": "ok", "dependents": [...]}`, each
-dependent `{"path", "relation": "caller"|"implementer"|"importer", "status": "changed"|"tested"|"neither"}`
-with an optional `symbol` and `repository`. Items on a changed path score 4 as before;
-items on a depth-1 dependent score 2 (`dependent 2` in the row's why), and 1 more
-(`neither changed nor tested 1`) when the change neither edits nor tests that
-dependent. A `changed` dependent adds nothing, and a dependent of another
-repository is dropped: items are kept per repository. The answer is not stored.
-The budget stays 600 estimated tokens. With no provider, or a failing one, recall is
-path overlap as before; when a provider could not help (no snapshot yet, it failed,
-or you have not agreed to plan version 9 with `memory init`), one line after the
-rows says why. Memory names no provider; a code graph adapts to this line protocol.
+`memory recall --diff` runs that command once per call, without a shell, with
+only `PATH` and `HOME` in its environment and 5 seconds to answer (it is then
+killed with SIGKILL). `command[0]` must be an absolute path: a relative one would
+resolve inside the repository, which could then supply the program. Memory names
+no provider; a code graph adapts to this protocol, one JSON line each way.
+
+The request, on standard input, with `range` exactly as given to `--diff` and
+`changed` the paths the range changes:
+
+```json
+{"op": "impact", "repository": "owner/repo", "range": "<base>..<head>", "changed": ["src/core.ts"]}
+```
+
+The answer, on standard output, at most 4 MiB, exit status 0:
+
+```json
+{"status": "no_snapshot"}
+{"status": "ok", "dependents": [{"path": "src/service.ts", "relation": "caller", "status": "neither", "symbol": "optional", "repository": "optional owner/repo"}]}
+```
+
+- `relation` is `caller`, `implementer` or `importer`. ProofMesh's words are accepted
+  too: `calls` is a caller; `implements`, `overrides` and `inherits` are
+  implementers; `imports` is an importer; `references` and any other relation are
+  ignored.
+- `status` is `changed`, `tested` or `neither`; a status that starts `tested: `
+  (ProofMesh's `tested: <test> <path>:<line> ...`) is `tested`.
+- A ProofMesh adapter must map its `pending` answer (no snapshot yet) to
+  `no_snapshot`, and may start an index job to answer; the consent text of the
+  `impact` category says so.
+
+Items on a changed path score 4 as before. Items on a depth-1 dependent score 2
+(`dependent 2` in the row's why), and 1 more (`neither changed nor tested 1`) when
+the change neither edits nor tests that dependent. A `changed` dependent adds
+nothing. Only a file the head of the range holds can boost, so a directory, an
+absolute path, a path with `..` or one the repository lacks is skipped
+(a backslash path is read as a slash path). A malformed entry is skipped and the
+others still count, and at most the first 1000 entries are read. Dependents in other
+repositories are dropped, siblings in the same tenant included: items are kept
+per repository, so a dependent's path in another repository would match the wrong
+items. The answer is not stored.
+
+The budget stays 600 estimated tokens, the note below included. With no provider,
+or a failing one, recall is path overlap as before; when a provider could not help
+(no snapshot yet, it failed, or you have not agreed to plan version 8 with `memory
+init`), one line after the rows says why.
 
 ## Repeats and conflicts
 

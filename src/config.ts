@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 /**
  * Memory's one configuration file, machine-wide, in the data directory.
@@ -158,7 +158,11 @@ export function loadConfig(data: string): Config | null {
     impact !== undefined &&
     !(typeof impact === 'object' && impact !== null && !Array.isArray(impact) && isList(impact.command) && impact.command.length > 0 && impact.command.every((a) => a !== ''))
   ) {
-    throw new ConfigError('impactProvider must be {"command": [program, arguments...]}');
+    throw new ConfigError('impactProvider must be {"command": [absolute program path, arguments...]}');
+  }
+  // A relative program would resolve inside the repository, which could then supply it.
+  if (impact !== undefined && !isAbsolute(impact.command[0]!)) {
+    throw new ConfigError('impactProvider.command[0] must be an absolute path');
   }
   const off = c.recallOff;
   if (off !== undefined && !(typeof off === 'object' && off !== null && typeof off.reason === 'string' && typeof off.at === 'string')) {
