@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { visibleText } from './codefree.ts';
 import { cleanTaint, insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
 import { recordAudit } from './store/audit.ts';
+import { inTransaction } from './store/transaction.ts';
 
 /**
  * What happens when a statement arrives: a repeat becomes evidence on the item
@@ -25,10 +26,9 @@ function similarity(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : shared / union;
 }
 
-const sameNumbers = (a: Set<string>, b: Set<string>): boolean => {
-  const n = (s: Set<string>): string => [...s].filter((w) => /\d/.test(w)).sort().join(' ');
-  return n(a) === n(b);
-};
+/** The words that hold a digit, in order: two statements with different ones are about different numbers. */
+const numberKey = (s: Set<string>): string => [...s].filter((w) => /\d/.test(w)).sort().join(' ');
+const sameNumbers = (a: Set<string>, b: Set<string>): boolean => numberKey(a) === numberKey(b);
 
 /** Two items can only be about the same subject if neither is anchored, or they cite a common file. */
 const anchorsOverlap = (a: Anchor[], b: Anchor[]): boolean => a.length === 0 || b.length === 0 || a.some((x) => b.some((y) => x.path === y.path));
@@ -51,12 +51,40 @@ export type Stored =
   | { kind: 'inserted'; id: string; supersedes?: string }
   | { kind: 'superseded-on-arrival'; id: string; by: string };
 
-/** Adds `c`, consolidating it with what the store holds. `c.status` of `active` is the owner's own "remember this". */
-export function addItem(db: DatabaseSync, c: NewItem): Stored {
+/**
+ * Writes what the scan decided, under the write lock, after asking once more the one question another writer may have
+ * answered since the scan: is this exact statement already here? If so it becomes evidence on it, so a statement
+ * proposed by two sessions at once stays one item. Near matches are decided by the scan alone.
+ */
+function place(db: DatabaseSync, c: NewItem, key: string, write: () => Stored): Stored {
+  return inTransaction(db, () => {
+    // A tombstone another writer left while this one queued blocks it too.
+    const blocked = priorDecision(db, c);
+    if (blocked !== undefined) return blocked;
+    const same = db
+      .prepare(
+        `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
+           AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?)) ORDER BY created_at, id`,
+      )
+      .all(c.tenant, key, c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as { id: string; anchors_json: string }[];
+    const repeat = same.find((r) => anchorsOverlap(c.anchors, JSON.parse(r.anchors_json) as Anchor[]));
+    return repeat === undefined ? write() : mergeEvidence(db, repeat.id, c);
+  });
+}
+
+/** A tombstone, or a stale or superseded item, already settles this statement: it is not proposed again. */
+function priorDecision(db: DatabaseSync, c: NewItem): Stored | undefined {
   const was = knownItem(db, c);
   if (c.status !== 'active' && was !== undefined && (was.status === 'rejected' || was.status === 'expired')) return { kind: 'rejected', id: was.id };
   // Stale and superseded items keep their statement: it is not proposed again either.
   if (was !== undefined && !['active', 'proposed', 'rejected', 'expired'].includes(was.status)) return { kind: 'known', id: was.id };
+  return undefined;
+}
+
+/** Adds `c`, consolidating it with what the store holds. `c.status` of `active` is the owner's own "remember this". */
+export function addItem(db: DatabaseSync, c: NewItem): Stored {
+  const blocked = priorDecision(db, c);
+  if (blocked !== undefined) return blocked;
 
   const key = statementKey(c.statement);
   const mine = words(c.statement);
@@ -80,25 +108,24 @@ export function addItem(db: DatabaseSync, c: NewItem): Stored {
     if (sim >= REPEAT && sameNumbers(mine, theirs)) return mergeEvidence(db, r.id, c);
     if (sim >= CONFLICT && r.status === 'active' && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (conflict?.sim ?? 0)) conflict = { row: r, sim };
   }
-  if (conflict === undefined) return { kind: 'inserted', id: insertItem(db, c) };
+  if (conflict === undefined) return place(db, c, key, () => ({ kind: 'inserted', id: insertItem(db, c) }));
 
   // The newer statement is the one whose evidence is newer, not the one memory captured last.
   const older = (db.prepare('SELECT min(captured_at) AS at FROM evidence WHERE item_id = ?').get(conflict.row.id) as { at: string | null }).at;
   if (c.evidenceAt !== undefined && older !== null && c.evidenceAt < older) {
-    const id = insertItem(db, { ...c, status: 'superseded', validTo: older, statusReason: `superseded by ${conflict.row.id}` });
-    return { kind: 'superseded-on-arrival', id, by: conflict.row.id };
+    return place(db, c, key, () => ({ kind: 'superseded-on-arrival', id: insertItem(db, { ...c, status: 'superseded', validTo: older, statusReason: `superseded by ${conflict.row.id}` }), by: conflict.row.id }));
   }
-  return { kind: 'inserted', id: insertItem(db, { ...c, supersedes: conflict.row.id }), supersedes: conflict.row.id };
+  return place(db, c, key, () => ({ kind: 'inserted', id: insertItem(db, { ...c, supersedes: conflict.row.id }), supersedes: conflict.row.id }));
 }
 
 /** Attaches `c` as evidence to `id`, with its own trust. Only the owner's evidence raises support. */
 function mergeEvidence(db: DatabaseSync, id: string, c: NewItem): Stored {
-  if (db.prepare('SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?').get(id, c.source) !== undefined) return { kind: 'known', id };
   const trust = c.trust ?? 'owner';
   const delta = trust === 'owner' ? 1 : 0;
   const evidenceId = `e-${randomBytes(5).toString('hex')}`;
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  return inTransaction(db, () => {
+    // Asked under the lock: the same source arriving twice at once is one piece of evidence.
+    if (db.prepare('SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?').get(id, c.source) !== undefined) return { kind: 'known', id };
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`,
@@ -106,12 +133,8 @@ function mergeEvidence(db: DatabaseSync, id: string, c: NewItem): Stored {
     db.prepare('UPDATE items SET support = support + ? WHERE id = ?').run(delta, id);
     const audit = recordAudit(db, 'evidence_merged', { type: 'item', id }, { evidenceId, supportDelta: delta, trust });
     const { support } = db.prepare('SELECT support FROM items WHERE id = ?').get(id) as { support: number };
-    db.exec('COMMIT');
     return { kind: 'merged', id, audit, support };
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 /**
@@ -185,12 +208,35 @@ const NARROWNESS = ['person', 'repository', 'organisation', 'global'];
  */
 export function narrowerWins(items: Visible[]): Visible[] {
   const w = items.map((i) => words(i.statement));
-  return items.filter((a, i) =>
-    !items.some((b, j) => {
-      if (i === j || a.type !== b.type || a.scope === b.scope || NARROWNESS.indexOf(b.scope) >= NARROWNESS.indexOf(a.scope)) return false;
-      return anchorsOverlap(a.anchors, b.anchors) && sameNumbers(w[i]!, w[j]!) && similarity(w[i]!, w[j]!) >= CONFLICT;
-    }),
+  const keys = items.map((item, i) => `${item.type}\u0000${numberKey(w[i]!)}`);
+  // Prefix filter: order every statement's words rarest first; two statements whose overlap reaches CONFLICT share a
+  // word among the first `size - ceil(size * CONFLICT) + 1` of each. So only those words are indexed and probed.
+  const frequency = new Map<string, number>();
+  for (const set of w) for (const word of set) frequency.set(word, (frequency.get(word) ?? 0) + 1);
+  const prefixes = w.map((set) =>
+    [...set].sort((x, y) => frequency.get(x)! - frequency.get(y)! || (x < y ? -1 : 1)).slice(0, set.size - Math.ceil(set.size * CONFLICT) + 1),
   );
+  // Only items of one type and one number key are compared, and only with a narrower scope.
+  const index = new Map<string, Map<string, number[]>>();
+  for (const [i, item] of items.entries()) {
+    for (const word of prefixes[i]!) {
+      const posting = index.get(`${keys[i]}\u0000${item.scope}`) ?? new Map<string, number[]>();
+      (posting.get(word) ?? posting.set(word, []).get(word)!).push(i);
+      index.set(`${keys[i]}\u0000${item.scope}`, posting);
+    }
+  }
+  return items.filter((a, i) => {
+    for (const scope of NARROWNESS.slice(0, NARROWNESS.indexOf(a.scope))) {
+      const posting = index.get(`${keys[i]}\u0000${scope}`);
+      if (posting === undefined) continue;
+      for (const j of new Set(prefixes[i]!.flatMap((word) => posting.get(word) ?? []))) {
+        // Jaccard cannot reach CONFLICT when the smaller set is under CONFLICT of the larger.
+        if (Math.min(w[i]!.size, w[j]!.size) < CONFLICT * Math.max(w[i]!.size, w[j]!.size)) continue;
+        if (anchorsOverlap(a.anchors, items[j]!.anchors) && similarity(w[i]!, w[j]!) >= CONFLICT) return false;
+      }
+    }
+    return true;
+  });
 }
 
 const DAY = 86_400_000;
@@ -202,18 +248,18 @@ const DAY = 86_400_000;
  * shortcut: compares every pair of the store's active items, quadratic; index by type if a store passes ~5,000 items.
  */
 export function sweep(db: DatabaseSync): number {
-  const rows = (
-    db
-      .prepare(
-        `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
-         WHERE status = 'active' AND statement != '' ORDER BY created_at, id`,
-      )
-      .all() as unknown as (Related & { supersedes: string | null })[]
-  ).map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) as Anchor[] }));
-  const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
-  let proposed = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  // Read under the write lock: two sweeps queue, and the second sees what the first proposed and any row purged since.
+  return inTransaction(db, () => {
+    const rows = (
+      db
+        .prepare(
+          `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
+           WHERE status = 'active' AND statement != '' ORDER BY created_at, id`,
+        )
+        .all() as unknown as (Related & { supersedes: string | null })[]
+    ).map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) as Anchor[] }));
+    const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
+    let proposed = 0;
     for (const [j, newer] of rows.entries()) {
       if (newer.supersedes !== null) continue;
       const older = rows.slice(0, j).find((r) => {
@@ -228,12 +274,8 @@ export function sweep(db: DatabaseSync): number {
       proposed++;
     }
     recordAudit(db, 'sweep', null, { proposed });
-    db.exec('COMMIT');
     return proposed;
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 /** Above this many active items the session start leaves the sweep to `memory sweep`: about half a million pairs, well under a second. */

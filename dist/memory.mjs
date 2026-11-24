@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { appendFileSync as appendFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname5, isAbsolute as isAbsolute3, join as join9, normalize as normalize2 } from "node:path";
+import { appendFileSync as appendFileSync2, existsSync as existsSync7, mkdirSync as mkdirSync6, readFileSync as readFileSync8, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname7, isAbsolute as isAbsolute3, join as join9, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -842,6 +842,24 @@ function recordAudit(db, action, subject, metadata = {}) {
   return id;
 }
 
+// src/store/transaction.ts
+var inside = /* @__PURE__ */ new WeakSet();
+function inTransaction(db, work) {
+  if (inside.has(db)) return work();
+  db.exec("BEGIN IMMEDIATE");
+  inside.add(db);
+  try {
+    const result = work();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    inside.delete(db);
+  }
+}
+
 // src/items.ts
 var SCOPES = ["repository", "organisation", "person", "global"];
 var TYPES = ["preference", "convention", "decision", "hazard", "precedent", "failure-pattern", "repair-recipe"];
@@ -862,8 +880,7 @@ function insertItem(db, item) {
   const id = `m-${randomBytes(5).toString("hex")}`;
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const trust = item.trust ?? "owner";
-  db.exec("BEGIN");
-  try {
+  inTransaction(db, () => {
     db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
          authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes)
@@ -891,11 +908,7 @@ function insertItem(db, item) {
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`
     ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now, cleanTaint(item.taint));
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
   return id;
 }
 var SELECT = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
@@ -1119,16 +1132,92 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
   return result;
 }
 
+// src/store/filesystem.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync2, readFileSync as readFileSync3, realpathSync } from "node:fs";
+import { dirname as dirname2, resolve as resolve2, sep } from "node:path";
+var NETWORK_TYPES = /^(nfs\d*|cifs|smb\w*|smbfs|afpfs|afs|ncpfs|webdav|davfs\w*|9p|fuse\.(sshfs|davfs\w*|rclone)|sshfs|ceph|glusterfs|lustre)$/i;
+function parseMounts(table) {
+  const mounts = [];
+  for (const line of table.split("\n")) {
+    const mac = /^.+? on (\/.*) \(([^,)]+)[^)]*\)\s*$/.exec(line);
+    if (mac !== null) {
+      mounts.push({ point: mac[1], type: mac[2].trim() });
+      continue;
+    }
+    const linux = /^\S+ (\S+) (\S+) /.exec(line);
+    if (linux !== null) mounts.push({ point: linux[1].replace(/\\040/g, " "), type: linux[2] });
+  }
+  return mounts;
+}
+function mountTypeOf(path, table) {
+  const contains = (m) => m.point === "/" || path === m.point || path.startsWith(m.point + sep);
+  return parseMounts(table).filter(contains).sort((a, b) => b.point.length - a.point.length)[0]?.type;
+}
+function mountTable() {
+  const file = process.env["MEMORY_MOUNT_TABLE_FILE"];
+  if (file !== void 0 && file.length > 0) return readFileSync3(file, "utf8");
+  try {
+    if (process.platform === "linux") return readFileSync3("/proc/mounts", "utf8");
+    if (process.platform === "darwin") return execFileSync("mount", { encoding: "utf8", timeout: 3e3 });
+  } catch {
+  }
+  return "";
+}
+function networkFilesystem(dir) {
+  let probe = resolve2(dir);
+  while (!existsSync2(probe) && dirname2(probe) !== probe) probe = dirname2(probe);
+  const type = mountTypeOf(realpathSync(probe), mountTable());
+  return type !== void 0 && NETWORK_TYPES.test(type) ? type : void 0;
+}
+
+// src/store/refresh-lock.ts
+import { closeSync, mkdirSync as mkdirSync2, openSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { dirname as dirname3 } from "node:path";
+var STALE_MS = 3e4;
+function withFileLock(lock, work, waitMs = 0) {
+  mkdirSync2(dirname3(lock), { recursive: true, mode: 448 });
+  const deadline = Date.now() + waitMs;
+  let fd;
+  while (fd === void 0) {
+    try {
+      fd = openSync(lock, "wx", 384);
+    } catch {
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > STALE_MS) {
+          unlinkSync(lock);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() >= deadline) return void 0;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  try {
+    writeSync(fd, String(process.pid));
+    return work();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lock);
+    } catch {
+    }
+  }
+}
+var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lock`, work);
+
 // src/mcp/server.ts
 import { isAbsolute, relative } from "node:path";
 import { createInterface } from "node:readline";
 
 // src/automation.ts
-import { readFileSync as readFileSync3 } from "node:fs";
+import { readFileSync as readFileSync4 } from "node:fs";
 var isAutomated = (entrypoint) => typeof entrypoint === "string" && (entrypoint.startsWith("sdk") || entrypoint === "github-action");
 function transcriptEntrypoint(path) {
   try {
-    for (const line of readFileSync3(path, "utf8").split("\n", 40)) {
+    for (const line of readFileSync4(path, "utf8").split("\n", 40)) {
       const e = JSON.parse(line).entrypoint;
       if (typeof e === "string") return e;
     }
@@ -1159,15 +1248,30 @@ function similarity(a, b) {
   const union = a.size + b.size - shared;
   return union === 0 ? 0 : shared / union;
 }
-var sameNumbers = (a, b) => {
-  const n = (s) => [...s].filter((w) => /\d/.test(w)).sort().join(" ");
-  return n(a) === n(b);
-};
+var numberKey = (s) => [...s].filter((w) => /\d/.test(w)).sort().join(" ");
+var sameNumbers = (a, b) => numberKey(a) === numberKey(b);
 var anchorsOverlap = (a, b) => a.length === 0 || b.length === 0 || a.some((x) => b.some((y) => x.path === y.path));
-function addItem(db, c) {
+function place(db, c, key, write) {
+  return inTransaction(db, () => {
+    const blocked = priorDecision(db, c);
+    if (blocked !== void 0) return blocked;
+    const same = db.prepare(
+      `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
+           AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?)) ORDER BY created_at, id`
+    ).all(c.tenant, key, c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
+    const repeat = same.find((r) => anchorsOverlap(c.anchors, JSON.parse(r.anchors_json)));
+    return repeat === void 0 ? write() : mergeEvidence(db, repeat.id, c);
+  });
+}
+function priorDecision(db, c) {
   const was = knownItem(db, c);
   if (c.status !== "active" && was !== void 0 && (was.status === "rejected" || was.status === "expired")) return { kind: "rejected", id: was.id };
   if (was !== void 0 && !["active", "proposed", "rejected", "expired"].includes(was.status)) return { kind: "known", id: was.id };
+  return void 0;
+}
+function addItem(db, c) {
+  const blocked = priorDecision(db, c);
+  if (blocked !== void 0) return blocked;
   const key = statementKey(c.statement);
   const mine = words(c.statement);
   const rows = db.prepare(
@@ -1186,21 +1290,19 @@ function addItem(db, c) {
     if (sim >= REPEAT && sameNumbers(mine, theirs)) return mergeEvidence(db, r.id, c);
     if (sim >= CONFLICT && r.status === "active" && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (conflict?.sim ?? 0)) conflict = { row: r, sim };
   }
-  if (conflict === void 0) return { kind: "inserted", id: insertItem(db, c) };
+  if (conflict === void 0) return place(db, c, key, () => ({ kind: "inserted", id: insertItem(db, c) }));
   const older = db.prepare("SELECT min(captured_at) AS at FROM evidence WHERE item_id = ?").get(conflict.row.id).at;
   if (c.evidenceAt !== void 0 && older !== null && c.evidenceAt < older) {
-    const id = insertItem(db, { ...c, status: "superseded", validTo: older, statusReason: `superseded by ${conflict.row.id}` });
-    return { kind: "superseded-on-arrival", id, by: conflict.row.id };
+    return place(db, c, key, () => ({ kind: "superseded-on-arrival", id: insertItem(db, { ...c, status: "superseded", validTo: older, statusReason: `superseded by ${conflict.row.id}` }), by: conflict.row.id }));
   }
-  return { kind: "inserted", id: insertItem(db, { ...c, supersedes: conflict.row.id }), supersedes: conflict.row.id };
+  return place(db, c, key, () => ({ kind: "inserted", id: insertItem(db, { ...c, supersedes: conflict.row.id }), supersedes: conflict.row.id }));
 }
 function mergeEvidence(db, id, c) {
-  if (db.prepare("SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?").get(id, c.source) !== void 0) return { kind: "known", id };
   const trust = c.trust ?? "owner";
   const delta = trust === "owner" ? 1 : 0;
   const evidenceId = `e-${randomBytes2(5).toString("hex")}`;
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return inTransaction(db, () => {
+    if (db.prepare("SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?").get(id, c.source) !== void 0) return { kind: "known", id };
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
        VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`
@@ -1208,12 +1310,8 @@ function mergeEvidence(db, id, c) {
     db.prepare("UPDATE items SET support = support + ? WHERE id = ?").run(delta, id);
     const audit = recordAudit(db, "evidence_merged", { type: "item", id }, { evidenceId, supportDelta: delta, trust });
     const { support } = db.prepare("SELECT support FROM items WHERE id = ?").get(id);
-    db.exec("COMMIT");
     return { kind: "merged", id, audit, support };
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 function applySupersession(db, newerId, olderId, newerWas, pending) {
   const { changes } = db.prepare("UPDATE items SET status = 'superseded', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'active'").run((/* @__PURE__ */ new Date()).toISOString(), `superseded by ${newerId}`, olderId);
@@ -1264,23 +1362,41 @@ function undo(db, auditId) {
 var NARROWNESS = ["person", "repository", "organisation", "global"];
 function narrowerWins(items) {
   const w = items.map((i) => words(i.statement));
-  return items.filter(
-    (a, i) => !items.some((b, j) => {
-      if (i === j || a.type !== b.type || a.scope === b.scope || NARROWNESS.indexOf(b.scope) >= NARROWNESS.indexOf(a.scope)) return false;
-      return anchorsOverlap(a.anchors, b.anchors) && sameNumbers(w[i], w[j]) && similarity(w[i], w[j]) >= CONFLICT;
-    })
+  const keys = items.map((item, i) => `${item.type}\0${numberKey(w[i])}`);
+  const frequency = /* @__PURE__ */ new Map();
+  for (const set of w) for (const word of set) frequency.set(word, (frequency.get(word) ?? 0) + 1);
+  const prefixes = w.map(
+    (set) => [...set].sort((x, y) => frequency.get(x) - frequency.get(y) || (x < y ? -1 : 1)).slice(0, set.size - Math.ceil(set.size * CONFLICT) + 1)
   );
+  const index = /* @__PURE__ */ new Map();
+  for (const [i, item] of items.entries()) {
+    for (const word of prefixes[i]) {
+      const posting = index.get(`${keys[i]}\0${item.scope}`) ?? /* @__PURE__ */ new Map();
+      (posting.get(word) ?? posting.set(word, []).get(word)).push(i);
+      index.set(`${keys[i]}\0${item.scope}`, posting);
+    }
+  }
+  return items.filter((a, i) => {
+    for (const scope of NARROWNESS.slice(0, NARROWNESS.indexOf(a.scope))) {
+      const posting = index.get(`${keys[i]}\0${scope}`);
+      if (posting === void 0) continue;
+      for (const j of new Set(prefixes[i].flatMap((word) => posting.get(word) ?? []))) {
+        if (Math.min(w[i].size, w[j].size) < CONFLICT * Math.max(w[i].size, w[j].size)) continue;
+        if (anchorsOverlap(a.anchors, items[j].anchors) && similarity(w[i], w[j]) >= CONFLICT) return false;
+      }
+    }
+    return true;
+  });
 }
 var DAY = 864e5;
 function sweep(db) {
-  const rows = db.prepare(
-    `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
-         WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
-  ).all().map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) }));
-  const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
-  let proposed = 0;
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return inTransaction(db, () => {
+    const rows = db.prepare(
+      `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
+           WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
+    ).all().map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) }));
+    const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
+    let proposed = 0;
     for (const [j, newer] of rows.entries()) {
       if (newer.supersedes !== null) continue;
       const older = rows.slice(0, j).find((r) => {
@@ -1295,12 +1411,8 @@ function sweep(db) {
       proposed++;
     }
     recordAudit(db, "sweep", null, { proposed });
-    db.exec("COMMIT");
     return proposed;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 var START_SWEEP_MAX = 1e3;
 function sweepIfDue(db, now = Date.now()) {
@@ -1312,8 +1424,8 @@ function sweepIfDue(db, now = Date.now()) {
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
-import { appendFileSync, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync4, renameSync as renameSync2, statSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { basename, dirname as dirname3, join as join4 } from "node:path";
+import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync5, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { basename, dirname as dirname5, join as join4 } from "node:path";
 
 // src/consent/plan.ts
 var DATA_CATEGORIES = [
@@ -1351,8 +1463,8 @@ function buildConsentPlan(config, storageLocation) {
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync as existsSync2, mkdirSync as mkdirSync2 } from "node:fs";
-import { dirname as dirname2 } from "node:path";
+import { chmodSync, existsSync as existsSync3, mkdirSync as mkdirSync3 } from "node:fs";
+import { dirname as dirname4 } from "node:path";
 var MIGRATIONS = [
   `
   CREATE TABLE items (
@@ -1472,14 +1584,17 @@ var MIGRATIONS = [
   }
 ];
 var SECURE_DELETE = 6;
-function openStore(path, create) {
-  if (!existsSync2(path)) {
+var WRITE_BUSY_MS = 5e3;
+var HOOK_BUSY_MS = 250;
+function openStore(path, create, busyMs = WRITE_BUSY_MS) {
+  if (!existsSync3(path)) {
     if (!create) return null;
-    mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
+    mkdirSync3(dirname4(path), { recursive: true, mode: 448 });
   }
   const db = new DatabaseSync(path);
   chmodSync(path, 384);
-  db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000; PRAGMA secure_delete = ON;");
+  db.exec(`PRAGMA busy_timeout = ${Math.trunc(busyMs)}; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL;`);
+  if (db.prepare("PRAGMA journal_mode").get().journal_mode !== "wal") db.exec("PRAGMA journal_mode = WAL");
   const version = () => db.prepare("PRAGMA user_version").get().user_version;
   if (version() > 0 && version() < SECURE_DELETE) db.exec("VACUUM");
   if (version() < MIGRATIONS.length) {
@@ -1592,7 +1707,7 @@ function scrub(text2) {
   return redact(text2).text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, "[REDACTED:PRIVATE_KEY]").replace(new RegExp(WEBHOOK.source, "gi"), "[REDACTED:WEBHOOK]").replace(new RegExp(EMAIL.source, "g"), "[REDACTED:EMAIL]").replace(new RegExp(HANDLE.source, "g"), "[REDACTED:HANDLE]");
 }
 function transcriptLines(file) {
-  return readFileSync4(file, "utf8").split("\n").map((line, i) => {
+  return readFileSync5(file, "utf8").split("\n").map((line, i) => {
     try {
       const o = JSON.parse(line);
       if (o.type !== "user" && o.type !== "assistant") return "";
@@ -1608,7 +1723,7 @@ function transcriptLines(file) {
 function externalSources(file) {
   const found = /* @__PURE__ */ new Set();
   const label = (s) => s.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 60);
-  for (const line of readFileSync4(file, "utf8").split("\n")) {
+  for (const line of readFileSync5(file, "utf8").split("\n")) {
     try {
       const o = JSON.parse(line);
       const content = o.message?.content;
@@ -1635,22 +1750,22 @@ function externalSources(file) {
 var stateFile = (data) => join4(data, "logs", "capture-state.json");
 var readState = (data) => {
   try {
-    return JSON.parse(readFileSync4(stateFile(data), "utf8"));
+    return JSON.parse(readFileSync5(stateFile(data), "utf8"));
   } catch {
     return {};
   }
 };
 var LOCK_STALE_MS = 5 * 6e4;
 function tryLock(file) {
-  mkdirSync3(dirname3(file), { recursive: true, mode: 448 });
+  mkdirSync4(dirname5(file), { recursive: true, mode: 448 });
   try {
     writeFileSync2(file, String(process.pid), { flag: "wx", mode: 384 });
     return true;
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
     try {
-      if (Date.now() - statSync(file).mtimeMs <= LOCK_STALE_MS) return false;
-      unlinkSync(file);
+      if (Date.now() - statSync2(file).mtimeMs <= LOCK_STALE_MS) return false;
+      unlinkSync2(file);
     } catch {
       return false;
     }
@@ -1659,7 +1774,7 @@ function tryLock(file) {
 }
 var unlock = (file) => {
   try {
-    unlinkSync(file);
+    unlinkSync2(file);
   } catch {
   }
 };
@@ -1690,7 +1805,7 @@ async function capture(data, input2) {
   if (context.tenant === null || context.repository === null) return `nothing captured: ${context.reason}`;
   const path = input2["transcript_path"];
   const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
-  if (typeof path !== "string" || !existsSync3(path)) return "nothing captured: no transcript";
+  if (typeof path !== "string" || !existsSync4(path)) return "nothing captured: no transcript";
   const lock = join4(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
   if (!tryLock(lock)) return "nothing captured: another capture of this session is already running";
   try {
@@ -1749,7 +1864,7 @@ async function captureLocked(data, config, context, path, session, input2) {
   }
   const { saved, merged, queued } = kept;
   const usage2 = model.usage ?? { input: 0, output: 0 };
-  mkdirSync3(join4(data, "logs"), { recursive: true, mode: 448 });
+  mkdirSync4(join4(data, "logs"), { recursive: true, mode: 448 });
   appendFileSync(
     join4(data, "logs", "capture.jsonl"),
     `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), session, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, candidates: candidates.length, saved, merged })}
@@ -1912,21 +2027,22 @@ function withTextRatio(items, matches) {
     return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
   });
 }
-function visibleItems(data, context, cwd, terms = []) {
+function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS) {
   const out = [];
   const add = (items, matches) => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
-    const db = openStore(tenantFile(data, context.tenant), false);
+    const file = tenantFile(data, context.tenant);
+    const db = openStore(file, false, busyMs);
     if (db !== null) {
       try {
-        recheck(db, context.tenant, context.repository, cwd);
+        withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd));
         add(tenantItems(db, context.tenant, context.repository, context.owner), textMatches(db, terms));
       } finally {
         db.close();
       }
     }
   }
-  const person = openStore(personFile(data), false);
+  const person = openStore(personFile(data), false, busyMs);
   if (person !== null) {
     try {
       add(personItems(person), textMatches(person, terms));
@@ -2057,7 +2173,7 @@ function get(args, data, context, cwd) {
   const id = text(args, "id");
   const format = args["format"] === void 0 ? "rows" : oneOf(args["format"], ["rows", "json"], "format");
   const found = first(data, context, (db, store) => {
-    const checked = store.tenant === "" ? void 0 : recheck(db, store.tenant, context.repository, cwd, { id });
+    const checked = store.tenant === "" ? void 0 : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id }));
     const row4 = db.prepare(
       `SELECT *, coalesce(reinforced_at, valid_from) AS reinforced, (${READS_EXPIRED}) AS expired FROM items
          WHERE id = ? AND ${store.where} AND status NOT IN ('proposed', 'rejected') AND statement != ''`
@@ -2159,7 +2275,7 @@ function feedback(args, data, context, cwd) {
     stale: "stale_reports = stale_reports + 1"
   }[signal];
   const done = first(data, context, (db, store) => {
-    const gone = signal === "stale" && store.tenant !== "" ? recheck(db, store.tenant, context.repository, cwd, { id }).staleItems.find((i) => i.id === id) : void 0;
+    const gone = signal === "stale" && store.tenant !== "" ? withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id }))?.staleItems.find((i) => i.id === id) : void 0;
     if (gone !== void 0) return `${id} is stale: its citation fails at HEAD (${gone.reason}), so it leaves recall until the citation holds again`;
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -2323,13 +2439,29 @@ function executePurge(db, scope) {
     db.exec("ROLLBACK");
     throw error;
   }
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  truncateLog(db);
   return preview;
+}
+var PurgeResidueError = class extends Error {
+};
+var CHECKPOINT_WAIT_MS = 5e3;
+function truncateLog(db) {
+  const deadline = Date.now() + CHECKPOINT_WAIT_MS;
+  db.exec("PRAGMA busy_timeout = 250");
+  for (; ; ) {
+    const { busy } = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    if (busy === 0) return;
+    if (Date.now() >= deadline) {
+      throw new PurgeResidueError(
+        "the purge was applied, but another process is still reading the store, so the deleted text remains in its write-ahead log; close other memory sessions and run the same purge again"
+      );
+    }
+  }
 }
 
 // src/import/import.ts
-import { existsSync as existsSync4, lstatSync, readFileSync as readFileSync5, readdirSync, realpathSync, statSync as statSync2 } from "node:fs";
-import { join as join5, sep } from "node:path";
+import { existsSync as existsSync5, lstatSync, readFileSync as readFileSync6, readdirSync, realpathSync as realpathSync2, statSync as statSync3 } from "node:fs";
+import { join as join5, sep as sep2 } from "node:path";
 
 // src/import/silos.ts
 import { isAbsolute as isAbsolute2, normalize } from "node:path";
@@ -2411,7 +2543,7 @@ function notes(text2) {
   const unreadable = jsonLines(text2, (e, line) => {
     const { kind, text: body, symbol } = e;
     if (typeof kind !== "string" || typeof body !== "string" || body.trim() === "") return false;
-    if (symbol !== void 0 && (typeof symbol !== "string" || !SYMBOL_KEY.test(symbol) || !inside(symbolPath(symbol)))) return false;
+    if (symbol !== void 0 && (typeof symbol !== "string" || !SYMBOL_KEY.test(symbol) || !inside2(symbolPath(symbol)))) return false;
     const type = Object.hasOwn(NOTE_TYPES, kind) ? NOTE_TYPES[kind] : void 0;
     if (type === void 0) {
       skippedNotes++;
@@ -2424,18 +2556,18 @@ function notes(text2) {
   return parsed(statements, { unreadable, skippedNotes });
 }
 var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
-var inside = (path) => !isAbsolute2(path) && !normalize(path).split(/[\\/]/).includes("..");
+var inside2 = (path) => !isAbsolute2(path) && !normalize(path).split(/[\\/]/).includes("..");
 
 // src/import/import.ts
 function readInside(path, root) {
   try {
-    if (!existsSync4(path)) return { reason: "not there" };
+    if (!existsSync5(path)) return { reason: "not there" };
     const link = lstatSync(path).isSymbolicLink();
-    const real = realpathSync(path);
-    const top = realpathSync(root);
-    if (!real.startsWith(top + sep)) return { reason: link ? "a symbolic link outside its folder" : "outside its folder" };
-    if (!statSync2(real).isFile()) return { reason: "not a file" };
-    return { text: readFileSync5(real, "utf8") };
+    const real = realpathSync2(path);
+    const top = realpathSync2(root);
+    if (!real.startsWith(top + sep2)) return { reason: link ? "a symbolic link outside its folder" : "outside its folder" };
+    if (!statSync3(real).isFile()) return { reason: "not a file" };
+    return { text: readFileSync6(real, "utf8") };
   } catch (error) {
     return { reason: `cannot be read (${error.code ?? "error"})` };
   }
@@ -2472,15 +2604,15 @@ function importSilos(config, data, configDir, dryRun) {
   };
   for (const dir of Object.keys(config.configs).sort()) {
     const projects = join5(dir, "projects");
-    if (!existsSync4(projects)) continue;
+    if (!existsSync5(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
       const folder = join5(projects, project, "memory");
-      if (!existsSync4(folder) || !statSync2(folder).isDirectory()) continue;
+      if (!existsSync5(folder) || !statSync3(folder).isDirectory()) continue;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
         const path = join5(folder, name);
         const parsed2 = read(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link of parsed2.links) if (!existsSync4(join5(folder, link))) report.danglingLinks.push({ file: path, link });
+        for (const link of parsed2.links) if (!existsSync5(join5(folder, link))) report.danglingLinks.push({ file: path, link });
         for (const { line, text: text2 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -2512,7 +2644,7 @@ function importSilos(config, data, configDir, dryRun) {
       const rel = silos[silo];
       if (rel === void 0) continue;
       const path = join5(checkout, rel);
-      if (!inside(rel)) {
+      if (!inside2(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
       }
@@ -2555,16 +2687,18 @@ function importSilos(config, data, configDir, dryRun) {
       const reject = db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'");
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list2) {
-        const was = knownItem(db, c);
         if (c.status === "rejected") {
-          if (was !== void 0 && was.status === "proposed") {
-            reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
-            added.tombstones++;
-          } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
-          else {
-            insertItem(db, c);
-            added.tombstones++;
-          }
+          inTransaction(db, () => {
+            const was = knownItem(db, c);
+            if (was !== void 0 && was.status === "proposed") {
+              reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
+              added.tombstones++;
+            } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
+            else {
+              insertItem(db, c);
+              added.tombstones++;
+            }
+          });
           continue;
         }
         const stored = addItem(db, c);
@@ -3044,19 +3178,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync5, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync3, readFileSync as readFileSync6, readdirSync as readdirSync2, rmSync as rmSync3 } from "node:fs";
+import { cpSync, existsSync as existsSync6, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync3, readFileSync as readFileSync7, readdirSync as readdirSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname4, join as join8 } from "node:path";
+import { dirname as dirname6, join as join8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
-var ROOT = dirname4(dirname4(fileURLToPath2(import.meta.url)));
+var ROOT = dirname6(dirname6(fileURLToPath2(import.meta.url)));
 var TASKS = join8(ROOT, "lab", "tasks");
 var BUNDLE = join8(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync5(join8(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync6(join8(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -3085,7 +3219,7 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync5(file) ? jsonLines2(readFileSync6(file, "utf8")) : [];
+var readLines = (file) => existsSync6(file) ? jsonLines2(readFileSync7(file, "utf8")) : [];
 var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -3103,8 +3237,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   const repo = join8(dir, "repo");
   const data = join8(dir, "data");
   const out = join8(dir, "out");
-  mkdirSync4(data);
-  mkdirSync4(out);
+  mkdirSync5(data);
+  mkdirSync5(out);
   fixtureRepository(task, repo);
   if (arm === "on") seed(task, t, repo, data);
   const env = cleanEnv({
@@ -3168,9 +3302,9 @@ function lab(version, agent, model, only) {
   const base2 = mkdtempSync3(join8(tmpdir3(), "memory-lab-"));
   try {
     const plugin = join8(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync5(join8(ROOT, part))) cpSync(join8(ROOT, part), join8(plugin, part), { recursive: true });
+    for (const part of PLUGIN_PARTS) if (existsSync6(join8(ROOT, part))) cpSync(join8(ROOT, part), join8(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync6(join8(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync7(join8(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -3291,6 +3425,10 @@ function init(args, data) {
     args,
     options: { tenant: { type: "string", multiple: true }, bind: { type: "string" }, automation: { type: "string" }, confirm: { type: "boolean" } }
   });
+  const network = networkFilesystem(data);
+  if (network !== void 0) {
+    throw new Refusal(`the data directory ${data} is on a network file system (${network}), where SQLite's locking is not reliable; set MEMORY_DATA_DIR to a local disk`, 2);
+  }
   const config = loadConfig(data) ?? emptyConfig();
   for (const spec of values.tenant ?? []) {
     const [name = "", patterns = ""] = spec.split("=", 2);
@@ -3557,10 +3695,12 @@ function recheckCommand(args, data, cwd) {
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
-  const db = openStore(tenantFile(data, context.tenant), false);
+  const file = tenantFile(data, context.tenant);
+  const db = openStore(file, false);
   if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity });
+    const result = withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity }));
+    if (result === void 0) return console.log(JSON.stringify({ skipped: "another refresh holds the lock; nothing was changed" }, null, 2));
     if (id !== void 0 && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
   } finally {
@@ -3571,7 +3711,7 @@ function sweepCommand(data, cwd, due) {
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   let proposed = 0;
   for (const { file } of proposalStores(data, context)) {
-    const db = openStore(file, false);
+    const db = openStore(file, false, due ? HOOK_BUSY_MS : void 0);
     if (db === null) continue;
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
@@ -3583,7 +3723,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync7(0, "utf8"));
+    const v = JSON.parse(readFileSync8(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -3591,7 +3731,7 @@ function hookInput() {
 }
 function hookSlice(data, config, input2, budget) {
   const cwd = typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd();
-  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd), budget);
+  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS), budget);
 }
 function sessionStart(data) {
   try {
@@ -3613,20 +3753,36 @@ function subagentStart(data) {
     const type = input2["agent_type"];
     const config = loadConfig(data);
     if (!consented(config) || typeof type !== "string" || !subagentAllowed(config, type)) return;
-    const { text: text2, shown } = hookSlice(data, config, input2, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    const id = (v) => typeof v === "string" && v !== "" ? v : "unknown";
+    let slice;
+    try {
+      slice = hookSlice(data, config, input2, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    } catch {
+      if (covers(config, "injections")) {
+        appendInjections(data, [`${JSON.stringify({ event: "skipped", session: id(input2["session_id"]), agent: id(input2["agent_id"]), via: "subagent-start", at: (/* @__PURE__ */ new Date()).toISOString() })}
+`]);
+      }
+      return;
+    }
+    const { text: text2, shown } = slice;
     if (text2 === "") return;
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text2 } }));
     if (!covers(config, "injections")) return;
-    const id = (v) => typeof v === "string" && v !== "" ? v : "unknown";
     const lines2 = shown.map(
       (item) => `${JSON.stringify({ event: "injected", session: id(input2["session_id"]), agent: id(input2["agent_id"]), item: item.id, via: "subagent-start", anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)), at: (/* @__PURE__ */ new Date()).toISOString() })}
 `
     );
-    const file = injectionLog(data);
-    mkdirSync5(dirname5(file), { recursive: true, mode: 448 });
-    appendFileSync2(file, lines2.join(""), { mode: 384 });
+    appendInjections(data, lines2);
   } catch {
   }
+}
+var LOG_LOCK_HOOK_MS = 2e3;
+var LOG_LOCK_PURGE_MS = 1e4;
+var injectionLock = (data) => `${injectionLog(data)}.lock`;
+function appendInjections(data, lines2) {
+  const file = injectionLog(data);
+  mkdirSync6(dirname7(file), { recursive: true, mode: 448 });
+  withFileLock(injectionLock(data), () => appendFileSync2(file, lines2.join(""), { mode: 384 }), LOG_LOCK_HOOK_MS);
 }
 async function captureCommand(args, data) {
   const { values } = parseArgs({ args, options: { foreground: { type: "boolean" } } });
@@ -3651,7 +3807,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync6(file)) return;
+  if (!existsSync7(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -3662,20 +3818,28 @@ function pruneLog(data, files, before) {
       db.close();
     }
   }
-  const kept = readFileSync7(file, "utf8").split("\n").filter((line) => {
-    if (line.trim() === "") return false;
-    try {
-      const e = JSON.parse(line);
-      if (typeof e.item === "string" && !held2.has(e.item)) return false;
-      return before === void 0 || typeof e.at === "string" && e.at >= before;
-    } catch {
-      return false;
-    }
-  });
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync3(tmp, kept.map((l) => `${l}
+  const done = withFileLock(
+    injectionLock(data),
+    () => {
+      const kept = readFileSync8(file, "utf8").split("\n").filter((line) => {
+        if (line.trim() === "") return false;
+        try {
+          const e = JSON.parse(line);
+          if (typeof e.item === "string" && !held2.has(e.item)) return false;
+          return before === void 0 || typeof e.at === "string" && e.at >= before;
+        } catch {
+          return false;
+        }
+      });
+      const tmp = `${file}.${process.pid}.tmp`;
+      writeFileSync3(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
-  renameSync3(tmp, file);
+      renameSync3(tmp, file);
+      return true;
+    },
+    LOG_LOCK_PURGE_MS
+  );
+  if (done === void 0) throw new Refusal("the injection log is busy; run the same purge again to remove its lines");
 }
 function purge(args, data, cwd) {
   const { values } = parseArgs({
@@ -3713,7 +3877,7 @@ function purge(args, data, cwd) {
     all: values.all
   };
   const tenantsDir = join9(data, "tenants");
-  const every = existsSync6(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const every = existsSync7(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -3725,6 +3889,7 @@ function purge(args, data, cwd) {
   if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0) files.push(personFile(data));
   const report = {};
   const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [] };
+  const residue = [];
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -3736,6 +3901,9 @@ function purge(args, data, cwd) {
       total.returnedToProposed += r.returnedToProposed;
       total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
+    } catch (error) {
+      if (!(error instanceof PurgeResidueError)) throw error;
+      residue.push(`${file}: ${error.message}`);
     } finally {
       db.close();
     }
@@ -3745,13 +3913,15 @@ function purge(args, data, cwd) {
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
+  if (residue.length > 0) throw new Refusal(`purge incomplete
+${residue.join("\n")}`);
   if (values.confirm !== true) console.error("Nothing was deleted. Run the same command with --confirm to delete.");
   else if (total.checks.length > 0) console.error('Review the promoted checks listed under "checks"; memory does not edit them.');
 }
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync7(file, "utf8"));
+    return parse(readFileSync8(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }

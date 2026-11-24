@@ -88,8 +88,9 @@ export function previewPurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
  * Deletes in one transaction. Evidence goes with its item; an item that loses
  * all its evidence returns to `proposed`, because an item without evidence
  * must not be recalled, or with `withDerived` is deleted. Secure deletion
- * (see openStore) overwrites what is deleted. The stores use a rollback journal, unlinked at commit; the checkpoint
- * empties a write-ahead log should one ever be in use.
+ * (see openStore) overwrites what is deleted. The stores use a write-ahead log, which still holds the deleted pages
+ * until it is checkpointed and truncated; that cannot finish while a reader holds a snapshot, so the purge retries for
+ * a bounded time and then fails with `PurgeResidueError` rather than report success with the text still on disk.
  */
 export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview {
   const preview = previewPurge(db, scope);
@@ -130,6 +131,27 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
     db.exec('ROLLBACK');
     throw error;
   }
-  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  truncateLog(db);
   return preview;
+}
+
+/** The purge's deletions are committed but a reader keeps the write-ahead log from being emptied, so the purged bytes are still on disk. */
+export class PurgeResidueError extends Error {}
+
+/** How long a purge waits for readers to let go of the write-ahead log. */
+const CHECKPOINT_WAIT_MS = 5000;
+
+function truncateLog(db: DatabaseSync): void {
+  const deadline = Date.now() + CHECKPOINT_WAIT_MS;
+  db.exec('PRAGMA busy_timeout = 250');
+  for (;;) {
+    // busy = 1 when a reader pinned the log; the log is truncated only when the checkpoint ran to the end.
+    const { busy } = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number };
+    if (busy === 0) return;
+    if (Date.now() >= deadline) {
+      throw new PurgeResidueError(
+        'the purge was applied, but another process is still reading the store, so the deleted text remains in its write-ahead log; close other memory sessions and run the same purge again',
+      );
+    }
+  }
 }

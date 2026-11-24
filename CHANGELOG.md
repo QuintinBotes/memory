@@ -41,6 +41,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `</s>`) or a leading `System:` or `Assistant:` was stored by every capture
   path; the refusal check now refuses it. Code spans are ignored, and your own
   `memory remember` is refused only a full chat-template sequence.
+- Review fixes on #24. `memory purge` checks the write-ahead log checkpoint: while another process holds a read snapshot it retries for 5 s, then
+  fails with a clear message instead of reporting success with the purged text still in the `-wal` file, and the other store files are still purged.
+  The injection log is rewritten and appended under one lock, so a purge no longer drops a line a subagent writes meanwhile. A subagent hook that cannot
+  read the store prints nothing and logs a `skipped` line. `memory sweep` reads its rows under the write lock, and the tombstone checks of an import and of
+  a proposal run under it too, so two writers cannot propose one pair twice or write a statement the owner just rejected. A macOS mount point containing
+  " on " is read whole, so an smbfs share there is refused at `memory init`.
+
+### Changed
+
+- Many writers and 10,000 items (#24). Every store file now runs in write-ahead
+  log mode, so a reader never waits for a writer, and writers queue on one lock
+  for up to 5 s instead of failing on a lock upgrade. A statement proposed by
+  two sessions at once is one item with both pieces of evidence: the exact-match
+  check is repeated under the write lock, and the same source arriving twice is
+  one piece of evidence. The SessionStart and SubagentStart hooks wait at most
+  250 ms for a lock; a hook that cannot get the store prints nothing and exits 0.
+  Recall's narrower-scope-wins rule compared every pair of visible items (about
+  2.7 s at 10,000); it now compares a statement only with the narrower-scope
+  items that share its rarest words, with the same result. New tests cover the
+  eight-writer, killed-writer, held-lock and 10,000-item scenarios by the work
+  done, and `node scripts/bench-hook.mjs` measures hook latency on demand.
+  `memory init` refuses a data directory on a network file system (NFS, SMB,
+  AFP and similar, read from /proc/mounts or `mount`), where SQLite's locking is
+  not reliable, and names the reason. The anchor refresh (session start,
+  `memory recheck`, the MCP re-check) takes its own lock file beside the store,
+  `<store>.refresh.lock`: a refresh that finds it held skips and never waits, so
+  it cannot hold up the slice or a writer, and two refreshes never apply the
+  same change twice. A lock older than 30 s is taken over.
 
 ## [0.4.0] - 2026-11-24
 

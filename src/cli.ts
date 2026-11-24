@@ -27,18 +27,20 @@ import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
+import { networkFilesystem } from './store/filesystem.ts';
+import { withFileLock, withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
 import { EmbedError, WRITE_TIMEOUT_MS, providerFor } from './embed/provider.ts';
 import { embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
 import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
-import { executePurge, previewPurge, type PurgeScope } from './consent/purge.ts';
+import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { capture, captureWanted } from './capture/capture.ts';
-import { openStore } from './store/db.ts';
+import { HOOK_BUSY_MS, openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
@@ -134,6 +136,10 @@ function init(args: string[], data: string): void {
     args,
     options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, confirm: { type: 'boolean' } },
   });
+  const network = networkFilesystem(data);
+  if (network !== undefined) {
+    throw new Refusal(`the data directory ${data} is on a network file system (${network}), where SQLite's locking is not reliable; set MEMORY_DATA_DIR to a local disk`, 2);
+  }
   const config = loadConfig(data) ?? emptyConfig();
   for (const spec of values.tenant ?? []) {
     const [name = '', patterns = ''] = spec.split('=', 2);
@@ -426,10 +432,12 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) throw new Refusal(`recheck needs a tenant, and ${context.reason}`);
-  const db = openStore(tenantFile(data, context.tenant), false);
+  const file = tenantFile(data, context.tenant);
+  const db = openStore(file, false);
   if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity });
+    const result = withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { id, window: Infinity }));
+    if (result === undefined) return console.log(JSON.stringify({ skipped: 'another refresh holds the lock; nothing was changed' }, null, 2));
     if (id !== undefined && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
   } finally {
@@ -442,7 +450,7 @@ function sweepCommand(data: string, cwd: string, due: boolean): void {
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   let proposed = 0;
   for (const { file } of proposalStores(data, context)) {
-    const db = openStore(file, false);
+    const db = openStore(file, false, due ? HOOK_BUSY_MS : undefined);
     if (db === null) continue;
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
@@ -466,7 +474,7 @@ function hookInput(): Record<string, unknown> {
 /** The slice for the hook's working directory: the subagent's own, for a subagent, so its tenant is resolved there. */
 function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number) {
   const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
-  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd), budget);
+  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS), budget);
 }
 
 /**
@@ -504,22 +512,41 @@ function subagentStart(data: string): void {
     const type = input['agent_type'];
     const config = loadConfig(data);
     if (!consented(config) || typeof type !== 'string' || !subagentAllowed(config, type)) return;
-    const { text, shown } = hookSlice(data, config, input, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    const id = (v: unknown) => (typeof v === 'string' && v !== '' ? v : 'unknown');
+    let slice: ReturnType<typeof hookSlice>;
+    try {
+      slice = hookSlice(data, config, input, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    } catch {
+      // The store was busy past the hook's limit or unreadable: print nothing, but count the skip.
+      if (covers(config, 'injections')) {
+        appendInjections(data, [`${JSON.stringify({ event: 'skipped', session: id(input['session_id']), agent: id(input['agent_id']), via: 'subagent-start', at: new Date().toISOString() })}\n`]);
+      }
+      return;
+    }
+    const { text, shown } = slice;
     if (text === '') return;
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: text } }));
     if (!covers(config, 'injections')) return;
-    const id = (v: unknown) => (typeof v === 'string' && v !== '' ? v : 'unknown');
     const lines = shown.map(
       (item) =>
         `${JSON.stringify({ event: 'injected', session: id(input['session_id']), agent: id(input['agent_id']), item: item.id, via: 'subagent-start', anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)), at: new Date().toISOString() })}\n`,
     );
-    const file = injectionLog(data);
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    // One write per slice, so lines from parallel subagents do not interleave.
-    appendFileSync(file, lines.join(''), { mode: 0o600 });
+    appendInjections(data, lines);
   } catch {
     // Silent by design; see above.
   }
+}
+
+/** How long a hook waits for the injection log's lock, and how long a purge does. */
+const LOG_LOCK_HOOK_MS = 2000;
+const LOG_LOCK_PURGE_MS = 10_000;
+const injectionLock = (data: string): string => `${injectionLog(data)}.lock`;
+
+/** One write per slice, under the log's lock, so lines from parallel subagents do not interleave and a purge's rewrite never drops one. */
+function appendInjections(data: string, lines: string[]): void {
+  const file = injectionLog(data);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  withFileLock(injectionLock(data), () => appendFileSync(file, lines.join(''), { mode: 0o600 }), LOG_LOCK_HOOK_MS);
 }
 
 /** The Stop and SessionEnd hook. Never fails the session: it hands the work to a detached process and returns. */
@@ -548,8 +575,7 @@ async function captureCommand(args: string[], data: string): Promise<void> {
 
 /**
  * The injection log after a purge: no line of an item that no store holds any more, and with a cut-off no line older
- * than it, or of unknown age. Rewritten whole, so no purged line is left in the file.
- * shortcut: a subagent line appended while the log is rewritten can be lost; fine for a log, revisit with #24.
+ * than it, or of unknown age. Rewritten whole, so no purged line is left in the file, under the lock appends take.
  */
 function pruneLog(data: string, files: string[], before: string | undefined): void {
   const file = injectionLog(data);
@@ -564,19 +590,27 @@ function pruneLog(data: string, files: string[], before: string | undefined): vo
       db.close();
     }
   }
-  const kept = readFileSync(file, 'utf8').split('\n').filter((line) => {
-    if (line.trim() === '') return false;
-    try {
-      const e = JSON.parse(line) as { item?: unknown; at?: unknown };
-      if (typeof e.item === 'string' && !held.has(e.item)) return false;
-      return before === undefined || (typeof e.at === 'string' && e.at >= before);
-    } catch {
-      return false;
-    }
-  });
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, kept.map((l) => `${l}\n`).join(''), { mode: 0o600 });
-  renameSync(tmp, file);
+  const done = withFileLock(
+    injectionLock(data),
+    () => {
+      const kept = readFileSync(file, 'utf8').split('\n').filter((line) => {
+        if (line.trim() === '') return false;
+        try {
+          const e = JSON.parse(line) as { item?: unknown; at?: unknown };
+          if (typeof e.item === 'string' && !held.has(e.item)) return false;
+          return before === undefined || (typeof e.at === 'string' && e.at >= before);
+        } catch {
+          return false;
+        }
+      });
+      const tmp = `${file}.${process.pid}.tmp`;
+      writeFileSync(tmp, kept.map((l) => `${l}\n`).join(''), { mode: 0o600 });
+      renameSync(tmp, file);
+      return true;
+    },
+    LOG_LOCK_PURGE_MS,
+  );
+  if (done === undefined) throw new Refusal('the injection log is busy; run the same purge again to remove its lines');
 }
 
 function purge(args: string[], data: string, cwd: string): void {
@@ -634,6 +668,7 @@ function purge(args: string[], data: string, cwd: string): void {
 
   const report: Record<string, ReturnType<typeof previewPurge>> = {};
   const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [] as string[], checks: [] as string[] };
+  const residue: string[] = [];
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -645,6 +680,10 @@ function purge(args: string[], data: string, cwd: string): void {
       total.returnedToProposed += r.returnedToProposed;
       total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
+    } catch (error) {
+      // The other files are still purged; the failure is reported once at the end.
+      if (!(error instanceof PurgeResidueError)) throw error;
+      residue.push(`${file}: ${error.message}`);
     } finally {
       db.close();
     }
@@ -654,6 +693,7 @@ function purge(args: string[], data: string, cwd: string): void {
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
+  if (residue.length > 0) throw new Refusal(`purge incomplete\n${residue.join('\n')}`);
   if (values.confirm !== true) console.error('Nothing was deleted. Run the same command with --confirm to delete.');
   else if (total.checks.length > 0) console.error('Review the promoted checks listed under "checks"; memory does not edit them.');
 }
