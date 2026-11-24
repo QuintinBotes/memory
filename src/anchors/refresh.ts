@@ -1,15 +1,22 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { checkAnchor, fileLines, headReader, isManaged, rangeHash } from '../anchors.ts';
 import { consented, loadConfig } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { sha256, type Anchor } from '../items.ts';
 import { recordAudit } from '../store/audit.ts';
-import { ProviderError, changesSince, resolveKey, type Changes, type Provider, type ProviderSymbol } from './provider.ts';
+import { ProviderError, Refused, changesSince, resolveKey, type Changes, type Provider, type ProviderSymbol } from './provider.ts';
 
 /** Why an item is stale because of its symbol anchor; only these are the refresh's to restore. */
-const REASONS = ['path gone', 'cited text gone', 'signature changed', 'key gone'];
+const REASONS = ['path gone', 'cited text gone', 'signature changed', 'key gone', 'snapshot not at HEAD'];
+
+/** A body smaller than this many tokens is never moved onto: the same few tokens sit under many names (ProofMesh's `too_small`). */
+export const MIN_MOVE_TOKENS = 10;
+const tokenCount = (text: string): number => (text.match(/[A-Za-z0-9_$]+|[^\sA-Za-z0-9_$]/g) ?? []).length;
+
+/** Anchors resolved in one run; the rest wait for the next. */
+export const ANCHORS_PER_RUN = 50;
 
 /** `path#qualified_name#kind` as its three parts. */
 const parts = (key: string): { path: string; name: string; kind: string } => {
@@ -26,25 +33,70 @@ export function providerConfig(data: string): { command: string[] } | undefined 
   return consented(config) && covers(config, 'symbols') ? config.impactProvider : undefined;
 }
 
-/**
- * Whether the hooks' path check leaves provider-managed anchors to the refresh job: a provider is configured and its last
- * run did not fail. After a failure, or with no provider, every anchor is checked by path and hash.
- */
-export function managedBy(data: string): boolean {
+const flags = (data: string): Record<string, boolean> => {
   try {
-    if (providerConfig(data) === undefined) return false;
-    return !existsSync(stateFile(data)) || (JSON.parse(readFileSync(stateFile(data), 'utf8')) as { providerFailed?: boolean }).providerFailed !== true;
+    return JSON.parse(readFileSync(stateFile(data), 'utf8')) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * Whether the hooks' path check leaves `repository`'s provider-managed anchors to the refresh job: a provider is configured
+ * and its last run for this repository succeeded. With no run yet, after a failure of any kind, or with no provider, every
+ * anchor is checked by path and hash.
+ */
+export function managedBy(data: string, repository: string | null): boolean {
+  try {
+    return repository !== null && providerConfig(data) !== undefined && flags(data)[repository] === false;
   } catch {
     return false;
+  }
+}
+
+/** Records whether the last run for `repository` failed; other repositories' flags are never touched. */
+export function setProviderFailed(data: string, repository: string, failed: boolean): void {
+  writeFileSync(stateFile(data), JSON.stringify({ ...flags(data), [repository]: failed }), { mode: 0o600 });
+}
+
+/** Runs `work` under a lock file naming this process; undefined when another live process holds it. A dead holder's lock is taken over. */
+export async function withJobLock<T>(lock: string, work: () => Promise<T>): Promise<T | undefined> {
+  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
+      break;
+    } catch {
+      const pid = Number(readFileSync(lock, 'utf8'));
+      let alive = true;
+      try {
+        // An empty file is a lock being written: held.
+        if (Number.isInteger(pid) && pid > 0) process.kill(pid, 0);
+      } catch (error) {
+        alive = (error as NodeJS.ErrnoException).code === 'EPERM';
+      }
+      if (alive || attempt >= 3) return undefined;
+      try {
+        unlinkSync(lock);
+      } catch {
+        // taken over by someone else: loop and look again
+      }
+    }
+  }
+  try {
+    return await work();
+  } finally {
+    try {
+      unlinkSync(lock);
+    } catch {
+      // already gone
+    }
   }
 }
 
 export function logAnchors(data: string, event: Record<string, unknown>): void {
   mkdirSync(dirname(anchorLog(data)), { recursive: true, mode: 0o700 });
   appendFileSync(anchorLog(data), `${JSON.stringify({ ...event, at: new Date().toISOString() })}\n`, { mode: 0o600 });
-}
-export function setProviderFailed(data: string, failed: boolean): void {
-  writeFileSync(stateFile(data), JSON.stringify({ providerFailed: failed }), { mode: 0o600 });
 }
 
 /** The anchor for `symbol` as the file at HEAD holds it, or null when the file or the lines are not there. */
@@ -59,7 +111,7 @@ export function symbolAnchor(symbol: ProviderSymbol, snapshot: string, text: str
     ...(commit === undefined ? {} : { commit }),
     citedHash: rangeHash(lines, symbol.start, symbol.end),
     symbol: symbol.key,
-    signature: symbol.signature,
+    ...(symbol.signature === undefined ? {} : { signature: symbol.signature }),
     contentHash: symbol.hash,
     fileHash: sha256(text),
     snapshot,
@@ -73,11 +125,16 @@ type Outcome =
   | { kind: 'stale'; reason: string; candidates: string[] };
 
 export interface Refresh {
+  /** Items with a provider-managed anchor looked at this run. */
+  examined: number;
   checked: number;
   current: number;
   moved: number;
   stale: number;
   restored: number;
+  skipped: number;
+  /** Items not looked at because the run reached its limit. */
+  left: number;
 }
 
 interface Row {
@@ -98,12 +155,32 @@ function undoneFrom(db: DatabaseSync, id: string): Set<string> {
   return new Set(rows.flatMap((r) => ((JSON.parse(r.metadata_json) as { from?: Anchor }).from?.symbol ?? [])));
 }
 
+/** The added symbols of one answer, indexed once by kind and hash and by name, not filtered per anchor. */
+const indexes = new WeakMap<Changes, { byHash: Map<string, ProviderSymbol[]>; byName: Map<string, ProviderSymbol[]> }>();
+function indexOf(c: Changes) {
+  let i = indexes.get(c);
+  if (i === undefined) {
+    i = { byHash: new Map(), byName: new Map() };
+    const push = (m: Map<string, ProviderSymbol[]>, k: string, s: ProviderSymbol): void => void m.set(k, [...(m.get(k) ?? []), s]);
+    for (const s of c.added) {
+      push(i.byHash, `${parts(s.key).kind}\0${s.hash}`, s);
+      push(i.byName, parts(s.key).name, s);
+    }
+    indexes.set(c, i);
+  }
+  return i;
+}
+
+/** A snapshot is at HEAD when it names the commit and the commit is HEAD's. */
+export const atHead = (head: string, commit: string | undefined): boolean => commit !== undefined && commit.length >= 7 && head.startsWith(commit);
+
 /**
  * Follows the symbol anchors of `repository` in `tenant` to the code at HEAD of the checkout at `cwd`, asking `provider`.
  * For each snapshot the anchors were last made at, it asks what changed since and re-resolves only anchors in the files
- * named (all of them when the provider no longer holds that snapshot). The provider is asked first and the store written
- * after, under `lock`, so a slow provider never holds the store. Throws ProviderError, having changed nothing, when the
- * provider fails; an answer about another repository is dropped by the provider client before it is read.
+ * named (all of them when the provider no longer holds that snapshot). Each item is written as it resolves, under `lock`,
+ * so progress accumulates; a run resolves at most `limit` anchors and says what it left. The provider is asked first and
+ * the store written after, so a slow provider never holds the store. A request the provider refuses skips that anchor
+ * (`log`); any other provider failure ends the run, having changed nothing further, and is thrown.
  */
 export async function refreshAnchors(
   db: DatabaseSync,
@@ -112,8 +189,9 @@ export async function refreshAnchors(
   cwd: string,
   provider: Provider,
   lock: <T>(work: () => T) => T | undefined,
+  { limit = ANCHORS_PER_RUN, log = () => undefined }: { limit?: number; log?: (event: Record<string, unknown>) => void } = {},
 ): Promise<Refresh> {
-  const result: Refresh = { checked: 0, current: 0, moved: 0, stale: 0, restored: 0 };
+  const result: Refresh = { examined: 0, checked: 0, current: 0, moved: 0, stale: 0, restored: 0, skipped: 0, left: 0 };
   const rows = (
     db
       .prepare(
@@ -122,6 +200,7 @@ export async function refreshAnchors(
       )
       .all(tenant, repository) as unknown as Row[]
   ).filter((r) => (r.status === 'active' || REASONS.includes(r.status_reason ?? '')) && (JSON.parse(r.anchors_json) as Anchor[]).some(isManaged));
+  result.examined = rows.length;
   if (rows.length === 0) return result;
   const read = headReader(cwd);
   const head = read.head();
@@ -134,43 +213,65 @@ export async function refreshAnchors(
     return changes.get(snapshot)!;
   };
 
-  const plans: { row: Row; outcomes: Outcome[]; undone: Set<string> }[] = [];
-  for (const row of rows) {
-    const anchors = JSON.parse(row.anchors_json) as Anchor[];
-    const undone = undoneFrom(db, row.id);
-    const outcomes: Outcome[] = [];
-    for (const a of anchors) outcomes.push(isManaged(a) ? await resolve(a, await since(a.snapshot!), undone) : { kind: 'keep' });
-    plans.push({ row, outcomes, undone });
-  }
-
   async function resolve(a: Anchor, c: Changes, undone: Set<string>): Promise<Outcome> {
     // The same snapshot, or a file nothing changed in, is what it was.
     if (c.sinceFound && (c.snapshot === a.snapshot || !c.files.includes(a.path))) return { kind: 'keep' };
-    const { symbol, snapshot } = await resolveKey(provider, a.symbol!);
+    const { symbol, snapshot, commit: at } = await resolveKey(provider, a.symbol!);
     if (symbol !== null) {
-      if (symbol.signature !== a.signature) return { kind: 'stale', reason: 'signature changed', candidates: [] };
+      if (a.signature !== undefined && symbol.signature !== undefined && symbol.signature !== a.signature) return { kind: 'stale', reason: 'signature changed', candidates: [] };
+      // Hashes are computed from HEAD's file, so only a snapshot of HEAD may supply the lines.
+      if (!atHead(commit, at)) return { kind: 'keep' };
       const text = read.text(parts(symbol.key).path);
       if (text === undefined) return { kind: 'keep' };
       const held = checkAnchor({ path: parts(symbol.key).path, start: symbol.start, end: symbol.end, ...(a.citedHash === undefined ? {} : { citedHash: a.citedHash }) }, text, 0);
       const now = held.ok ? symbolAnchor(symbol, snapshot, text, a.commit) : null;
-      return now === null ? { kind: 'stale', reason: text === null ? 'path gone' : 'cited text gone', candidates: [] } : { kind: 'current', anchor: { ...now, commit: a.commit ?? commit! } };
+      return now === null ? { kind: 'stale', reason: text === null ? 'path gone' : 'cited text gone', candidates: [] } : { kind: 'current', anchor: { ...now, commit: a.commit ?? commit } };
     }
     // The key is gone: a symbol added since that is the same declaration under another name or path is the same code.
     const kind = parts(a.symbol!).kind;
-    const added = c.sinceFound ? c.added.filter((x) => x.kind === kind) : [];
-    const same = added.filter((x) => x.hash === a.contentHash);
-    const named = (c.sinceFound ? c.added : []).filter((x) => parts(x.key).name === parts(a.symbol!).name && !same.includes(x));
+    const idx = indexOf(c);
+    const same = c.sinceFound ? idx.byHash.get(`${kind}\0${a.contentHash}`) ?? [] : [];
+    const named = c.sinceFound ? (idx.byName.get(parts(a.symbol!).name) ?? []).filter((x) => !same.includes(x)) : [];
+    const candidates = (same.length > 0 ? same : named).map((x) => x.key);
     if (same.length === 1 && !undone.has(a.symbol!)) {
-      const to = symbolAnchor(same[0]!, c.snapshot, read.text(parts(same[0]!.key).path), commit);
+      if (!atHead(commit, c.commit)) return { kind: 'stale', reason: 'snapshot not at HEAD', candidates };
+      const text = read.text(parts(same[0]!.key).path);
+      const small = typeof text === 'string' && tokenCount(fileLines(text).slice(same[0]!.start - 1, same[0]!.end).join('\n')) < MIN_MOVE_TOKENS;
+      const to = small ? null : symbolAnchor(same[0]!, c.snapshot, text, commit);
       if (to !== null) return { kind: 'move', anchor: to };
     }
-    const candidates = (same.length > 0 ? same : named).map((x) => x.key);
     return { kind: 'stale', reason: 'key gone', candidates };
   }
 
   const touch = db.prepare('UPDATE items SET anchors_json = ? WHERE id = ? AND anchors_json = ?');
-  for (const { row, outcomes } of plans) {
+  let attempts = 0;
+  for (const row of rows) {
     const anchors = JSON.parse(row.anchors_json) as Anchor[];
+    if (attempts >= limit) {
+      result.left++;
+      continue;
+    }
+    const undone = undoneFrom(db, row.id);
+    const outcomes: Outcome[] = [];
+    let skipped = false;
+    for (const a of anchors) {
+      if (!isManaged(a)) {
+        outcomes.push({ kind: 'keep' });
+        continue;
+      }
+      const c = await since(a.snapshot);
+      try {
+        const o = await resolve(a, c, undone);
+        if (o.kind !== 'keep') attempts++;
+        outcomes.push(o);
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error;
+        log({ event: 'anchor_skipped', item: row.id, reason: error.message });
+        skipped = true;
+        outcomes.push({ kind: 'keep' });
+      }
+    }
+    if (skipped) result.skipped++;
     // Anchors the provider does not own are checked by path, as the hooks do.
     const rest = anchors.map((a) => (isManaged(a) ? null : checkAnchor(a, read.text(a.path) ?? null)));
     if (outcomes.every((o) => o.kind === 'keep') && rest.every((r) => r === null)) continue;
@@ -204,7 +305,8 @@ export async function refreshAnchors(
           } else if (row.status_reason !== reason) {
             db.prepare("UPDATE items SET status_reason = ? WHERE id = ? AND status = 'stale'").run(reason, row.id);
           }
-        } else if (row.status === 'stale' && !managedKept) {
+        } else if (row.status === 'stale' && !managedKept && moves.length === 0) {
+          // A move is a new anchor, not the owner's yes: only a citation that holds again brings an item back.
           db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'").run(row.id);
           recordAudit(db, 'item_restored', { type: 'item', id: row.id });
           result.restored++;
@@ -221,6 +323,7 @@ export async function refreshAnchors(
     else result.current++;
     result.moved += moves.length;
   }
+  if (result.left > 0) log({ event: 'capped', done: attempts, left: result.left });
   return result;
 }
 
@@ -256,28 +359,49 @@ export function undoMove(db: DatabaseSync, moveId: string): string | false {
 
 /**
  * `memory anchors adopt <item-id> <key>`: the owner's yes to one candidate of a re-anchor proposal. The anchor moves to
- * that key as the provider describes it now, the move is logged and can be undone, and the item is current again.
+ * that key as the provider describes it now, compared and set against the anchor that was read, under the refresh lock;
+ * the move is logged and can be undone. The item comes back only when no other anchor on it is stale.
  */
-export async function adoptCandidate(db: DatabaseSync, id: string, key: string, cwd: string, provider: Provider): Promise<string> {
-  const row = db.prepare("SELECT status, anchors_json FROM items WHERE id = ? AND status IN ('active', 'stale')").get(id) as { status: string; anchors_json: string } | undefined;
+export async function adoptCandidate(
+  db: DatabaseSync,
+  id: string,
+  key: string,
+  cwd: string,
+  provider: Provider,
+  lock: <T>(work: () => T) => T | undefined,
+): Promise<string> {
+  const row = db.prepare("SELECT status, status_reason, anchors_json FROM items WHERE id = ? AND status IN ('active', 'stale')").get(id) as Row | undefined;
   const anchors = row === undefined ? [] : (JSON.parse(row.anchors_json) as Anchor[]);
   const at = anchors.findIndex((a) => a.candidates?.includes(key) === true);
   if (row === undefined || at < 0) throw new ProviderError(`${id} has no re-anchor proposal naming ${key}`);
   const read = headReader(cwd);
-  const { symbol, snapshot } = await resolveKey(provider, key);
+  const head = read.head();
+  const { symbol, snapshot, commit } = await resolveKey(provider, key);
+  if (head === null || !atHead(head, commit)) throw new ProviderError("the provider's snapshot is not at HEAD, so its lines cannot be anchored; try again after it indexes HEAD");
   const to = symbol === null ? null : symbolAnchor(symbol, snapshot, read.text(parts(key).path), anchors[at]!.commit);
   if (to === null) throw new ProviderError(`the provider no longer finds ${key}`);
   const from = anchors[at]!;
   const { candidates: _drop, ...old } = from;
-  anchors[at] = to;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.prepare("UPDATE items SET anchors_json = ?, status = 'active', status_reason = NULL WHERE id = ?").run(JSON.stringify(anchors), id);
-    recordAudit(db, 'anchor_moved', { type: 'item', id }, { symbol: true, from: old, to, adopted: true });
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
-  return `${id} is anchored to ${key}`;
+  const next = anchors.map((a, i) => (i === at ? to : a));
+  const blocked = anchors.some((a, i) => i !== at && ((a.candidates?.length ?? 0) > 0 || (!isManaged(a) && !checkAnchor(a, read.text(a.path) ?? null).ok)));
+  const done = lock(() => {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      // Compare and set: an item that changed while the provider was answering is not touched.
+      if (db.prepare('UPDATE items SET anchors_json = ? WHERE id = ? AND anchors_json = ?').run(JSON.stringify(next), id, row.anchors_json).changes !== 1) {
+        db.exec('ROLLBACK');
+        return false;
+      }
+      if (row.status === 'stale' && !blocked) db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'").run(id);
+      recordAudit(db, 'anchor_moved', { type: 'item', id }, { symbol: true, from: old, to, adopted: true });
+      db.exec('COMMIT');
+      return true;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  });
+  if (done === undefined) throw new ProviderError('a refresh is running; try again in a moment');
+  if (done === false) throw new ProviderError(`${id} changed while the provider was answering; nothing was changed`);
+  return `${id} is anchored to ${key}${blocked ? '; another of its anchors is still stale, so it stays stale' : ''}`;
 }

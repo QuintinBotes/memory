@@ -36,7 +36,7 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
     if (db !== null) {
       try {
         // A refresh already running elsewhere does the work; this hook goes on without waiting for it.
-        withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { managed: managedBy(data) }));
+        withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { managed: managedBy(data, context.repository) }));
         const items = tenantItems(db, context.tenant, context.repository, context.owner);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld!), textMatches(db, terms));
       } finally {

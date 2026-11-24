@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setup, remember, run, commit, sessionStart } from './helpers.mjs';
+import { setup, remember, run, runAsync, commit, sessionStart } from './helpers.mjs';
 
 // Slice 9 (#10): symbol anchors that follow the code, through a fake code anchor provider (test/fake-provider.mjs).
 const here = dirname(fileURLToPath(import.meta.url));
@@ -34,12 +35,15 @@ const requests = (s) => (existsSync(logFile(s)) ? readFileSync(logFile(s), 'utf8
 /** Forgets the requests so far: what a test counts is what the step under test asked. */
 const reset = (s) => writeFileSync(logFile(s), '');
 const ops = (s, op) => requests(s).filter((r) => r.op === op);
-/** Merges `patch` into the provider's state. */
+const head = (s) => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: s.acmeApi, encoding: 'utf8' }).trim();
+/** Merges `patch` into the provider's state. A snapshot is indexed at HEAD unless it names its commit or has `noCommit`. */
 function provide(s, patch) {
   const was = existsSync(stateFile(s)) ? JSON.parse(readFileSync(stateFile(s), 'utf8')) : { repository: 'acme/api', snapshots: {} };
-  writeFileSync(stateFile(s), JSON.stringify({ ...was, ...patch, snapshots: { ...was.snapshots, ...patch.snapshots } }));
+  const snapshots = Object.fromEntries(Object.entries(patch.snapshots ?? {}).map(([id, v]) => [id, v.commit === undefined && v.noCommit !== true ? { ...v, commit: head(s) } : v]));
+  writeFileSync(stateFile(s), JSON.stringify({ ...was, ...patch, snapshots: { ...was.snapshots, ...snapshots } }));
 }
 const exec = (s, args, extra = {}) => run(args, { cwd: s.acmeApi, data: s.data, config: s.configA, ...extra });
+const execAsync = (s, args, extra = {}) => runAsync(args, { cwd: s.acmeApi, data: s.data, config: s.configA, ...extra });
 const refresh = (s, ...flags) => exec(s, ['anchors', 'refresh', ...flags]);
 /** The provider is the shared impactProvider command (slice 14's): the fake reads its fixture and log from its arguments. */
 const configure = (s) => {
@@ -291,8 +295,15 @@ for (const mode of ['crash', 'garbage', 'hang']) {
   });
 }
 
-test('while the provider answers, the hooks leave its anchors to the refresh job; once it fails they are checked by path', () => {
+test('while the provider answers, the hooks leave its anchors to the refresh job; before its first refresh, or once it fails, they are checked by path', () => {
   const s = world();
+  // No state file: nothing says the provider has answered yet, so the hooks check by path.
+  const t = world();
+  commit(t.acmeApi, { 'src/a.ts': lines('// header', 'export class Ledger {', '  consume(n: number): number {', '    return n - 9;', '  }', '}') });
+  assert.equal(exec(t, ['list']).status, 0);
+  assert.equal(item(t).status, 'stale', 'no successful refresh yet: checked by path');
+  assert.equal(refresh(s).status, 0);
+  reset(s);
   commit(s.acmeApi, { 'src/a.ts': lines('// header', 'export class Ledger {', '  consume(n: number): number {', '    return n - 9;', '  }', '}') });
   provide(s, { current: 's1' });
   assert.equal(exec(s, ['list']).status, 0);
@@ -387,4 +398,202 @@ test('SC-001 in a rename-and-move suite at least 95% of anchors survive and none
     assert.equal(it.status, 'stale', `${n}: its body changed`);
     assert.equal(it.anchor.symbol, `${fileOf(n)}#${n}#function`, `${n} stays on its old key`);
   }
+});
+
+// ---- Review round: findings 5 to 16 ----
+const flags = (s) => JSON.parse(readFileSync(join(s.data, 'anchors-state.json'), 'utf8'));
+const setStatus = (s, status, reason) => {
+  const db = dbOf(s);
+  db.prepare('UPDATE items SET status = ?, status_reason = ? WHERE id = ?').run(status, reason, s.id);
+  db.close();
+};
+
+test('finding 5 a move does not revive a stale item: status, reason and trust stay as they were', () => {
+  const s = world();
+  const before = item(s);
+  setStatus(s, 'stale', 'key gone');
+  const spend = renamed(s);
+  assert.equal(refresh(s).status, 0);
+  const it = item(s);
+  assert.equal(it.anchor.symbol, spend.key, 'the anchor did move');
+  assert.deepEqual([it.status, it.status_reason, it.origin_trust], ['stale', 'key gone', before.origin_trust]);
+});
+
+test('finding 6 a body below the minimum size is never moved onto: getX deleted, getY added with the same body', () => {
+  const X = 'src/g.ts#Box.getX#method';
+  const Y = 'src/g.ts#Box.getY#method';
+  const s = world({ files: { 'src/g.ts': 'getX(){return this.x}\n' }, symbols: [sym(X, 'method', 'getX()', 1, 1, 'HG')], key: X });
+  commit(s.acmeApi, { 'src/g.ts': 'getY(){return this.x}\n' });
+  provide(s, { current: 's2', snapshots: { s2: { symbols: [sym(Y, 'method', 'getY()', 1, 1, 'HG')] } } });
+  assert.equal(refresh(s).status, 0);
+  assert.deepEqual([item(s).status, item(s).status_reason, item(s).anchor.symbol], ['stale', 'key gone', X]);
+  assert.equal(moves(s).length, 0);
+});
+
+test('finding 7 a snapshot that is not at HEAD, or does not say where it is, is never moved onto', () => {
+  for (const lag of ['behind', 'unknown']) {
+    const s = world();
+    const spend = renamed(s);
+    if (lag === 'unknown') provide(s, { snapshots: { s2: { noCommit: true, symbols: [CLASS, spend] } } });
+    else commit(s.acmeApi, { 'src/other.ts': 'export const o = 1;\n' }); // HEAD moves on after the snapshot
+    assert.equal(refresh(s).status, 0);
+    assert.equal(moves(s).length, 0, lag);
+    assert.equal(item(s).anchor.symbol, KEY, lag);
+    assert.deepEqual([item(s).status, item(s).status_reason], ['stale', 'snapshot not at HEAD'], lag);
+  }
+});
+
+/** An item stale on its symbol with two same-hash candidates, ready for `adopt`. */
+function proposed() {
+  const s = world();
+  const a = sym('src/a.ts#Ledger.spend#method', 'method', 'spend(n: number): number', 3, 5, 'H1');
+  const b = sym('src/a.ts#Ledger.burn#method', 'method', 'burn(n: number): number', 7, 9, 'H1');
+  commit(s.acmeApi, { 'src/a.ts': lines(...A.map((l) => l.replace('consume', 'spend'))) });
+  provide(s, { current: 's2', snapshots: { s2: { symbols: [CLASS, a, b] } } });
+  refresh(s);
+  assert.equal(item(s).status, 'stale');
+  return { s, a, b };
+}
+
+test('finding 8 adopt moves the anchor to a candidate and brings the item back; a key that is not a candidate is refused; approve is refused', () => {
+  const { s, a } = proposed();
+  const approve = exec(s, ['approve', s.id]);
+  assert.notEqual(approve.status, 0);
+  assert.match(approve.stderr, /anchors adopt/);
+  assert.equal(item(s).status, 'stale', 'approve changed nothing');
+  assert.notEqual(exec(s, ['anchors', 'adopt', s.id, 'src/a.ts#Nope#method']).status, 0);
+  const r = exec(s, ['anchors', 'adopt', s.id, a.key]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual([item(s).status, item(s).anchor.symbol, item(s).anchor.candidates], ['active', a.key, undefined]);
+  assert.equal(moves(s).length, 1);
+  assert.equal(exec(s, ['anchors', 'undo', moves(s)[0].id]).status, 0, 'an adoption can be undone like a move');
+});
+
+test('finding 8 adopt compares and sets: an item changed while the provider was answering is left alone', async () => {
+  const { s, a } = proposed();
+  provide(s, { mode: 'gate', gate: join(s.base, 'gate') });
+  reset(s);
+  const pending = execAsync(s, ['anchors', 'adopt', s.id, a.key]);
+  for (let i = 0; i < 500 && requests(s).length === 0; i++) await new Promise((ok) => setTimeout(ok, 20));
+  assert.equal(requests(s).length, 1, 'the adopt is waiting on the provider');
+  const db = dbOf(s);
+  db.prepare("UPDATE items SET anchors_json = REPLACE(anchors_json, 'consume', 'changed') WHERE id = ?").run(s.id);
+  db.close();
+  const changed = item(s).anchors_json;
+  writeFileSync(join(s.base, 'gate'), '');
+  const r = await pending;
+  assert.notEqual(r.status, 0);
+  assert.equal(item(s).anchors_json, changed);
+  assert.equal(item(s).status, 'stale');
+});
+
+test('finding 8 adopt does not force an item active while another of its anchors is stale', () => {
+  const { s, a } = proposed();
+  const db = dbOf(s);
+  const anchors = JSON.parse(db.prepare('SELECT anchors_json FROM items WHERE id = ?').get(s.id).anchors_json);
+  anchors.push({ path: 'src/a.ts', start: 1, end: 1, commit: anchors[0].commit, citedHash: 'not-the-hash' });
+  db.prepare('UPDATE items SET anchors_json = ? WHERE id = ?').run(JSON.stringify(anchors), s.id);
+  db.close();
+  assert.equal(exec(s, ['anchors', 'adopt', s.id, a.key]).status, 0);
+  assert.equal(JSON.parse(item(s).anchors_json)[0].symbol, a.key);
+  assert.equal(item(s).status, 'stale');
+});
+
+test('finding 10 one job at a time: a second job exits at once and asks nothing; a lock left by a dead process is taken over', async () => {
+  const s = world();
+  renamed(s);
+  provide(s, { mode: 'gate', gate: join(s.base, 'gate') });
+  const first = execAsync(s, ['anchors', 'refresh']);
+  for (let i = 0; i < 500 && requests(s).length === 0; i++) await new Promise((ok) => setTimeout(ok, 20));
+  const second = exec(s, ['anchors', 'refresh']);
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stderr, /already running/);
+  assert.equal(requests(s).length, 1, 'only the first job asked the provider');
+  writeFileSync(join(s.base, 'gate'), '');
+  assert.equal((await first).status, 0);
+  assert.equal(moves(s).length, 1);
+  // Control for the stale lock: a lock naming a process that has exited does not stop a job.
+  const dead = execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  mkdirSync(join(s.data, 'tenants'), { recursive: true });
+  writeFileSync(join(s.data, 'tenants/acme.sqlite.anchors.lock'), dead);
+  const again = exec(s, ['anchors', 'refresh']);
+  assert.equal(again.status, 0, again.stderr);
+  assert.doesNotMatch(again.stderr, /already running/);
+});
+
+/** Five anchored methods in one file, then every line moved down by one. */
+function many() {
+  const names = ['amber', 'basalt', 'cobalt', 'dune', 'ember'];
+  const body = (n) => [`export function ${n}(a: number): number {`, `  return a + ${n.length};`, '}'];
+  const file = names.flatMap(body);
+  const at = (i, shift = 0) => sym(`src/m.ts#${names[i]}#function`, 'function', `function ${names[i]}`, i * 3 + 1 + shift, i * 3 + 3 + shift, `h${i}`);
+  const s = world({ files: { 'src/m.ts': lines(...file) }, symbols: [at(0)], key: at(0).key, statement: 'Hazard of amber is real' });
+  const words = ['trellis', 'cormorant', 'abacus', 'wicker'];
+  provide(s, { current: 's1', snapshots: { s1: { symbols: names.map((_, i) => at(i)) } } });
+  const ids = [s.id];
+  for (let i = 1; i < 5; i++) {
+    const r = exec(s, ['remember', '--scope', 'repository', '--type', 'hazard', '--anchor', at(i).key, '--', `The ${words[i - 1]} of ${names[i]} cannot be reordered`]);
+    assert.equal(r.status, 0, r.stderr);
+    ids.push(/remembered (m-[0-9a-f]+)/.exec(r.stdout)[1]);
+  }
+  commit(s.acmeApi, { 'src/m.ts': lines('// shifted', ...file) });
+  provide(s, { current: 's2', snapshots: { s2: { symbols: names.map((_, i) => at(i, 1)) } } });
+  reset(s);
+  return { s, ids, at };
+}
+
+test('findings 11 and 12 a run is bounded and the rest waits for the next; each anchor is written as it resolves', () => {
+  const { s, ids } = many();
+  const cap = { MEMORY_ANCHORS_PER_RUN: '2' };
+  const snapshots = () => ids.map((id) => item(s, id).anchor.snapshot);
+  const r1 = exec(s, ['anchors', 'refresh'], { env: cap });
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.equal(ops(s, 'key').length, 2, 'two anchors resolved, no more');
+  assert.equal(snapshots().filter((x) => x === 's2').length, 2);
+  const log = readFileSync(join(s.data, 'logs/anchors.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(log.filter((e) => e.event === 'capped').map((e) => [e.done, e.left]), [[2, 3]]);
+  exec(s, ['anchors', 'refresh'], { env: cap });
+  exec(s, ['anchors', 'refresh'], { env: cap });
+  assert.deepEqual(snapshots(), ['s2', 's2', 's2', 's2', 's2'], 'progress accumulates over runs');
+  assert.equal(ops(s, 'key').length, 5, 'no anchor was resolved twice');
+});
+
+test('findings 11 and 12 one bad key does not block the rest, and is not counted as the provider failing', () => {
+  const { s, ids, at } = many();
+  provide(s, { badKeys: [at(1).key] });
+  const r = exec(s, ['anchors', 'refresh']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(ids.map((id) => item(s, id).anchor.snapshot), ['s2', 's1', 's2', 's2', 's2']);
+  const log = readFileSync(join(s.data, 'logs/anchors.jsonl'), 'utf8');
+  assert.match(log, /anchor_skipped/);
+  assert.equal(flags(s)['acme/api'], false, 'the provider did not fail');
+});
+
+test('finding 14 the failure flag is kept per repository, a crash of any kind sets it, and another repository cannot clear it', () => {
+  const s = world();
+  assert.equal(refresh(s).status, 0);
+  assert.deepEqual(flags(s), { 'acme/api': false });
+  provide(s, { mode: 'crash' });
+  assert.equal(refresh(s).status, 0);
+  assert.deepEqual(flags(s), { 'acme/api': true });
+  // Another repository of the tenant runs a healthy refresh with nothing anchored: it must not touch acme/api's flag.
+  provide(s, { mode: null });
+  const web = exec(s, ['anchors', 'refresh'], { cwd: s.acmeWeb });
+  assert.equal(web.status, 0, web.stderr);
+  assert.equal(flags(s)['acme/api'], true);
+  // So acme/api is still checked by path: its cited lines changed.
+  commit(s.acmeApi, { 'src/a.ts': lines('// header', 'export class Ledger {', '  consume(n: number): number {', '    return n - 9;', '  }', '}') });
+  assert.equal(exec(s, ['list']).status, 0);
+  assert.equal(item(s).status, 'stale');
+});
+
+test('findings 15 and 16 end and signature are optional in a symbol; an anchor without them follows the code by what the move rule uses', () => {
+  const bare = (x) => ({ key: x.key, kind: x.kind, start: x.start, hash: x.hash });
+  const s = world({ symbols: [bare(CLASS), bare(CONSUME)] });
+  assert.equal(item(s).anchor.signature, undefined);
+  assert.equal(item(s).anchor.end, 3, 'no end line: the anchor cites the start line');
+  commit(s.acmeApi, { 'src/a.ts': lines('// one', ...A) });
+  provide(s, { current: 's2', snapshots: { s2: { symbols: [bare({ ...CLASS, start: 3 }), bare({ ...CONSUME, start: 4 })] } } });
+  assert.equal(refresh(s).status, 0);
+  assert.deepEqual([item(s).status, item(s).anchor.start, item(s).anchor.snapshot], ['active', 4, 's2']);
 });

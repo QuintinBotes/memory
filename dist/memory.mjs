@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync as existsSync12, readFileSync as readFileSync13, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { isAbsolute as isAbsolute8, join as join15, normalize as normalize3 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -105,9 +105,12 @@ function loadConfig(data) {
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
   if (c.pointOfAction !== void 0 && typeof c.pointOfAction !== "boolean") throw new ConfigError("pointOfAction must be true or false");
-  const impact = c.impactProvider;
-  if (impact !== void 0 && !(typeof impact === "object" && impact !== null && !Array.isArray(impact) && isList(impact.command) && impact.command.length > 0 && impact.command.every((a) => a !== "") && isAbsolute(impact.command[0]))) {
+  const impact2 = c.impactProvider;
+  if (impact2 !== void 0 && !(typeof impact2 === "object" && impact2 !== null && !Array.isArray(impact2) && isList(impact2.command) && impact2.command.length > 0 && impact2.command.every((a) => a !== ""))) {
     throw new ConfigError('impactProvider must be {"command": [absolute program path, arguments...]}');
+  }
+  if (impact2 !== void 0 && !isAbsolute(impact2.command[0])) {
+    throw new ConfigError("impactProvider.command[0] must be an absolute path");
   }
   const off = c.recallOff;
   if (off !== void 0 && !(typeof off === "object" && off !== null && typeof off.reason === "string" && typeof off.at === "string")) {
@@ -125,7 +128,7 @@ function loadConfig(data) {
     ...capture2 !== void 0 ? { capture: capture2 } : {},
     ...c.automation !== void 0 ? { automation: c.automation } : {},
     ...c.pointOfAction !== void 0 ? { pointOfAction: c.pointOfAction } : {},
-    ...impact !== void 0 ? { impactProvider: impact } : {},
+    ...impact2 !== void 0 ? { impactProvider: impact2 } : {},
     ...off !== void 0 ? { recallOff: off } : {}
   };
 }
@@ -752,11 +755,14 @@ var RANKING = {
   /** An item sharing an anchored path with one of the `graphTop` best hits. */
   graph: 1,
   graphTop: 3,
+  /** An item anchored on a depth-1 dependent of a change (#16); `untested` is added when that dependent is neither changed nor tested. Provisional until the review replay shows dependent false recall under 10%. */
+  dependent: 2,
+  untested: 1,
   /** Most rows one search returns. */
   limit: 10
 };
 var tenth = (n) => Math.round(n * 10) / 10;
-function rank(items, paths, now = Date.now(), similarity2, keyed) {
+function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = []) {
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\/?$|^\.\//, "").replace(/\/+$/, ""));
   const score = (item, near) => {
     const parts2 = [];
@@ -767,13 +773,18 @@ function rank(items, paths, now = Date.now(), similarity2, keyed) {
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === "" || a.path === p || a.path.startsWith(`${p}/`) || p.startsWith(`${a.path}/`))).length;
     if (overlap > 0) add("anchor", Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
+    const reached = overlap > 0 ? [] : dependents.filter((d) => item.anchors.some((a) => a.path === d.path || a.path.startsWith(`${d.path}/`)));
+    if (reached.length > 0) {
+      add("dependent", RANKING.dependent);
+      if (reached.some((d) => d.neither)) add("neither changed nor tested", RANKING.untested);
+    }
     const key2 = keyed?.has(item.id) === true;
     if (key2) add("key", RANKING.key);
     const ratio = item.textRatio ?? 0;
     const text4 = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity2?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth(RANKING.semantic * (cos - RANKING.minSimilarity) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && text4 === 0 && semantic === 0 && !near && !key2) return null;
+    if (overlap === 0 && reached.length === 0 && text4 === 0 && semantic === 0 && !near && !key2) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text4 > 0) add("text", text4);
     if (semantic > 0) add("semantic", semantic);
@@ -1190,52 +1201,53 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW, managed = f
   return result;
 }
 
+// src/provider/run.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+var PROVIDER_TIMEOUT_MS = 5e3;
+var PROVIDER_MAX_OUTPUT = 4 * 1024 * 1024;
+function runProvider(command, cwd, request) {
+  const [program, ...args] = command;
+  const r = spawnSync2(program, args, {
+    cwd,
+    env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" },
+    input: `${JSON.stringify(request)}
+`,
+    encoding: "utf8",
+    timeout: PROVIDER_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    maxBuffer: PROVIDER_MAX_OUTPUT,
+    stdio: ["pipe", "pipe", "ignore"]
+  });
+  if (r.error !== void 0) return { ok: false, reason: `${program} ${r.error.code === "ETIMEDOUT" ? `did not answer within ${PROVIDER_TIMEOUT_MS} ms` : `failed: ${r.error.message}`}` };
+  if (r.status !== 0) return { ok: false, reason: `${program} exited ${r.status ?? "by signal"}` };
+  return { ok: true, stdout: r.stdout };
+}
+
 // src/anchors/provider.ts
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 var ProviderError = class extends Error {
 };
 var ForeignAnswer = class extends ProviderError {
 };
-var PROVIDER_TIMEOUT_MS = 5e3;
+var Refused = class extends ProviderError {
+};
 function openProvider(config, repository, cwd) {
-  const [program = "", ...args] = config.command;
   return {
-    ask: (op, params) => new Promise((ok, fail) => {
-      let done = false;
-      const finish = (outcome) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        child.kill();
-        outcome();
-      };
-      const child = spawn(program, args, { cwd, env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" }, stdio: ["pipe", "pipe", "ignore"] });
-      const timer = setTimeout(() => finish(() => fail(new ProviderError(`the provider did not answer ${op} within ${PROVIDER_TIMEOUT_MS} ms`))), PROVIDER_TIMEOUT_MS);
-      child.on("error", (e) => finish(() => fail(new ProviderError(`could not start ${program}: ${e.message}`))));
-      child.on("close", (code) => finish(() => fail(new ProviderError(`${program} exited (${code ?? "signal"}) without answering ${op}`))));
-      child.stdin.on("error", () => void 0);
-      child.stdin.end(`${JSON.stringify({ op, repository, ...params })}
-`);
-      createInterface({ input: child.stdout }).once(
-        "line",
-        (line) => finish(() => {
-          let answer;
-          try {
-            answer = JSON.parse(line);
-          } catch {
-            return fail(new ProviderError("the provider answered with text that is not JSON"));
-          }
-          const a = answer;
-          if (typeof a !== "object" || a === null) return fail(new ProviderError("the provider answered with something that is not an object"));
-          if (a["status"] === "no_snapshot") return fail(new ProviderError("the provider has no snapshot of this repository yet"));
-          if (a["status"] !== "ok") return fail(new ProviderError(`the provider refused ${op}${typeof a["error"] === "string" ? `: ${a["error"]}` : ""}`));
-          if (a["repository"] !== repository) return fail(new ForeignAnswer(`the provider answered about ${String(a["repository"])}, not ${repository}; the answer was dropped`));
-          ok(a);
-        })
-      );
-    }),
-    close: () => void 0
+    ask: async (op, params) => {
+      const r = runProvider(config.command, cwd, { op, repository, ...params });
+      if (!r.ok) throw new ProviderError(r.reason);
+      let a;
+      try {
+        a = JSON.parse(r.stdout.split("\n")[0] ?? "");
+      } catch {
+        throw new ProviderError("the provider answered with text that is not JSON");
+      }
+      if (typeof a !== "object" || a === null) throw new ProviderError("the provider answered with something that is not an object");
+      if (a["status"] === "no_snapshot") throw new ProviderError("the provider has no snapshot of this repository yet");
+      if (a["status"] === "error") throw new Refused(`the provider refused ${op}${typeof a["error"] === "string" ? `: ${a["error"]}` : ""}`);
+      if (a["status"] !== "ok") throw new ProviderError(`the provider answered ${op} without a status`);
+      if (a["repository"] !== repository) throw new ForeignAnswer(`the provider answered about ${String(a["repository"])}, not ${repository}; the answer was dropped`);
+      return a;
+    }
   };
 }
 var bad = (what) => {
@@ -1246,18 +1258,21 @@ var whole = (v, what) => Number.isInteger(v) && v >= 1 ? v : bad(what);
 function asSymbol(v) {
   const s = v;
   if (typeof s !== "object" || s === null) return bad("symbol");
-  const [start, end] = [whole(s["start"], "start line"), whole(s["end"], "end line")];
+  const start = whole(s["start"], "start line");
+  const end = s["end"] === void 0 ? start : whole(s["end"], "end line");
   if (end < start) bad("line range");
-  return { key: text(s["key"], "symbol key"), kind: text(s["kind"], "kind"), signature: typeof s["signature"] === "string" ? s["signature"] : bad("signature"), start, end, hash: text(s["hash"], "content hash") };
+  if (s["signature"] !== void 0 && typeof s["signature"] !== "string") bad("signature");
+  return { key: text(s["key"], "symbol key"), kind: text(s["kind"], "kind"), ...s["signature"] === void 0 ? {} : { signature: s["signature"] }, start, end, hash: text(s["hash"], "content hash") };
 }
 var symbols = (v, what) => Array.isArray(v) ? v.map(asSymbol) : bad(what);
+var commitOf = (a) => typeof a["commit"] === "string" && a["commit"] !== "" ? { commit: a["commit"] } : {};
 async function resolveKey(p, key2) {
   const a = await p.ask("key", { key: key2 });
-  return { snapshot: text(a["snapshot"], "snapshot"), symbol: a["symbol"] === null ? null : asSymbol(a["symbol"]) };
+  return { snapshot: text(a["snapshot"], "snapshot"), ...commitOf(a), symbol: a["symbol"] === null ? null : asSymbol(a["symbol"]) };
 }
 async function symbolAt(p, path, line) {
   const a = await p.ask("symbol_at", { path, line });
-  return { snapshot: text(a["snapshot"], "snapshot"), symbol: a["symbol"] === null ? null : asSymbol(a["symbol"]) };
+  return { snapshot: text(a["snapshot"], "snapshot"), ...commitOf(a), symbol: a["symbol"] === null ? null : asSymbol(a["symbol"]) };
 }
 async function changesSince(p, since) {
   const a = await p.ask("changes", { since });
@@ -1265,6 +1280,7 @@ async function changesSince(p, since) {
   if (!Array.isArray(files) || !files.every((f) => typeof f === "string")) bad("file list");
   return {
     snapshot: text(a["snapshot"], "snapshot"),
+    ...commitOf(a),
     sinceFound: a["since_found"] !== false,
     files,
     added: symbols(a["added"], "added symbols"),
@@ -1281,7 +1297,7 @@ async function impactOf(p, repository, keys) {
   const dependents = list2.flatMap((d) => {
     if (d?.["repository"] !== void 0 && String(d["repository"]).toLowerCase() !== repository) return [];
     const [relation, status] = [text(d?.["relation"], "relation"), text(d?.["status"], "status")];
-    if (!RELATIONS.includes(relation) || !STATUSES.includes(status)) bad("relation or status");
+    if (!RELATIONS.includes(relation) || !(STATUSES.includes(status) || status.startsWith("tested: "))) bad("relation or status");
     return [{ path: text(d?.["path"], "dependent path"), ...typeof d?.["symbol"] === "string" ? { symbol: d["symbol"] } : {}, relation, status }];
   });
   return { snapshot: text(a["snapshot"], "snapshot"), dependents };
@@ -1294,7 +1310,7 @@ async function testsFor(p, key2) {
 }
 
 // src/anchors/refresh.ts
-import { appendFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/consent/plan.ts
@@ -1309,6 +1325,7 @@ var DATA_CATEGORIES = [
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
   { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" },
+  { id: "impact", since: 8, text: "When impactProvider is set in config.json, memory recall --diff runs that command, without a shell, once per call and sends it on standard input the repository's owner/name, the range and the paths the range changes; what it answers (dependents' paths and symbol keys) is used to rank items and is not stored. A provider backed by a code graph may start an index job of its own to answer, and a graph that has no snapshot yet answers pending, which memory reads as no snapshot. Without impactProvider, or before you agree to this plan, nothing is run" },
   { id: "symbols", since: 9, text: "When impactProvider is set in config.json, the anchor refresh (#10) runs that command, which you chose, without a shell and with only PATH and HOME in its environment, once per question: at session start in a detached job, and when you remember an anchor at a symbol key or run memory anchors. It sends on standard input the repository's owner/name, the symbol keys, file paths, line numbers and snapshot ids of the checkout's anchored items; it answers with symbols' keys, signatures, line ranges and content hashes. memory sends nothing elsewhere and what the command does with what it receives is outside memory. Each automatic move of an anchor is logged in the tenant's file and can be undone with memory anchors undo. Without impactProvider, or before you agree to this plan, anchors are checked by path and hash only" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
@@ -1336,7 +1353,10 @@ function buildConsentPlan(config, storageLocation) {
 }
 
 // src/anchors/refresh.ts
-var REASONS = ["path gone", "cited text gone", "signature changed", "key gone"];
+var REASONS = ["path gone", "cited text gone", "signature changed", "key gone", "snapshot not at HEAD"];
+var MIN_MOVE_TOKENS = 10;
+var tokenCount = (text4) => (text4.match(/[A-Za-z0-9_$]+|[^\sA-Za-z0-9_$]/g) ?? []).length;
+var ANCHORS_PER_RUN = 50;
 var parts = (key2) => {
   const [path = "", name = "", kind = ""] = key2.split("#");
   return { path, name, kind };
@@ -1347,21 +1367,57 @@ function providerConfig(data) {
   const config = loadConfig(data);
   return consented(config) && covers(config, "symbols") ? config.impactProvider : void 0;
 }
-function managedBy(data) {
+var flags = (data) => {
   try {
-    if (providerConfig(data) === void 0) return false;
-    return !existsSync2(stateFile(data)) || JSON.parse(readFileSync3(stateFile(data), "utf8")).providerFailed !== true;
+    return JSON.parse(readFileSync3(stateFile(data), "utf8"));
+  } catch {
+    return {};
+  }
+};
+function managedBy(data, repository) {
+  try {
+    return repository !== null && providerConfig(data) !== void 0 && flags(data)[repository] === false;
   } catch {
     return false;
+  }
+}
+function setProviderFailed(data, repository, failed) {
+  writeFileSync2(stateFile(data), JSON.stringify({ ...flags(data), [repository]: failed }), { mode: 384 });
+}
+async function withJobLock(lock, work) {
+  mkdirSync2(dirname2(lock), { recursive: true, mode: 448 });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      writeFileSync2(lock, String(process.pid), { flag: "wx", mode: 384 });
+      break;
+    } catch {
+      const pid = Number(readFileSync3(lock, "utf8"));
+      let alive = true;
+      try {
+        if (Number.isInteger(pid) && pid > 0) process.kill(pid, 0);
+      } catch (error) {
+        alive = error.code === "EPERM";
+      }
+      if (alive || attempt >= 3) return void 0;
+      try {
+        unlinkSync(lock);
+      } catch {
+      }
+    }
+  }
+  try {
+    return await work();
+  } finally {
+    try {
+      unlinkSync(lock);
+    } catch {
+    }
   }
 }
 function logAnchors(data, event) {
   mkdirSync2(dirname2(anchorLog(data)), { recursive: true, mode: 448 });
   appendFileSync(anchorLog(data), `${JSON.stringify({ ...event, at: (/* @__PURE__ */ new Date()).toISOString() })}
 `, { mode: 384 });
-}
-function setProviderFailed(data, failed) {
-  writeFileSync2(stateFile(data), JSON.stringify({ providerFailed: failed }), { mode: 384 });
 }
 function symbolAnchor(symbol, snapshot2, text4, commit) {
   if (text4 === null || text4 === void 0) return null;
@@ -1374,7 +1430,7 @@ function symbolAnchor(symbol, snapshot2, text4, commit) {
     ...commit === void 0 ? {} : { commit },
     citedHash: rangeHash(lines2, symbol.start, symbol.end),
     symbol: symbol.key,
-    signature: symbol.signature,
+    ...symbol.signature === void 0 ? {} : { signature: symbol.signature },
     contentHash: symbol.hash,
     fileHash: sha256(text4),
     snapshot: snapshot2
@@ -1387,12 +1443,28 @@ function undoneFrom(db, id) {
   ).all(id);
   return new Set(rows.flatMap((r) => JSON.parse(r.metadata_json).from?.symbol ?? []));
 }
-async function refreshAnchors(db, tenant, repository, cwd, provider, lock) {
-  const result = { checked: 0, current: 0, moved: 0, stale: 0, restored: 0 };
+var indexes = /* @__PURE__ */ new WeakMap();
+function indexOf(c) {
+  let i = indexes.get(c);
+  if (i === void 0) {
+    i = { byHash: /* @__PURE__ */ new Map(), byName: /* @__PURE__ */ new Map() };
+    const push = (m, k, s) => void m.set(k, [...m.get(k) ?? [], s]);
+    for (const s of c.added) {
+      push(i.byHash, `${parts(s.key).kind}\0${s.hash}`, s);
+      push(i.byName, parts(s.key).name, s);
+    }
+    indexes.set(c, i);
+  }
+  return i;
+}
+var atHead = (head, commit) => commit !== void 0 && commit.length >= 7 && head.startsWith(commit);
+async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { limit = ANCHORS_PER_RUN, log = () => void 0 } = {}) {
+  const result = { examined: 0, checked: 0, current: 0, moved: 0, stale: 0, restored: 0, skipped: 0, left: 0 };
   const rows = db.prepare(
     `SELECT id, status, status_reason, anchors_json FROM items
          WHERE tenant = ? AND scope = 'repository' AND scope_key = ? AND anchors_json != '[]' AND status IN ('active', 'stale') ORDER BY id`
   ).all(tenant, repository).filter((r) => (r.status === "active" || REASONS.includes(r.status_reason ?? "")) && JSON.parse(r.anchors_json).some(isManaged));
+  result.examined = rows.length;
   if (rows.length === 0) return result;
   const read2 = headReader(cwd);
   const head = read2.head();
@@ -1403,19 +1475,12 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock) {
     if (!changes.has(snapshot2)) changes.set(snapshot2, await changesSince(provider, snapshot2));
     return changes.get(snapshot2);
   };
-  const plans = [];
-  for (const row4 of rows) {
-    const anchors = JSON.parse(row4.anchors_json);
-    const undone = undoneFrom(db, row4.id);
-    const outcomes = [];
-    for (const a of anchors) outcomes.push(isManaged(a) ? await resolve6(a, await since(a.snapshot), undone) : { kind: "keep" });
-    plans.push({ row: row4, outcomes, undone });
-  }
   async function resolve6(a, c, undone) {
     if (c.sinceFound && (c.snapshot === a.snapshot || !c.files.includes(a.path))) return { kind: "keep" };
-    const { symbol, snapshot: snapshot2 } = await resolveKey(provider, a.symbol);
+    const { symbol, snapshot: snapshot2, commit: at2 } = await resolveKey(provider, a.symbol);
     if (symbol !== null) {
-      if (symbol.signature !== a.signature) return { kind: "stale", reason: "signature changed", candidates: [] };
+      if (a.signature !== void 0 && symbol.signature !== void 0 && symbol.signature !== a.signature) return { kind: "stale", reason: "signature changed", candidates: [] };
+      if (!atHead(commit, at2)) return { kind: "keep" };
       const text4 = read2.text(parts(symbol.key).path);
       if (text4 === void 0) return { kind: "keep" };
       const held2 = checkAnchor({ path: parts(symbol.key).path, start: symbol.start, end: symbol.end, ...a.citedHash === void 0 ? {} : { citedHash: a.citedHash } }, text4, 0);
@@ -1423,19 +1488,48 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock) {
       return now === null ? { kind: "stale", reason: text4 === null ? "path gone" : "cited text gone", candidates: [] } : { kind: "current", anchor: { ...now, commit: a.commit ?? commit } };
     }
     const kind = parts(a.symbol).kind;
-    const added = c.sinceFound ? c.added.filter((x) => x.kind === kind) : [];
-    const same = added.filter((x) => x.hash === a.contentHash);
-    const named = (c.sinceFound ? c.added : []).filter((x) => parts(x.key).name === parts(a.symbol).name && !same.includes(x));
+    const idx = indexOf(c);
+    const same = c.sinceFound ? idx.byHash.get(`${kind}\0${a.contentHash}`) ?? [] : [];
+    const named = c.sinceFound ? (idx.byName.get(parts(a.symbol).name) ?? []).filter((x) => !same.includes(x)) : [];
+    const candidates = (same.length > 0 ? same : named).map((x) => x.key);
     if (same.length === 1 && !undone.has(a.symbol)) {
-      const to = symbolAnchor(same[0], c.snapshot, read2.text(parts(same[0].key).path), commit);
+      if (!atHead(commit, c.commit)) return { kind: "stale", reason: "snapshot not at HEAD", candidates };
+      const text4 = read2.text(parts(same[0].key).path);
+      const small = typeof text4 === "string" && tokenCount(fileLines(text4).slice(same[0].start - 1, same[0].end).join("\n")) < MIN_MOVE_TOKENS;
+      const to = small ? null : symbolAnchor(same[0], c.snapshot, text4, commit);
       if (to !== null) return { kind: "move", anchor: to };
     }
-    const candidates = (same.length > 0 ? same : named).map((x) => x.key);
     return { kind: "stale", reason: "key gone", candidates };
   }
   const touch = db.prepare("UPDATE items SET anchors_json = ? WHERE id = ? AND anchors_json = ?");
-  for (const { row: row4, outcomes } of plans) {
+  let attempts = 0;
+  for (const row4 of rows) {
     const anchors = JSON.parse(row4.anchors_json);
+    if (attempts >= limit) {
+      result.left++;
+      continue;
+    }
+    const undone = undoneFrom(db, row4.id);
+    const outcomes = [];
+    let skipped = false;
+    for (const a of anchors) {
+      if (!isManaged(a)) {
+        outcomes.push({ kind: "keep" });
+        continue;
+      }
+      const c = await since(a.snapshot);
+      try {
+        const o = await resolve6(a, c, undone);
+        if (o.kind !== "keep") attempts++;
+        outcomes.push(o);
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error;
+        log({ event: "anchor_skipped", item: row4.id, reason: error.message });
+        skipped = true;
+        outcomes.push({ kind: "keep" });
+      }
+    }
+    if (skipped) result.skipped++;
     const rest = anchors.map((a) => isManaged(a) ? null : checkAnchor(a, read2.text(a.path) ?? null));
     if (outcomes.every((o) => o.kind === "keep") && rest.every((r) => r === null)) continue;
     result.checked++;
@@ -1467,7 +1561,7 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock) {
           } else if (row4.status_reason !== reason) {
             db.prepare("UPDATE items SET status_reason = ? WHERE id = ? AND status = 'stale'").run(reason, row4.id);
           }
-        } else if (row4.status === "stale" && !managedKept) {
+        } else if (row4.status === "stale" && !managedKept && moves.length === 0) {
           db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'").run(row4.id);
           recordAudit(db, "item_restored", { type: "item", id: row4.id });
           result.restored++;
@@ -1484,6 +1578,7 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock) {
     else result.current++;
     result.moved += moves.length;
   }
+  if (result.left > 0) log({ event: "capped", done: attempts, left: result.left });
   return result;
 }
 function undoMove(db, moveId) {
@@ -1510,33 +1605,45 @@ function undoMove(db, moveId) {
     throw error;
   }
 }
-async function adoptCandidate(db, id, key2, cwd, provider) {
-  const row4 = db.prepare("SELECT status, anchors_json FROM items WHERE id = ? AND status IN ('active', 'stale')").get(id);
+async function adoptCandidate(db, id, key2, cwd, provider, lock) {
+  const row4 = db.prepare("SELECT status, status_reason, anchors_json FROM items WHERE id = ? AND status IN ('active', 'stale')").get(id);
   const anchors = row4 === void 0 ? [] : JSON.parse(row4.anchors_json);
   const at2 = anchors.findIndex((a) => a.candidates?.includes(key2) === true);
   if (row4 === void 0 || at2 < 0) throw new ProviderError(`${id} has no re-anchor proposal naming ${key2}`);
   const read2 = headReader(cwd);
-  const { symbol, snapshot: snapshot2 } = await resolveKey(provider, key2);
+  const head = read2.head();
+  const { symbol, snapshot: snapshot2, commit } = await resolveKey(provider, key2);
+  if (head === null || !atHead(head, commit)) throw new ProviderError("the provider's snapshot is not at HEAD, so its lines cannot be anchored; try again after it indexes HEAD");
   const to = symbol === null ? null : symbolAnchor(symbol, snapshot2, read2.text(parts(key2).path), anchors[at2].commit);
   if (to === null) throw new ProviderError(`the provider no longer finds ${key2}`);
   const from2 = anchors[at2];
   const { candidates: _drop, ...old } = from2;
-  anchors[at2] = to;
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare("UPDATE items SET anchors_json = ?, status = 'active', status_reason = NULL WHERE id = ?").run(JSON.stringify(anchors), id);
-    recordAudit(db, "anchor_moved", { type: "item", id }, { symbol: true, from: old, to, adopted: true });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return `${id} is anchored to ${key2}`;
+  const next = anchors.map((a, i) => i === at2 ? to : a);
+  const blocked = anchors.some((a, i) => i !== at2 && ((a.candidates?.length ?? 0) > 0 || !isManaged(a) && !checkAnchor(a, read2.text(a.path) ?? null).ok));
+  const done = lock(() => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (db.prepare("UPDATE items SET anchors_json = ? WHERE id = ? AND anchors_json = ?").run(JSON.stringify(next), id, row4.anchors_json).changes !== 1) {
+        db.exec("ROLLBACK");
+        return false;
+      }
+      if (row4.status === "stale" && !blocked) db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'").run(id);
+      recordAudit(db, "anchor_moved", { type: "item", id }, { symbol: true, from: old, to, adopted: true });
+      db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  });
+  if (done === void 0) throw new ProviderError("a refresh is running; try again in a moment");
+  if (done === false) throw new ProviderError(`${id} changed while the provider was answering; nothing was changed`);
+  return `${id} is anchored to ${key2}${blocked ? "; another of its anchors is still stale, so it stays stale" : ""}`;
 }
 
 // src/store/filesystem.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync3, readFileSync as readFileSync4, realpathSync } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync4, realpathSync } from "node:fs";
 import { dirname as dirname3, resolve as resolve2, sep } from "node:path";
 var NETWORK_TYPES = /^(nfs\d*|cifs|smb\w*|smbfs|afpfs|afs|ncpfs|webdav|davfs\w*|9p|fuse\.(sshfs|davfs\w*|rclone)|sshfs|ceph|glusterfs|lustre)$/i;
 function parseMounts(table) {
@@ -1568,13 +1675,13 @@ function mountTable() {
 }
 function networkFilesystem(dir) {
   let probe = resolve2(dir);
-  while (!existsSync3(probe) && dirname3(probe) !== probe) probe = dirname3(probe);
+  while (!existsSync2(probe) && dirname3(probe) !== probe) probe = dirname3(probe);
   const type = mountTypeOf(realpathSync(probe), mountTable());
   return type !== void 0 && NETWORK_TYPES.test(type) ? type : void 0;
 }
 
 // src/store/refresh-lock.ts
-import { closeSync, mkdirSync as mkdirSync3, openSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync as mkdirSync3, openSync, statSync, unlinkSync as unlinkSync2, writeSync } from "node:fs";
 import { dirname as dirname4 } from "node:path";
 var STALE_MS = 3e4;
 function withFileLock(lock, work, waitMs = 0) {
@@ -1587,7 +1694,7 @@ function withFileLock(lock, work, waitMs = 0) {
     } catch {
       try {
         if (Date.now() - statSync(lock).mtimeMs > STALE_MS) {
-          unlinkSync(lock);
+          unlinkSync2(lock);
           continue;
         }
       } catch {
@@ -1603,7 +1710,7 @@ function withFileLock(lock, work, waitMs = 0) {
   } finally {
     closeSync(fd);
     try {
-      unlinkSync(lock);
+      unlinkSync2(lock);
     } catch {
     }
   }
@@ -1612,7 +1719,7 @@ var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lo
 
 // src/mcp/server.ts
 import { isAbsolute as isAbsolute4, relative as relative3 } from "node:path";
-import { createInterface as createInterface2 } from "node:readline";
+import { createInterface } from "node:readline";
 
 // src/automation.ts
 import { readFileSync as readFileSync5 } from "node:fs";
@@ -1827,7 +1934,7 @@ function sweepIfDue(db, now = Date.now()) {
 
 // src/instructions.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
-import { chmodSync, existsSync as existsSync4, lstatSync, readFileSync as readFileSync6, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { chmodSync, existsSync as existsSync3, lstatSync, readFileSync as readFileSync6, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename, dirname as dirname5, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3, sep as sep2 } from "node:path";
 var ROOT_FILES = ["AGENTS.md", "GEMINI.md", ".github/copilot-instructions.md"];
@@ -1914,7 +2021,7 @@ function loadInstructions(cwd, configDir) {
     for (const f of ROOT_FILES) read2(join4(top, f), top, 1);
   }
   read2(userTarget, homedir2(), 1);
-  const repositoryTarget = top === null ? null : [join4(top, "CLAUDE.md"), join4(top, "AGENTS.md")].find((p) => existsSync4(p)) ?? join4(top, "CLAUDE.md");
+  const repositoryTarget = top === null ? null : [join4(top, "CLAUDE.md"), join4(top, "AGENTS.md")].find((p) => existsSync3(p)) ?? join4(top, "CLAUDE.md");
   if (repositoryTarget !== null) allowed.add(repositoryTarget);
   allowed.add(userTarget);
   return { top, lines: lines2, allowed, repositoryTarget, userTarget };
@@ -1991,11 +2098,11 @@ function applyRefusal(ins, e, text4) {
 function writableTarget(ins, file) {
   const name = displayPath(ins, file);
   if (file === resolve3(ins.userTarget)) {
-    if (existsSync4(file) && lstatSync(file).isSymbolicLink()) throw new Error(`${name} is a symbolic link; nothing was written. Edit the real file it points to`);
+    if (existsSync3(file) && lstatSync(file).isSymbolicLink()) throw new Error(`${name} is a symbolic link; nothing was written. Edit the real file it points to`);
     return file;
   }
   if (ins.top === null) throw new Error(`${name} is not inside a repository; nothing was written`);
-  const real = existsSync4(file) ? realpathSync2(file) : join4(realpathSync2(dirname5(file)), basename(file));
+  const real = existsSync3(file) ? realpathSync2(file) : join4(realpathSync2(dirname5(file)), basename(file));
   if (!inside2(realpathSync2(ins.top), real)) throw new Error(`${name} resolves outside the repository; nothing was written`);
   return real;
 }
@@ -2013,11 +2120,11 @@ function writeAtomic(path, content) {
   const tmp = join4(dirname5(path), `.${basename(path)}.${randomBytes3(4).toString("hex")}.tmp`);
   try {
     writeFileSync3(tmp, content, { flag: "wx" });
-    if (existsSync4(path)) chmodSync(tmp, statSync2(path).mode & 4095);
+    if (existsSync3(path)) chmodSync(tmp, statSync2(path).mode & 4095);
     renameSync2(tmp, path);
   } catch (error) {
     try {
-      unlinkSync2(tmp);
+      unlinkSync3(tmp);
     } catch {
     }
     throw error;
@@ -2027,7 +2134,7 @@ function applyEdit(db, ins, e) {
   const file = resolve3(e.file);
   if (!ins.allowed.has(file)) throw new Error(applyRefusal(ins, e, null));
   const target = writableTarget(ins, file);
-  const text4 = existsSync4(target) ? readWhole(target, displayPath(ins, file)) : null;
+  const text4 = existsSync3(target) ? readWhole(target, displayPath(ins, file)) : null;
   const why = applyRefusal(ins, e, text4);
   if (why !== null) throw new Error(why);
   if (e.kind === "conflict") {
@@ -2122,12 +2229,12 @@ function logWithheld(data, config, via, session, withheld) {
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
-import { appendFileSync as appendFileSync3, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { appendFileSync as appendFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { basename as basename2, dirname as dirname8, join as join6 } from "node:path";
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync as chmodSync2, existsSync as existsSync5, mkdirSync as mkdirSync5 } from "node:fs";
+import { chmodSync as chmodSync2, existsSync as existsSync4, mkdirSync as mkdirSync5 } from "node:fs";
 import { dirname as dirname7 } from "node:path";
 var MIGRATIONS = [
   `
@@ -2339,7 +2446,7 @@ var SECURE_DELETE = 6;
 var WRITE_BUSY_MS = 5e3;
 var HOOK_BUSY_MS = 250;
 function openStore(path, create, busyMs = WRITE_BUSY_MS) {
-  if (!existsSync5(path)) {
+  if (!existsSync4(path)) {
     if (!create) return null;
     mkdirSync5(dirname7(path), { recursive: true, mode: 448 });
   }
@@ -2493,7 +2600,7 @@ function tryLock(file) {
     if (error.code !== "EEXIST") throw error;
     try {
       if (Date.now() - statSync3(file).mtimeMs <= LOCK_STALE_MS) return false;
-      unlinkSync3(file);
+      unlinkSync4(file);
     } catch {
       return false;
     }
@@ -2502,7 +2609,7 @@ function tryLock(file) {
 }
 var unlock = (file) => {
   try {
-    unlinkSync3(file);
+    unlinkSync4(file);
   } catch {
   }
 };
@@ -2533,7 +2640,7 @@ async function capture(data, input2) {
   if (context.tenant === null || context.repository === null) return `nothing captured: ${context.reason}`;
   const path = input2["transcript_path"];
   const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
-  if (typeof path !== "string" || !existsSync6(path)) return "nothing captured: no transcript";
+  if (typeof path !== "string" || !existsSync5(path)) return "nothing captured: no transcript";
   const lock = join6(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
   if (!tryLock(lock)) return "nothing captured: another capture of this session is already running";
   try {
@@ -2760,7 +2867,7 @@ function related(data, config, context, cwd, target, depth) {
   const db = openStore(file, false);
   if (db === null) return "";
   try {
-    withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data) }));
+    withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
     const found = anchoredUnder(db, context.tenant, context.repository, context.owner, target, depth);
     const items = screen(db, found, loadInstructions(cwd, currentConfigDir()), false, []);
     return chooseSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text;
@@ -2786,7 +2893,7 @@ function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, wi
     const db = openStore(file, false, busyMs);
     if (db !== null) {
       try {
-        withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data) }));
+        withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
         const items = tenantItems(db, context.tenant, context.repository, context.owner);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld), textMatches(db, terms));
       } finally {
@@ -2947,7 +3054,7 @@ function get(args, data, context, cwd) {
   const id = text2(args, "id");
   const format = args["format"] === void 0 ? "rows" : oneOf(args["format"], ["rows", "json"], "format");
   const found = first(data, context, (db, store) => {
-    const checked = store.tenant === "" ? void 0 : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id, managed: managedBy(data) }));
+    const checked = store.tenant === "" ? void 0 : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id, managed: managedBy(data, context.repository) }));
     const row5 = db.prepare(
       `SELECT *, coalesce(reinforced_at, valid_from) AS reinforced, (${READS_EXPIRED}) AS expired FROM items
          WHERE id = ? AND ${store.where} AND status NOT IN ('proposed', 'rejected') AND statement != ''`
@@ -3052,7 +3159,7 @@ function feedback(args, data, context, cwd) {
     stale: "stale_reports = stale_reports + 1"
   }[signal];
   const done = first(data, context, (db, store) => {
-    const gone = signal === "stale" && store.tenant !== "" ? withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id, managed: managedBy(data) }))?.staleItems.find((i) => i.id === id) : void 0;
+    const gone = signal === "stale" && store.tenant !== "" ? withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id, managed: managedBy(data, context.repository) }))?.staleItems.find((i) => i.id === id) : void 0;
     if (gone !== void 0) return `${id} is stale: its citation fails at HEAD (${gone.reason}), so it leaves recall until the citation holds again`;
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -3132,7 +3239,7 @@ async function handle(line, data, cwd, version) {
 }
 function serve(data, cwd, version) {
   let queue = Promise.resolve();
-  createInterface2({ input: process.stdin, terminal: false }).on("line", (line) => {
+  createInterface({ input: process.stdin, terminal: false }).on("line", (line) => {
     if (line.trim() === "") return;
     queue = queue.then(async () => {
       const reply = await handle(line, data, cwd, version);
@@ -3244,7 +3351,7 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync8, lstatSync as lstatSync2, readFileSync as readFileSync8, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync7, lstatSync as lstatSync2, readFileSync as readFileSync8, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute6, join as join8, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
@@ -3419,7 +3526,7 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 }
 
 // src/import/orbit.ts
-import { copyFileSync, existsSync as existsSync7, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync as existsSync6, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
@@ -3433,7 +3540,7 @@ function orbitFindings(path) {
     dir = mkdtempSync(join7(tmpdir(), "memory-orbit-"));
     const copy = join7(dir, "knowledge.sqlite");
     copyFileSync(path, copy);
-    if (existsSync7(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
+    if (existsSync6(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
     db = new DatabaseSync3(copy);
   } catch (error) {
     if (dir !== void 0) rmSync(dir, { recursive: true, force: true });
@@ -3527,7 +3634,7 @@ function orbitFindings(path) {
 var ORBIT_STORE = ".orbit/knowledge.sqlite";
 function readInside2(path, root) {
   try {
-    if (!existsSync8(path)) return { reason: "not there" };
+    if (!existsSync7(path)) return { reason: "not there" };
     const link2 = lstatSync2(path).isSymbolicLink();
     const real = realpathSync3(path);
     const top = realpathSync3(root);
@@ -3570,15 +3677,15 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
   };
   for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
     const projects = join8(dir, "projects");
-    if (!existsSync8(projects)) continue;
+    if (!existsSync7(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
       const folder = join8(projects, project, "memory");
-      if (!existsSync8(folder) || !statSync4(folder).isDirectory()) continue;
+      if (!existsSync7(folder) || !statSync4(folder).isDirectory()) continue;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
         const path = join8(folder, name);
         const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link2 of parsed2.links) if (!existsSync8(join8(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
+        for (const link2 of parsed2.links) if (!existsSync7(join8(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line, text: text4 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -3617,7 +3724,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
       report.skippedFiles.push({ path, reason: "your consent does not cover reading an Orbit knowledge store yet; run memory init and confirm" });
       return;
     }
-    if (!existsSync8(path)) {
+    if (!existsSync7(path)) {
       report.skippedFiles.push({ path, reason: "not there" });
       return;
     }
@@ -3803,7 +3910,7 @@ ${list2.length === 0 ? "(none)\n" : list2.map(row2).join("")}`;
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname9, join as join9, resolve as resolve4 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
@@ -3902,7 +4009,7 @@ function exportMarkdown(stores2, dir) {
 }
 function foreignRepository(dir, config, tenant) {
   let at2 = resolve4(dir);
-  while (!existsSync9(at2)) at2 = dirname9(at2);
+  while (!existsSync8(at2)) at2 = dirname9(at2);
   const top = git(at2, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0) return null;
   const url = git(top, "config", "--get", "remote.origin.url");
@@ -3913,34 +4020,85 @@ function foreignRepository(dir, config, tenant) {
 }
 
 // src/recall/diff.ts
+import { posix as posix4 } from "node:path";
+
+// src/recall/impact.ts
 import { posix as posix3 } from "node:path";
+var RELATIONS2 = {
+  caller: "caller",
+  calls: "caller",
+  implementer: "implementer",
+  implements: "implementer",
+  overrides: "implementer",
+  inherits: "implementer",
+  importer: "importer",
+  imports: "importer"
+};
+var MAX_DEPENDENTS = 1e3;
+function impact(config, context, cwd, range, changed) {
+  if (config.impactProvider === void 0) return null;
+  if (!covers(config, "impact")) return { note: "The impact provider was not run: agree to the current plan with memory init, then recall again. Path overlap only." };
+  const r = runProvider(config.impactProvider.command, cwd, { op: "impact", repository: context.repository, range, changed });
+  const failed = { note: "The impact provider failed or answered unexpectedly. Path overlap only." };
+  if (!r.ok) return failed;
+  let answer;
+  try {
+    answer = JSON.parse(r.stdout);
+  } catch {
+    return failed;
+  }
+  if (answer?.status === "no_snapshot") return { note: "No impact snapshot for this change yet. Path overlap only." };
+  if (answer?.status !== "ok" || !Array.isArray(answer.dependents)) return failed;
+  const head = range.split("..").pop() || "HEAD";
+  const files = new Set((git(cwd, "ls-tree", "-r", "--name-only", "-z", head) ?? "").split("\0"));
+  const dependents = [];
+  for (const d of answer.dependents.slice(0, MAX_DEPENDENTS)) {
+    const [path, relation, status, repository] = [d?.["path"], d?.["relation"], d?.["status"], d?.["repository"]];
+    if (typeof path !== "string" || typeof relation !== "string" || typeof status !== "string") continue;
+    if (!Object.hasOwn(RELATIONS2, relation)) continue;
+    if (status !== "neither" && status !== "tested" && !status.startsWith("tested: ")) continue;
+    if (repository !== void 0 && (typeof repository !== "string" || repository.toLowerCase() !== context.repository)) continue;
+    const slashed = path.replace(/\\/g, "/");
+    if (slashed.startsWith("/") || slashed.split("/").includes("..")) continue;
+    const file = posix3.normalize(slashed);
+    if (files.has(file)) dependents.push({ path: file, neither: status === "neither" });
+  }
+  return { dependents };
+}
+
+// src/recall/diff.ts
 var DIFF_BUDGET = 600;
 var TYPES3 = /* @__PURE__ */ new Set(["precedent", "hazard"]);
-function diffRecall(data, context, cwd, range) {
+function diffRecall(data, config, context, cwd, range) {
   if (!range.includes("..") || range.startsWith("-")) return { reason: `--diff takes a range <base>..<head>, not "${range}"` };
   const out = git(cwd, "diff", "--name-only", "--no-renames", "-z", range, "--");
   if (out === null) return { reason: `the range ${range} does not resolve to two commits here` };
   const changed = out.split("\0").filter((p) => p !== "");
-  const terms = searchTerms(changed.map((p) => posix3.basename(p, posix3.extname(p))).join(" "));
-  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed);
+  const terms = searchTerms(changed.map((p) => posix4.basename(p, posix4.extname(p))).join(" "));
+  const reach = impact(config, context, cwd, range, changed);
+  const dependents = reach !== null && "dependents" in reach ? reach.dependents : [];
+  const note = reach !== null && "note" in reach ? `${reach.note}
+` : "";
+  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed, Date.now(), void 0, void 0, dependents);
   const rows = [];
+  const render = (list2) => (list2.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, list2.join(""))) + note;
   for (const h of hits) {
     const row4 = `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
 `;
-    if (estimate(fence(ITEMS_LABEL, [...rows, row4].join(""))) > DIFF_BUDGET) break;
+    if (estimate(render([...rows, row4])) > DIFF_BUDGET) break;
     rows.push(row4);
   }
-  return { text: rows.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, rows.join("")) };
+  return { text: render(rows) };
 }
 
 // src/recall/orbit.ts
-import { existsSync as existsSync10, readFileSync as readFileSync10 } from "node:fs";
+import { existsSync as existsSync9, readFileSync as readFileSync10 } from "node:fs";
 import { join as join10 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
 function lessonsInPrompts(root) {
   const file = join10(root, ".orbit", "config.yaml");
-  if (!existsSync10(file)) return false;
+  if (!existsSync9(file)) return false;
   let sections = 0;
   let inKnowledge = false;
   let indent = 0;
@@ -4563,7 +4721,7 @@ function captureCi(data, config, cwd, limit = 100) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync11, readFileSync as readFileSync11, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync10, readFileSync as readFileSync11, realpathSync as realpathSync4 } from "node:fs";
 import { dirname as dirname10, isAbsolute as isAbsolute7, join as join11, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
@@ -4575,7 +4733,7 @@ function enabled(data) {
 }
 function locate(abs) {
   let dir = dirname10(abs);
-  while (!existsSync11(dir) && dirname10(dir) !== dir) dir = dirname10(dir);
+  while (!existsSync10(dir) && dirname10(dir) !== dir) dir = dirname10(dir);
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root = realpathSync4(top);
@@ -4719,7 +4877,7 @@ function afterCompaction(data, input2) {
 }
 
 // src/eval/scorecard.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
   measure: m.measure,
   arm,
@@ -4737,7 +4895,7 @@ var seededRecall = (version) => notRun(
   ["recall"]
 );
 function orbitArm(version) {
-  const r = spawnSync2("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
+  const r = spawnSync3("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
   const found = r.status === 0 ? r.stdout.trim().split("\n")[0] : void 0;
   const note = r.error?.code === "ENOENT" ? "Orbit is not installed (no orbit on PATH), so its arm is skipped" : found === void 0 ? "orbit --version failed, so its arm is skipped" : `Orbit ${found} is installed, but its benchmark has no memory switch until QuintinBotes/orbit#233; a live run calls a model and spends money, which this harness never does`;
   return notRun(
@@ -5094,8 +5252,8 @@ function poison(version) {
 }
 
 // src/eval/lab.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync12, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync4, readFileSync as readFileSync12, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { spawnSync as spawnSync4 } from "node:child_process";
+import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync4, readFileSync as readFileSync12, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname11, join as join14 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -5107,7 +5265,7 @@ var BUNDLE = join14(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync12(join14(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync11(join14(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -5120,11 +5278,11 @@ function fixtureRepository(task, repo) {
   cpSync(join14(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
-    check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
+    check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
   }
 }
 function seed(task, t, repo, data) {
-  const memory = (args) => check(`seed ${task}'s memory`, spawnSync3(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
+  const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
 }
@@ -5136,7 +5294,7 @@ var jsonLines2 = (text4) => text4.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync12(file) ? jsonLines2(readFileSync12(file, "utf8")) : [];
+var readLines = (file) => existsSync11(file) ? jsonLines2(readFileSync12(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -5168,7 +5326,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   if (arm === "on") env["MEMORY_LAB_PLUGIN"] = plugin;
   else delete env["MEMORY_LAB_PLUGIN"];
-  const r = spawnSync3("/bin/sh", ["-c", agent], {
+  const r = spawnSync4("/bin/sh", ["-c", agent], {
     cwd: repo,
     env,
     input: t.prompt,
@@ -5180,7 +5338,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join14(TASKS, task, "hidden");
   const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join14(hidden, f));
-  const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const grade = agentFailed ? null : spawnSync4(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
     agentFailed,
@@ -5219,7 +5377,7 @@ function lab(version, agent, model, only) {
   const base2 = mkdtempSync4(join14(tmpdir4(), "memory-lab-"));
   try {
     const plugin = join14(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync12(join14(ROOT, part))) cpSync(join14(ROOT, part), join14(plugin, part), { recursive: true });
+    for (const part of PLUGIN_PARTS) if (existsSync11(join14(ROOT, part))) cpSync(join14(ROOT, part), join14(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
       const t = JSON.parse(readFileSync12(join14(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
@@ -5510,14 +5668,14 @@ async function anchorFor(cwd, data, repository, spec) {
   if (config === void 0 || repository === null) return fallback("no code anchor provider is configured");
   const provider = openProvider(config, repository, cwd);
   try {
-    const { symbol, snapshot: snapshot2 } = await resolveKey(provider, spec);
+    const { symbol, snapshot: snapshot2, commit } = await resolveKey(provider, spec);
     if (symbol === null) throw new Refusal(`the code anchor provider does not know ${spec}`);
+    const head = headReader(cwd).head();
+    if (head === null || !atHead(head, commit)) return fallback("the provider's snapshot is not at HEAD");
     return symbolAnchor(symbol, snapshot2, headReader(cwd).text(file.path), file.commit) ?? fallback(`the provider's lines for ${spec} are not in ${file.path} at HEAD`);
   } catch (error) {
     if (!(error instanceof ProviderError)) throw error;
     return fallback(`the code anchor provider failed (${error.message})`);
-  } finally {
-    provider.close();
   }
 }
 async function anchorsCommand(args, data, cwd) {
@@ -5550,27 +5708,39 @@ async function anchorsCommand(args, data, cwd) {
     throw new Refusal(noProvider);
   }
   const open = openProvider(provider, repository, cwd);
-  try {
+  {
     if (sub === "refresh") {
-      try {
-        const result = await withStore2((db) => refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work)));
-        setProviderFailed(data, false);
-        return void console.log(JSON.stringify(result, null, 2));
-      } catch (error) {
-        if (error instanceof ForeignAnswer) {
-          logAnchors(data, { event: "answer_dropped", reason: error.message });
-          return void console.error(`memory: ${error.message}; no anchor was changed`);
+      const limit = Number(process.env["MEMORY_ANCHORS_PER_RUN"]);
+      const ran = await withJobLock(`${file}.anchors.lock`, async () => {
+        try {
+          const result = await withStore2(
+            (db) => refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work), {
+              ...Number.isInteger(limit) && limit > 0 ? { limit } : {},
+              log: (event) => logAnchors(data, { repository, ...event })
+            })
+          );
+          if (result.examined > 0) setProviderFailed(data, repository, false);
+          console.log(JSON.stringify(result, null, 2));
+        } catch (error) {
+          if (error instanceof ForeignAnswer) {
+            logAnchors(data, { repository, event: "answer_dropped", reason: error.message });
+            console.error(`memory: ${error.message}; no anchor was changed`);
+            return true;
+          }
+          const reason = error.message;
+          logAnchors(data, { repository, event: "provider_failed", reason });
+          setProviderFailed(data, repository, true);
+          console.error(`memory: the code anchor provider failed (${reason}); anchors keep their last state and are checked by path anchors until it answers`);
         }
-        if (!(error instanceof ProviderError)) throw error;
-        logAnchors(data, { event: "provider_failed", reason: error.message });
-        setProviderFailed(data, true);
-        return void console.error(`memory: the code anchor provider failed (${error.message}); every anchor keeps its last state and is checked by path anchors until it answers`);
-      }
+        return true;
+      });
+      if (ran === void 0) console.error("memory: an anchor refresh is already running; this one did nothing");
+      return;
     }
     const ask = async () => {
       if (sub === "adopt") {
         if (rest.length !== 2) throw new Refusal("give an item id and one candidate key", 2);
-        return await withStore2((db) => adoptCandidate(db, rest[0], rest[1], cwd, open));
+        return await withStore2((db) => adoptCandidate(db, rest[0], rest[1], cwd, open, (work) => withRefreshLock(file, work)));
       }
       if (sub === "at") {
         const m = /^(.+):([1-9]\d*)$/.exec(rest[0] ?? "");
@@ -5587,8 +5757,6 @@ async function anchorsCommand(args, data, cwd) {
       if (error instanceof ProviderError) throw new Refusal(`memory: ${error.message}`);
       throw error;
     }
-  } finally {
-    open.close();
   }
 }
 async function remember(args, data, cwd) {
@@ -5915,7 +6083,7 @@ function recheckCommand(args, data, cwd) {
   const db = openStore(file, false);
   if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity, managed: managedBy(data) }));
+    const result = withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { id, window: Infinity, managed: managedBy(data, context.repository) }));
     if (result === void 0) return console.log(JSON.stringify({ skipped: "another refresh holds the lock; nothing was changed" }, null, 2));
     if (id !== void 0 && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
@@ -5938,7 +6106,7 @@ function recallCommand(args, data, cwd) {
     return void process.stdout.write(orbitRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === void 0) throw new Refusal("recall needs --diff <base>..<head>", 2);
-  const found = diffRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
+  const found = diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ("reason" in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }
@@ -5989,7 +6157,7 @@ function sessionStart(data) {
     logWithheld(data, config, "session-start", typeof input2["session_id"] === "string" ? input2["session_id"] : "unknown", withheld);
     try {
       if (providerConfig(data) !== void 0) {
-        const child = spawn2(process.execPath, [process.argv[1], "anchors", "refresh"], { cwd: typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), detached: true, stdio: "ignore" });
+        const child = spawn(process.execPath, [process.argv[1], "anchors", "refresh"], { cwd: typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), detached: true, stdio: "ignore" });
         child.on("error", () => void 0);
         child.unref();
       }
@@ -6095,7 +6263,7 @@ async function captureCommand(args, data) {
   }
   try {
     if (!captureWanted(loadConfig(data))) return;
-    const child = spawn2(process.execPath, [process.argv[1], "capture", "--foreground"], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+    const child = spawn(process.execPath, [process.argv[1], "capture", "--foreground"], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
     child.on("error", () => void 0);
     child.stdin.on("error", () => void 0);
     child.stdin.end(JSON.stringify(input2));
@@ -6105,7 +6273,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync13(file)) return;
+  if (!existsSync12(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -6175,7 +6343,7 @@ function purge(args, data, cwd) {
     all: values.all
   };
   const tenantsDir = join15(data, "tenants");
-  const every = existsSync13(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const every = existsSync12(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);

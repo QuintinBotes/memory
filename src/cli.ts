@@ -29,7 +29,7 @@ import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from '.
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
 import { fileLines, headReader, rangeHash, recheck } from './anchors.ts';
 import { ForeignAnswer, ProviderError, impactOf, openProvider, resolveKey, symbolAt, testsFor } from './anchors/provider.ts';
-import { adoptCandidate, logAnchors, managedBy, providerConfig, refreshAnchors, setProviderFailed, symbolAnchor, undoMove } from './anchors/refresh.ts';
+import { adoptCandidate, atHead, logAnchors, managedBy, providerConfig, refreshAnchors, setProviderFailed, symbolAnchor, undoMove, withJobLock } from './anchors/refresh.ts';
 import { networkFilesystem } from './store/filesystem.ts';
 import { withFileLock, withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
@@ -332,14 +332,14 @@ async function anchorFor(cwd: string, data: string, repository: string | null, s
   if (config === undefined || repository === null) return fallback('no code anchor provider is configured');
   const provider = openProvider(config, repository, cwd);
   try {
-    const { symbol, snapshot } = await resolveKey(provider, spec);
+    const { symbol, snapshot, commit } = await resolveKey(provider, spec);
     if (symbol === null) throw new Refusal(`the code anchor provider does not know ${spec}`);
+    const head = headReader(cwd).head();
+    if (head === null || !atHead(head, commit)) return fallback("the provider's snapshot is not at HEAD");
     return symbolAnchor(symbol, snapshot, headReader(cwd).text(file.path), file.commit) ?? fallback(`the provider's lines for ${spec} are not in ${file.path} at HEAD`);
   } catch (error) {
     if (!(error instanceof ProviderError)) throw error;
     return fallback(`the code anchor provider failed (${error.message})`);
-  } finally {
-    provider.close();
   }
 }
 
@@ -374,27 +374,41 @@ async function anchorsCommand(args: string[], data: string, cwd: string): Promis
     throw new Refusal(noProvider);
   }
   const open = openProvider(provider, repository, cwd);
-  try {
+  {
     if (sub === 'refresh') {
-      try {
-        const result = await withStore((db) => refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work)));
-        setProviderFailed(data, false);
-        return void console.log(JSON.stringify(result, null, 2));
-      } catch (error) {
-        if (error instanceof ForeignAnswer) {
-          logAnchors(data, { event: 'answer_dropped', reason: error.message });
-          return void console.error(`memory: ${error.message}; no anchor was changed`);
+      const limit = Number(process.env['MEMORY_ANCHORS_PER_RUN']);
+      const ran = await withJobLock(`${file}.anchors.lock`, async () => {
+        try {
+          const result = await withStore((db) =>
+            refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work), {
+              ...(Number.isInteger(limit) && limit > 0 ? { limit } : {}),
+              log: (event) => logAnchors(data, { repository, ...event }),
+            }),
+          );
+          // Only a run that had this repository's anchors to look at says anything about it.
+          if (result.examined > 0) setProviderFailed(data, repository, false);
+          console.log(JSON.stringify(result, null, 2));
+        } catch (error) {
+          if (error instanceof ForeignAnswer) {
+            logAnchors(data, { repository, event: 'answer_dropped', reason: error.message });
+            console.error(`memory: ${error.message}; no anchor was changed`);
+            return true;
+          }
+          // Any other failure counts, so the hooks check by path until a run succeeds.
+          const reason = (error as Error).message;
+          logAnchors(data, { repository, event: 'provider_failed', reason });
+          setProviderFailed(data, repository, true);
+          console.error(`memory: the code anchor provider failed (${reason}); anchors keep their last state and are checked by path anchors until it answers`);
         }
-        if (!(error instanceof ProviderError)) throw error;
-        logAnchors(data, { event: 'provider_failed', reason: error.message });
-        setProviderFailed(data, true);
-        return void console.error(`memory: the code anchor provider failed (${error.message}); every anchor keeps its last state and is checked by path anchors until it answers`);
-      }
+        return true;
+      });
+      if (ran === undefined) console.error('memory: an anchor refresh is already running; this one did nothing');
+      return;
     }
     const ask = async (): Promise<unknown> => {
       if (sub === 'adopt') {
         if (rest.length !== 2) throw new Refusal('give an item id and one candidate key', 2);
-        return await withStore((db) => adoptCandidate(db, rest[0]!, rest[1]!, cwd, open));
+        return await withStore((db) => adoptCandidate(db, rest[0]!, rest[1]!, cwd, open, (work) => withRefreshLock(file, work)));
       }
       if (sub === 'at') {
         const m = /^(.+):([1-9]\d*)$/.exec(rest[0] ?? '');
@@ -411,8 +425,6 @@ async function anchorsCommand(args: string[], data: string, cwd: string): Promis
       if (error instanceof ProviderError) throw new Refusal(`memory: ${error.message}`);
       throw error;
     }
-  } finally {
-    open.close();
   }
 }
 
@@ -774,7 +786,7 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   const db = openStore(file, false);
   if (db === null) throw new Refusal(`no anchored item to check in ${context.repository}`);
   try {
-    const result = withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { id, window: Infinity, managed: managedBy(data) }));
+    const result = withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { id, window: Infinity, managed: managedBy(data, context.repository) }));
     if (result === undefined) return console.log(JSON.stringify({ skipped: 'another refresh holds the lock; nothing was changed' }, null, 2));
     if (id !== undefined && result.checked === 0) throw new Refusal(`no anchored item ${id} in ${context.repository}`);
     console.log(JSON.stringify(result, null, 2));
@@ -799,7 +811,7 @@ function recallCommand(args: string[], data: string, cwd: string): void {
     return void process.stdout.write(orbitRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === undefined) throw new Refusal('recall needs --diff <base>..<head>', 2);
-  const found = diffRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
+  const found = diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ('reason' in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }

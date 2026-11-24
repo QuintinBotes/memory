@@ -13,25 +13,35 @@ lists what the anchor refresh sends it.
 
 ## Protocol
 
-The command is run without a shell, in the repository's working directory, with only `PATH` and `HOME` in its environment,
-once per request, and stopped when it has answered or after 5 seconds. The request is one JSON line on its standard input:
+One shared runner (`src/provider/run.ts`) runs the command for every op, impact recall included: without a shell, in the
+repository's working directory, with only `PATH` and `HOME` in its environment, once per request. It is killed with SIGKILL
+after 5 seconds, and its output is capped at 4 MiB. The request is one JSON line on its standard input:
 `{"op": ..., "repository": "owner/name", ...}`. The answer is the first line of its standard output: `{"status": "ok",
-"repository": "owner/name", "snapshot": "<id of the index the answer is from>", ...}`, `{"status": "no_snapshot"}` when
-it has not indexed this repository yet, or `{"status": "error", "error": "text"}`. Standard error is ignored.
+"repository": "owner/name", "snapshot": "<id>", "commit": "<sha>", ...}`, `{"status": "no_snapshot"}` when it has not indexed
+this repository yet, or `{"status": "error", "error": "text"}` to refuse one request. Standard error is ignored.
+
+`snapshot` is the id of the index the answer is from, and `commit` the commit that index was made at. Memory computes the
+cited-text and file hashes from the file at HEAD, so it only moves or re-anchors onto a snapshot whose `commit` is HEAD
+(a full sha, or a prefix of at least 7 characters). A snapshot that is behind HEAD, or does not say, never moves an anchor: a
+key it has lost leaves the item stale with the reason `snapshot not at HEAD`.
 
 An answer whose `repository` is not the repository asked about is dropped, whole, before anything in it is read, and
-nothing is changed. A provider that cannot start, exits or times out without answering, answers text that is not JSON, answers
-`no_snapshot` or `error`, or leaves out a field below, counts as a failure: memory changes no anchor, logs it to
-`logs/anchors.jsonl`, says so, and checks anchors by path until the provider answers again.
+nothing is changed. A refused request (`status: "error"`) skips that one anchor and is logged as `anchor_skipped`; the rest
+of the run goes on. Any other failure, whatever its kind (cannot start, exits non-zero, times out, text that is not JSON,
+`no_snapshot`, a field missing below), ends the run: memory logs `provider_failed` to `logs/anchors.jsonl`, says so, and
+checks that repository's anchors by path until a run for it succeeds. That flag is kept per repository in
+`anchors-state.json`; until a run has succeeded for a repository, its anchors are checked by path too.
 
-A symbol is `{ key, kind, signature, start, end, hash }`:
+A symbol is `{ key, kind, signature?, start, end?, hash }`:
 
 - `key` is `path#qualified_name#kind`, stable across edits that leave the symbol where it is. `path` is relative to the
   repository root.
-- `signature` is the declaration's signature text. `start` and `end` are its 1-based line range at the snapshot.
+- `start` is the 1-based first line of the declaration at the snapshot. `end` is its last line and defaults to `start`, so a
+  provider that gives no end line anchors one line.
+- `signature` is the declaration's signature text, optional. A change is seen only when both the anchor and the answer have one.
 - `hash` is a content hash of the declaration text with the symbol's own name masked, so the same code under another name or
   in another file has the same hash and an edited body has another. The provider computes it; memory compares hashes and
-  never reads symbol text itself.
+  never reads symbol text itself, except to count tokens (below).
 
 ## Operations
 
@@ -61,7 +71,7 @@ anchors were last made at, and re-resolves only anchors in the files named (ever
 | the key resolves, signature the same, cited text present at the reported lines | the item stays current; its lines and snapshot are updated |
 | the signature changed | the item is stale: `signature changed` |
 | the key resolves but the cited text is not at the reported lines | the item is stale: `cited text gone` |
-| the key is gone and exactly one symbol of the same kind was added with the same `hash` | the anchor moves to it, status and trust unchanged, and the move is logged with the old and new key, hashes and snapshots |
+| the key is gone and exactly one symbol of the same kind was added with the same `hash`, at a snapshot of HEAD, and its declaration at HEAD has at least 10 tokens (a body that small is the same text under many names) | the anchor moves to it, status and trust unchanged (a stale item stays stale: only a citation that holds again brings one back), and the move is logged with the old and new key, hashes and snapshots |
 | the key is gone, and several added symbols share the hash, or none does but an added symbol has the same qualified name | the item is stale: `key gone`, and a re-anchor proposal listing the candidates waits in `memory review` |
 | the key is gone and nothing matches | the item is stale: `key gone` |
 
@@ -70,3 +80,20 @@ again. `memory anchors adopt <item-id> <key>` is your yes to one candidate of a 
 
 While a provider answers, the hooks leave its anchors to the job. After a failure they check them by path again, so
 nothing goes unchecked.
+
+## Writing a ProofMesh adapter
+
+`impact` (slice 14) and the symbol ops answer in different shapes: `impact` answers per changed path (`range`, `changed`)
+and the symbol ops per symbol key. An adapter over ProofMesh must supply or synthesise these:
+
+| Field | ProofMesh gives | The adapter |
+|---|---|---|
+| `key` | `stable_key` | passes it through |
+| `hash` | `body_hash` | passes it through |
+| `start` | the symbol's first line | passes it through |
+| `end` | no end line in a row | optional; supply the end line from the symbol's span for a multi-line anchor, or the anchor cites one line |
+| `signature` | not in a lean row | optional; leave it out, or supply it to see signature changes |
+| `added`, `removed`, `changed` | `compare_snapshots`; its `paired` rows are not needed, memory pairs by `hash` | maps them to symbols |
+| `commit` | the snapshot's commit | supplies it, or memory never moves an anchor |
+| dependent `status` | `changed`, `tested: ...` or `neither` | `symbol_impact` needs one per dependent; synthesise `neither` when unknown |
+| dependent `repository` | not given | optional; omit for the same repository |
