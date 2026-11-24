@@ -142,6 +142,31 @@ file paths, the session and agent ids, its estimated tokens and the time,
 never its text. A purge removes the lines of the items it deletes;
 `--older-than` removes lines older than its cut-off, and `--all` the file.
 
+### Recall at the point of action
+
+Off by default. With `"pointOfAction": true` in `config.json`, a `PreToolUse`
+hook on Read, Edit, Write, MultiEdit and NotebookEdit adds the items anchored
+where the call lands, as context before the tool runs. A Read matches the
+lines it reads (the whole file when it reads all of it), an Edit the lines of
+its `old_string`, and a Write or NotebookEdit the whole file, including a new
+file under a directory anchor. If the file changed since the item was
+anchored, so its line numbers mean nothing, a Read matches the whole file's
+items and an Edit the symbols its `old_string` names. Each item is shown once
+per agent per session, a subagent counting as its own agent, within 120
+tokens per injection and 600 per agent per session; `Explore`, `Plan` and
+Review Voice's agents get nothing. The hook never returns a permission
+decision and prints nothing for code with no anchored item. The lookup is
+local (the file's repository, its tenant, the tenant's active items), with no
+model, network or code anchor provider. If the store is busy past 250 ms, the
+hook prints nothing and logs a `skipped` line. Each injection is logged in
+`logs/injections.jsonl` as for a subagent. The ledger of what was shown lives
+in the tenant's file, by item id, and goes with the item on a purge. With the
+switch on, anchored items leave the session-start slice, which keeps the
+unanchored ones and a count of the anchored. `PreCompact` prints at most 1,000
+characters of the items shown this session, and a session start after a
+compaction lets the main agent be shown its items again. Edits made through
+Bash bypass the hook; diff recall still sees them at review.
+
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your
 Claude Code permissions.
@@ -415,8 +440,9 @@ each proposal's statement in quotes.
 | A diff, at review or commit | 600 tokens |
 
 A hook with nothing to say prints nothing. The slice at session start, after
-a compaction and at a subagent's start exists so far; the other moments
-arrive with later slices.
+a compaction and at a subagent's start, a diff at review and, with
+`pointOfAction` on, reading or editing anchored code exist so far; the other
+moments arrive with later slices.
 
 ## Measuring memory
 

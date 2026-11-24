@@ -1,5 +1,5 @@
 {
-  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget. At Stop and SessionEnd it captures lessons and decisions from the session, in a detached process.",
+  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget. With pointOfAction on in config, items anchored to code appear when an agent reads or edits that code instead. At Stop and SessionEnd it captures lessons and decisions from the session, in a detached process.",
   "hooks": {
     "SessionStart": [
       {
@@ -20,6 +20,29 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" subagent-start",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" point-of-action",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" pre-compact",
+            "timeout": 2
           }
         ]
       }

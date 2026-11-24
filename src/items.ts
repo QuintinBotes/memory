@@ -170,6 +170,21 @@ export function tenantItems(db: DatabaseSync, tenant: string, repository: string
   return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE}`).all(tenant, repository, owner) as unknown as Row[]);
 }
 
+/** The anchor paths a touch of `path` can hit: the path itself and each directory above it. */
+const anchorPaths = (path: string): string[] => path.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'));
+
+/**
+ * Active items of `tenant` for this repository and its owner with an anchor at `path` or on a directory above it,
+ * read through the anchor-path index: only those rows are loaded, and none when nothing is anchored there.
+ */
+export function anchoredItems(db: DatabaseSync, tenant: string, repository: string, owner: string, path: string): Visible[] {
+  const paths = anchorPaths(path);
+  const marks = paths.map(() => '?').join(', ');
+  const ids = (db.prepare(`SELECT DISTINCT item_id FROM item_anchors WHERE path IN (${marks})`).all(...paths) as { item_id: string }[]).map((r) => r.item_id);
+  if (ids.length === 0) return [];
+  return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE} AND id IN (${ids.map(() => '?').join(', ')})`).all(tenant, repository, owner, ...ids) as unknown as Row[]);
+}
+
 export function personItems(db: DatabaseSync): Visible[] {
   return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all() as unknown as Row[]);
 }

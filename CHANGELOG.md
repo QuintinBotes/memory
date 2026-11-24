@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Recall at the point of action (#14), off unless `"pointOfAction": true` is
+  in `config.json`: a `PreToolUse` hook on Read, Edit, Write, MultiEdit and
+  NotebookEdit adds the items anchored where the call lands, once per agent
+  per session, within 120 tokens per injection and 600 per agent per session,
+  and never returns a permission decision. A busy store is skipped and logged.
+  With it on, anchored items leave the session-start slice, which counts them;
+  `PreCompact` prints at most 1,000 characters of what was shown, and a
+  session start after a compaction resets the main agent's ledger. The ledger
+  is a table in the tenant file, created on first use.
+  The hook finds items through an indexed anchor-path table (schema version 9,
+  kept by triggers and backfilled on open), so it loads only the items anchored
+  at the touched path or a directory above it, and none for an unanchored path.
 - Review precedents reach every reviewer (#9): `memory import` reads Review
   Voice's store read-only (`decisions` under `imports`) and proposes a
   `precedent` for each owner `keep`, `dismiss`, `never_flag` and `rewrite`,

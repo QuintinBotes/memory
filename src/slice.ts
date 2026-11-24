@@ -25,8 +25,9 @@ export function row(item: Visible): string {
   return safe(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ''}${source}${taint}`) + '\n';
 }
 
-function compose(rows: string[], more: number): string {
-  return fence(ITEMS_LABEL, rows.join('') + (more > 0 ? `+${more} more: memory list\n` : ''));
+function compose(rows: string[], more: number, anchored: number): string {
+  const note = anchored > 0 ? `+${anchored} anchored to code: shown when you read or edit it\n` : '';
+  return fence(ITEMS_LABEL, rows.join('') + (more > 0 ? `+${more} more: memory list\n` : '') + note);
 }
 
 /**
@@ -36,20 +37,21 @@ function compose(rows: string[], more: number): string {
  * "more" count only falls as rows are added, so the final text never exceeds
  * the budget. Nothing fits, nothing is printed.
  */
-export function chooseSlice(items: Visible[], budget: number): { text: string; shown: Visible[] } {
-  if (budget <= 0 || items.length === 0) return { text: '', shown: [] };
+export function chooseSlice(items: Visible[], budget: number, anchored = 0): { text: string; shown: Visible[] } {
+  if (budget <= 0 || (items.length === 0 && anchored === 0)) return { text: '', shown: [] };
   const ranked = rank(items);
   const rows = ranked.map(row);
   const chosen: number[] = [];
   for (let i = 0; i < rows.length; i++) {
     const candidate = [...chosen, i].map((j) => rows[j]!);
-    if (estimate(compose(candidate, rows.length - candidate.length)) <= budget) chosen.push(i);
+    if (estimate(compose(candidate, rows.length - candidate.length, anchored)) <= budget) chosen.push(i);
   }
-  if (chosen.length === 0) return { text: '', shown: [] };
-  return { text: compose(chosen.map((j) => rows[j]!), rows.length - chosen.length), shown: chosen.map((j) => ranked[j]!) };
+  const text = compose(chosen.map((j) => rows[j]!), rows.length - chosen.length, anchored);
+  if ((chosen.length === 0 && anchored === 0) || estimate(text) > budget) return { text: '', shown: [] };
+  return { text, shown: chosen.map((j) => ranked[j]!) };
 }
 
 /** Every visible item, no budget, for `memory list`. */
 export function renderAll(items: Visible[]): string {
-  return items.length === 0 ? '' : compose(rank(items).map(row), 0);
+  return items.length === 0 ? '' : compose(rank(items).map(row), 0, 0);
 }
