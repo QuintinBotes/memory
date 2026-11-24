@@ -29,6 +29,8 @@ export interface Config {
   consent?: { planHash: string; grantedAt: string; version?: number };
   /** Automatic capture at the end of a session; on unless `enabled` is false, and only once the owner has confirmed the plan that lists it. */
   capture?: CaptureConfig;
+  /** Whether sessions started by automation may capture and propose (FR-008 of #22); off unless true, and part of the consent plan. */
+  automation?: boolean;
 }
 
 export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
@@ -142,6 +144,7 @@ export function loadConfig(data: string): Config | null {
       throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias }');
     }
   }
+  if (c.automation !== undefined && typeof c.automation !== 'boolean') throw new ConfigError('automation must be true or false');
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -152,6 +155,7 @@ export function loadConfig(data: string): Config | null {
     ...(emb !== undefined ? { embeddings: emb } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
     ...(capture !== undefined ? { capture } : {}),
+    ...(c.automation !== undefined ? { automation: c.automation } : {}),
   };
 }
 
@@ -173,6 +177,8 @@ export function planHash(config: Config): string {
     tenants: sorted(config.tenants),
     configs: sorted(config.configs),
     optIns: [config.optIns.transcripts, config.optIns.failingCommands],
+    // Only when on, so a consent given before this existed still holds.
+    ...(config.automation === true ? { automation: true } : {}),
   });
   return createHash('sha256').update(canonical).digest('hex');
 }

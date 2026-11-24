@@ -42,6 +42,8 @@ export interface NewItem {
   /** When a rejected item was rejected. */
   validTo?: string;
   statusReason?: string;
+  /** The external content the session that made this had read, named by its source; see `cleanTaint`. */
+  taint?: string;
 }
 
 /** What the slice and the list show. */
@@ -58,9 +60,23 @@ export interface Visible {
   reinforced: string;
   anchors: Anchor[];
   source: string;
+  /** The external sources its evidence came from or was made after reading (FR-006 of #22), comma-separated; absent when none. */
+  taint?: string;
   /** A search's full-text match, against the best match in the same store: 1 is the best. */
   textRatio?: number;
 }
+
+/**
+ * A taint label as stored: one line, no comma (the list a reader sees is comma-separated) and no longer than 120
+ * characters. Null when there is none.
+ */
+export const cleanTaint = (taint: string | undefined): string | null => {
+  const t = (taint ?? '').replace(/[\s,]+/g, '_').slice(0, 120);
+  return t === '' ? null : t;
+};
+
+/** The taint of an item as a reader sees it: every distinct label on its evidence. */
+export const taintList = (taint: string | null | undefined): string => (taint ?? '').split(',').join(', ');
 
 export const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -100,9 +116,9 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
       item.validTo ?? null, now, item.supersedes ?? null,
     );
     db.prepare(
-      `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
-       VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`,
-    ).run(`e-${randomBytes(5).toString('hex')}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now);
+      `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
+       VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`,
+    ).run(`e-${randomBytes(5).toString('hex')}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now, cleanTaint(item.taint));
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -114,7 +130,8 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
 /** Active items that do not read as expired: the only ones any recall shows. */
 const SELECT = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
   coalesce(reinforced_at, valid_from) AS reinforced, anchors_json,
-  (SELECT source_ref FROM evidence e WHERE e.item_id = items.id ORDER BY captured_at, id LIMIT 1) AS source
+  (SELECT source_ref FROM evidence e WHERE e.item_id = items.id ORDER BY captured_at, id LIMIT 1) AS source,
+  (SELECT group_concat(DISTINCT taint) FROM evidence e WHERE e.item_id = items.id AND taint IS NOT NULL) AS taint
   FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`;
 
 interface Row {
@@ -129,6 +146,7 @@ interface Row {
   reinforced: string;
   anchors_json: string;
   source: string | null;
+  taint: string | null;
 }
 
 const visible = (rows: Row[]): Visible[] =>
@@ -144,6 +162,7 @@ const visible = (rows: Row[]): Visible[] =>
     reinforced: r.reinforced,
     anchors: JSON.parse(r.anchors_json) as Anchor[],
     source: r.source ?? '',
+    ...(r.taint === null ? {} : { taint: r.taint }),
   }));
 
 /** The items of a tenant file one repository may see, given tenant, repository and owner. The tenant column is checked as well as the file. */

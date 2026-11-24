@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { visibleText } from './codefree.ts';
-import { insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
+import { cleanTaint, insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
 import { recordAudit } from './store/audit.ts';
 
 /**
@@ -100,9 +100,9 @@ function mergeEvidence(db: DatabaseSync, id: string, c: NewItem): Stored {
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare(
-      `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor)
-       VALUES (?, ?, ?, ?, ?, ?, 'deterministic')`,
-    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? new Date().toISOString());
+      `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
+       VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`,
+    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? new Date().toISOString(), cleanTaint(c.taint));
     db.prepare('UPDATE items SET support = support + ? WHERE id = ?').run(delta, id);
     const audit = recordAudit(db, 'evidence_merged', { type: 'item', id }, { evidenceId, supportDelta: delta, trust });
     const { support } = db.prepare('SELECT support FROM items WHERE id = ?').get(id) as { support: number };
