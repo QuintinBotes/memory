@@ -107,6 +107,8 @@ export function recheck(
       let text: string | null | undefined;
       try {
         text = git(cwd, 'cat-file', 'blob', `HEAD:${path}`);
+        // A directory anchor (a precedent holds for a path glob) holds while the directory exists at HEAD.
+        if (text === null && git(cwd, 'cat-file', '-t', `HEAD:${path}`)?.trim() === 'tree') text = '';
       } catch {
         text = undefined;
       }

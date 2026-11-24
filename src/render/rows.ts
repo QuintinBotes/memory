@@ -34,6 +34,9 @@ export const safeJson = (value: unknown): string =>
     (c) => `\\u${c.charCodeAt(0).toString(16)}`,
   );
 
+/** The most estimated tokens one lean row takes: past it the statement is cut. */
+export const LEAN_ROW_TOKENS = 60;
+
 /** The one advisory fence every rendering of items sits in. `body` is whole lines, none starting with a fence run. */
 export const fence = (label: string, body: string): string => `~~~text ${label}\n${body}~~~\n`;
 

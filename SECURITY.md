@@ -23,6 +23,12 @@ no tenant, or in a Claude Code config not bound to that tenant.
   addresses, handles and webhook URLs. Pattern matching cannot recognise a
   credential that does not look like one, such as a plain password written
   in prose. Do not ask memory to remember secrets.
+- **Review Voice store.** `decisions` under `imports` opens another tool's
+  SQLite store, which holds findings for every repository it reviewed; memory
+  filters to one repository only after reading. It is its own consent category
+  and is skipped until the plan is confirmed. The owner's decision keeps owner
+  trust, but the finding text is model-written, so text that reads as an
+  instruction is quarantined with agent trust.
 - **Model control tokens.** Text carrying a special token
   (`<|im_start|>`, `<|endoftext|>`, `[INST]`, `<<SYS>>`, `</s>`) or a leading
   role prefix (`System:`, `Assistant:`, `Human:`) is refused from the agent,
