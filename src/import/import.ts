@@ -1,3 +1,4 @@
+import type { DatabaseSync } from 'node:sqlite';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, sep } from 'node:path';
 import { SILOS, organisationTerms, type Config } from '../config.ts';
@@ -11,6 +12,7 @@ import { recordAudit } from '../store/audit.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
 import { covers } from '../consent/plan.ts';
 import { reviewVoiceDecisions } from './review-voice.ts';
+import { orbitFindings, type OrbitFinding } from './orbit.ts';
 import { inside, markdown, notes, policy, rejections, symbolPath, type Parsed } from './silos.ts';
 
 export interface ImportReport {
@@ -33,7 +35,10 @@ export interface ImportReport {
   quarantined?: number;
 }
 
-type Candidate = NewItem & { status: 'proposed' | 'rejected' };
+/** Where Orbit keeps a repository's lessons, relative to the checkout. */
+const ORBIT_STORE = '.orbit/knowledge.sqlite';
+
+type Candidate = NewItem & { status: 'proposed' | 'rejected'; orbit?: OrbitFinding };
 
 /**
  * The file at `path`, read only when it is a regular file whose real path
@@ -67,9 +72,10 @@ function namedRepositories(config: Config, text: string): Map<string, string> {
 
 /**
  * Reads every silo and, unless `dryRun`, stores each statement it may store
- * as a proposal (a rejection as a tombstone). Nothing imported is active.
+ * as a proposal (a rejection as a tombstone). Nothing imported is active. With `orbit`, only each listed checkout's Orbit
+ * knowledge store is read; without it, that store is not.
  */
-export function importSilos(config: Config, data: string, configDir: string, dryRun: boolean): ImportReport {
+export function importSilos(config: Config, data: string, configDir: string, dryRun: boolean, orbit = false): ImportReport {
   const report: ImportReport = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
   const candidates: Candidate[] = [];
   const terms = organisationTerms(config, null);
@@ -93,7 +99,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   };
 
   // Auto memory: written by a model with no approval step, so agent trust.
-  for (const dir of Object.keys(config.configs).sort()) {
+  for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
     const projects = join(dir, 'projects');
     if (!existsSync(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
@@ -134,14 +140,54 @@ export function importSilos(config: Config, data: string, configDir: string, dry
     }
   }
 
+  /** Orbit's validated lessons, contradictions and run-end observations for this checkout's repository, as proposals. */
+  const readOrbit = (checkout: string, rel: string, context: ReturnType<typeof resolveContext>): void => {
+    const path = join(checkout, rel);
+    if (!inside(rel)) {
+      report.skippedFiles.push({ path: rel, reason: 'not a path inside the repository' });
+      return;
+    }
+    if (context.tenant === null || context.repository === null) {
+      report.skippedFiles.push({ path, reason: context.reason });
+      return;
+    }
+    if (!covers(config, 'orbit')) {
+      report.skippedFiles.push({ path, reason: "your consent does not cover reading an Orbit knowledge store yet; run memory init and confirm" });
+      return;
+    }
+    if (!existsSync(path)) {
+      report.skippedFiles.push({ path, reason: 'not there' });
+      return;
+    }
+    const found = orbitFindings(path);
+    if ('reason' in found) {
+      report.skippedFiles.push({ path, reason: found.reason });
+      return;
+    }
+    report.files.push({ path, statements: found.findings.length });
+    for (const reason of found.unreadable) report.refused.push({ source: path, reason });
+    for (const f of found.findings) {
+      const source = `orbit run ${f.run}`;
+      if (refused(source, refusal(f.statement))) continue;
+      candidates.push({
+        tenant: context.tenant, scope: 'repository', scopeKey: context.repository, type: f.type, statement: f.statement, rationale: null,
+        anchors: f.anchorPath === null ? [] : [{ path: f.anchorPath }], source, trust: 'agent', status: 'proposed', evidenceAt: f.at, orbit: f, ...(f.kind === 'observation' ? { exactOnly: true } : {}),
+      });
+    }
+  };
+
   // Repository silos, in the tenant the checkout resolves to. Standards, rejections and policies
   // carry owner trust; a notes file carries agent trust, because tools write it.
   const parsers = { rejections, standards: markdown, policy, notes } as const;
   for (const [checkout, silos] of Object.entries(config.imports ?? {}).sort()) {
     const context = resolveContext(checkout, config, configDir);
+    if (orbit) {
+      readOrbit(checkout, silos.orbit ?? ORBIT_STORE, context);
+      continue;
+    }
     for (const silo of SILOS) {
       const rel = silos[silo];
-      if (rel === undefined) continue;
+      if (rel === undefined || silo === 'orbit') continue;
       const path = silo === 'decisions' && isAbsolute(rel) ? rel : join(checkout, rel);
       // Review Voice's store lives in its own data directory, so only the text silos must stay inside the checkout.
       if (silo !== 'decisions' && !inside(rel)) {
@@ -224,6 +270,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
           continue;
         }
         const stored = addItem(db, c);
+        if (c.orbit !== undefined && stored.kind !== 'rejected') keepOrbit(db, stored.id, c.orbit);
         if (stored.kind === 'rejected') counts.rejectedBefore++;
         else if (stored.kind === 'known') counts.alreadyKnown++;
         else if (stored.kind === 'merged') counts.merged++;
@@ -244,4 +291,12 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   }
   Object.assign(report, counts);
   return report;
+}
+
+/** The failure fingerprints and check ids a finding applies to, kept with its item, and the contradictions Orbit counted, which only ever rise. */
+function keepOrbit(db: DatabaseSync, id: string, f: OrbitFinding): void {
+  const key = db.prepare('INSERT OR IGNORE INTO item_keys (item_id, kind, key) VALUES (?, ?, ?)');
+  for (const k of f.fingerprints) key.run(id, 'fingerprint', k);
+  for (const k of f.checks) key.run(id, 'check', k);
+  db.prepare('UPDATE items SET contradictions = ? WHERE id = ? AND contradictions < ?').run(f.contradictions, id, f.contradictions);
 }

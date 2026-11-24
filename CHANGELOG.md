@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Orbit adapter, both ways (#11). `memory import --orbit` reads each listed
+  checkout's Orbit knowledge store read-only: validated repository lessons
+  (run as evidence), contradictions (raise the item's count, never lower it) and
+  run-end failure fingerprints, as agent-trusted proposals in the checkout's
+  tenant. `memory recall --orbit [--path] [--fingerprint] [--check]
+  [--max-tokens]` gives Orbit's retrieval at most three lean rows, and nothing
+  unless `.orbit/config.yaml` has `knowledge.lessons_in_prompts: true`; an Orbit
+  lesson unsupported for 28 days is not offered. Consent plan version 6 adds the
+  `orbit` category; schema version 11 adds `item_keys` (fingerprints and check
+  ids, deleted with their item); a fingerprint or check match scores 2 in ranking.
 - Related items and open questions (#39): `memory_related(path_or_symbol,
   depth?)` and `memory related <path> [--depth n]` return the active items
   anchored at or under a path or symbol prefix, read through the anchor-path

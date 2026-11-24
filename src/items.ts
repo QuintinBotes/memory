@@ -43,6 +43,8 @@ export interface NewItem {
   /** When a rejected item was rejected. */
   validTo?: string;
   statusReason?: string;
+  /** Only the exact statement joins an existing item: a near match never merges or conflicts (a failure keyed by check and fingerprint). */
+  exactOnly?: boolean;
   /** The external content the session that made this had read, named by its source; see `cleanTaint`. */
   taint?: string;
 }

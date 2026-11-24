@@ -282,6 +282,28 @@ commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)`, `Bash(*memory.mjs*reject*)` and
 `Bash(*memory.mjs*close*)` (an agent's shell can run `memory close`).
 
+### Orbit, both ways
+
+Orbit keeps its own lessons and its workers load no hooks. `memory import --orbit`
+reads each checkout listed under `imports` in `config.json` (its `orbit` key names
+the store; the default is `.orbit/knowledge.sqlite`) read-only and proposes, in the
+checkout's tenant with agent trust: Orbit's validated repository lessons with the
+run that last supported them as evidence, the contradictions Orbit counted (the
+item's contradiction count only rises), and the check ids and failure fingerprints
+of runs that ended without succeeding. Stale lessons, candidates and the global
+graph are not read. Reading the store is its own consent category (plan version 6).
+
+```bash
+memory recall --orbit --fingerprint <fp> --check <id> --path <file> --max-tokens 800
+```
+
+is the command Orbit's retrieval calls from the run's repository root. It prints at
+most three lean rows, one per line, for Orbit to put inside its own advisory fence,
+and nothing unless `.orbit/config.yaml` has `knowledge.lessons_in_prompts: true`. An
+Orbit lesson no run supported for 28 days is not offered. Rows carry no scores, so
+a retry of one attempt reads the same text. Orbit's side of the call is a change in
+the Orbit repository.
+
 ### Precedents for every reviewer
 
 An approved precedent reaches reviewers that are not Review Voice when they

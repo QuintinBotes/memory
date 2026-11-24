@@ -42,6 +42,7 @@ import { importSilos } from './import/import.ts';
 import { renderReport, tenantReport } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
+import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
@@ -76,9 +77,11 @@ const USAGE = `usage: memory <command>
   report [--tenant <name>]
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
-  import [--dry-run]
+  import [--dry-run] [--orbit]
       read the silos (each bound config's auto memory, and the files under "imports" in config.json)
-      and store each statement as a proposal; with --dry-run, list the files and write nothing
+      and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
+      read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
+      read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals
   review
       the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
   approve <id> [--scope repository|organisation|person|global]
@@ -109,6 +112,9 @@ const USAGE = `usage: memory <command>
   recall --diff <base>..<head>
       the precedents and hazards for the paths that range changes, within 600 estimated tokens, for any reviewer to
       read before it reports findings. Exits 2 when the range does not resolve
+  recall --orbit [--path <p>]... [--fingerprint <f>]... [--check <id>]... [--max-tokens <n>]
+      for Orbit's retrieval: at most three lean rows for a run's context, one per line, within --max-tokens, and
+      nothing unless the repository's .orbit/config.yaml has knowledge.lessons_in_prompts true. Exits 2 without a context
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_related, memory_propose, memory_feedback
   session-start
@@ -402,9 +408,9 @@ function reportCommand(args: string[], data: string): void {
 }
 
 function importCommand(args: string[], data: string): void {
-  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' } } });
+  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' } } });
   const dryRun = values['dry-run'] === true;
-  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun), null, 2));
+  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun, values.orbit === true), null, 2));
   if (dryRun) console.error('Nothing was written. Run memory import without --dry-run to store these as proposals.');
 }
 
@@ -636,7 +642,17 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
 
 /** `memory recall --diff <range>`: what an owner decided about findings under the paths a change touches. */
 function recallCommand(args: string[], data: string, cwd: string): void {
-  const { values } = parseArgs({ args, options: { diff: { type: 'string' } } });
+  const { values } = parseArgs({
+    args,
+    options: { diff: { type: 'string' }, orbit: { type: 'boolean' }, path: { type: 'string', multiple: true }, fingerprint: { type: 'string', multiple: true }, check: { type: 'string', multiple: true }, 'max-tokens': { type: 'string' } },
+  });
+  if (values.orbit === true) {
+    const [paths, fingerprints, checks] = [values.path ?? [], values.fingerprint ?? [], values.check ?? []];
+    if (paths.length + fingerprints.length + checks.length === 0) throw new Refusal('recall --orbit needs a context: --path, --fingerprint or --check', 2);
+    const maxTokens = values['max-tokens'] === undefined ? Infinity : Number(values['max-tokens']);
+    if (!(maxTokens > 0)) throw new Refusal('--max-tokens takes a positive number', 2);
+    return void process.stdout.write(orbitRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
+  }
   if (values.diff === undefined) throw new Refusal('recall needs --diff <base>..<head>', 2);
   const found = diffRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, values.diff);
   if ('reason' in found) throw new Refusal(found.reason, 2);
