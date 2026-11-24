@@ -46,8 +46,8 @@ export interface CaptureConfig {
 export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-5-5' };
 export const captureSettings = (config: Config): typeof DEFAULT_CAPTURE => ({ ...DEFAULT_CAPTURE, ...config.capture });
 
-/** `decisions` names a Review Voice store, a SQLite file, absolute or relative to the checkout; the others are text files inside it. */
-export const SILOS = ['rejections', 'standards', 'policy', 'notes', 'decisions'] as const;
+/** `decisions` names a Review Voice store and `orbit` an Orbit knowledge store (default `.orbit/knowledge.sqlite`), SQLite files, absolute or relative to the checkout; the others are text files inside it. */
+export const SILOS = ['rejections', 'standards', 'policy', 'notes', 'decisions', 'orbit'] as const;
 export type RepositorySilos = Partial<Record<(typeof SILOS)[number], string>>;
 
 export const DEFAULT_SESSION_BUDGET = 300;

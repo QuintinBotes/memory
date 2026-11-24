@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync10, readFileSync as readFileSync11, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join12, normalize as normalize3 } from "node:path";
+import { existsSync as existsSync11, readFileSync as readFileSync12, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join13, normalize as normalize3 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -40,7 +40,7 @@ import { join as join2, resolve } from "node:path";
 var EMBEDDING_PROVIDERS = ["voyage", "fake"];
 var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5" };
 var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
-var SILOS = ["rejections", "standards", "policy", "notes", "decisions"];
+var SILOS = ["rejections", "standards", "policy", "notes", "decisions", "orbit"];
 var DEFAULT_SESSION_BUDGET = 300;
 var SUBAGENT_BUDGET = 300;
 var REVIEW_VOICE_AGENTS = ["challenger", "concise-editor", "concurrency-analyst", "diff-analyst", "evidence-verifier", "intent-extractor", "security-analyst", "structure-analyst", "tie-breaker"];
@@ -727,6 +727,8 @@ var band = (c) => c < CONFIDENCE.low ? "low" : c >= CONFIDENCE.high ? "high" : "
 var RANKING = {
   anchor: 4,
   anchorCap: 8,
+  /** An item keyed to a failure fingerprint or check id the caller names (Orbit's recall). */
+  key: 2,
   scope: { repository: 2, organisation: 1, person: 1, global: 0.5 },
   text: 2,
   /** A text match weaker than this share of the best match is noise, not relevance. */
@@ -743,7 +745,7 @@ var RANKING = {
   limit: 10
 };
 var tenth = (n) => Math.round(n * 10) / 10;
-function rank(items, paths, now = Date.now(), similarity2) {
+function rank(items, paths, now = Date.now(), similarity2, keyed) {
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\/?$|^\.\//, "").replace(/\/+$/, ""));
   const score = (item, near) => {
     const parts = [];
@@ -754,11 +756,13 @@ function rank(items, paths, now = Date.now(), similarity2) {
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === "" || a.path === p || a.path.startsWith(`${p}/`) || p.startsWith(`${a.path}/`))).length;
     if (overlap > 0) add("anchor", Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
+    const key = keyed?.has(item.id) === true;
+    if (key) add("key", RANKING.key);
     const ratio = item.textRatio ?? 0;
     const text2 = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity2?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth(RANKING.semantic * (cos - RANKING.minSimilarity) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && text2 === 0 && semantic === 0 && !near) return null;
+    if (overlap === 0 && text2 === 0 && semantic === 0 && !near && !key) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text2 > 0) add("text", text2);
     if (semantic > 0) add("semantic", semantic);
@@ -1713,7 +1717,8 @@ var DATA_CATEGORIES = [
   { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
   { id: "embeddings", since: 4, text: "Embeddings, with the provider in config.json (voyage-4 by default, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query, are sent to the provider's servers and the vectors that come back are kept in the item's own file. Quarantined text is never sent. Without a key or a network, nothing is sent and recall uses words and paths only" },
   { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
-  { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" }
+  { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
+  { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -1948,6 +1953,16 @@ var MIGRATIONS = [
     resolved_at TEXT,
     UNIQUE (item_id, kind, file, old_line)
   );
+  `,
+  // v11 - the failure fingerprints and check ids an item applies to (#11), read from Orbit's lessons and run-end
+  // observations, so a run that repeats one finds the item. Deleted with its item.
+  `
+  CREATE TABLE IF NOT EXISTS item_keys (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('fingerprint', 'check')),
+    key TEXT NOT NULL,
+    PRIMARY KEY (kind, key, item_id)
+  ) WITHOUT ROWID;
   `
 ];
 var SECURE_DELETE = 6;
@@ -3028,7 +3043,81 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
   }
 }
 
+// src/import/orbit.ts
+import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
+var TYPES2 = { practice: "convention", convention: "convention", hazard: "hazard", "failure-pattern": "failure-pattern", "repair-recipe": "repair-recipe" };
+var strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && x !== "") : [];
+function orbitFindings(path) {
+  let db;
+  try {
+    db = new DatabaseSync3(path, { readOnly: true });
+  } catch (error) {
+    return { reason: `cannot be opened (${error.code ?? "error"})` };
+  }
+  try {
+    const nodes = db.prepare("SELECT id, lesson_json, created_at FROM nodes WHERE status = 'validated' AND scope = 'repo' AND stale_reason IS NULL ORDER BY id").all();
+    const edges = db.prepare("SELECT src, type, run_id, created_at FROM edges WHERE type IN ('SUPPORTED_BY', 'CONTRADICTED_BY') AND run_id IS NOT NULL ORDER BY src, created_at, run_id").all();
+    const observations = db.prepare("SELECT run_id, state, failure_class, data_json, created_at FROM observations ORDER BY created_at, id").all();
+    const findings = [];
+    const unreadable = [];
+    for (const n of nodes) {
+      try {
+        const lesson = JSON.parse(n.lesson_json);
+        const mine = edges.filter((e) => e.src === n.id);
+        const support = mine.filter((e) => e.type === "SUPPORTED_BY").at(-1);
+        const run = support?.run_id ?? (typeof lesson.citation?.run_id === "string" ? lesson.citation.run_id : null);
+        if (typeof lesson.statement !== "string" || lesson.statement.trim() === "" || run === null) {
+          unreadable.push(`lesson ${n.id}: no statement or no run`);
+          continue;
+        }
+        const cited = lesson.citation?.path;
+        findings.push({
+          kind: "lesson",
+          statement: lesson.statement.trim(),
+          type: TYPES2[lesson.kind ?? ""] ?? "failure-pattern",
+          run,
+          // Orbit's own last support: the newest supporting run, or the lesson's creation.
+          at: new Date(Math.max(n.created_at, support?.created_at ?? 0)).toISOString(),
+          anchorPath: typeof cited === "string" && inside3(cited) && !cited.includes("\\") ? cited : null,
+          fingerprints: strings(lesson.applicability?.fingerprints),
+          checks: strings(lesson.applicability?.check_ids),
+          contradictions: new Set(mine.filter((e) => e.type === "CONTRADICTED_BY").map((e) => e.run_id)).size
+        });
+      } catch {
+        unreadable.push(`lesson ${n.id}: not JSON`);
+      }
+    }
+    for (const o of observations) {
+      try {
+        const { checks } = JSON.parse(o.data_json);
+        for (const c of checks ?? []) {
+          if (typeof c.check_id !== "string" || typeof c.signature !== "string" || c.signature === "") continue;
+          findings.push({
+            kind: "observation",
+            statement: `A run that ended ${o.state}${o.failure_class === null ? "" : ` (${o.failure_class})`} failed check ${c.check_id} with ${c.signature}`,
+            type: "failure-pattern",
+            run: o.run_id,
+            at: new Date(o.created_at).toISOString(),
+            anchorPath: null,
+            fingerprints: [c.signature],
+            checks: [c.check_id],
+            contradictions: 0
+          });
+        }
+      } catch {
+        unreadable.push(`observation of run ${o.run_id}: not JSON`);
+      }
+    }
+    return { findings, unreadable };
+  } catch (error) {
+    return { reason: `is not an Orbit knowledge store this version reads (${error.message})` };
+  } finally {
+    db.close();
+  }
+}
+
 // src/import/import.ts
+var ORBIT_STORE = ".orbit/knowledge.sqlite";
 function readInside2(path, root) {
   try {
     if (!existsSync6(path)) return { reason: "not there" };
@@ -3052,7 +3141,7 @@ function namedRepositories(config, text2) {
   }
   return named;
 }
-function importSilos(config, data, configDir, dryRun) {
+function importSilos(config, data, configDir, dryRun, orbit = false) {
   const report = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
   const candidates = [];
   const terms = organisationTerms(config, null);
@@ -3072,7 +3161,7 @@ function importSilos(config, data, configDir, dryRun) {
     if (why !== null) report.refused.push({ source, reason: why });
     return why !== null;
   };
-  for (const dir of Object.keys(config.configs).sort()) {
+  for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
     const projects = join6(dir, "projects");
     if (!existsSync6(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
@@ -3107,12 +3196,56 @@ function importSilos(config, data, configDir, dryRun) {
       }
     }
   }
+  const readOrbit = (checkout, rel, context) => {
+    const path = isAbsolute5(rel) ? rel : join6(checkout, rel);
+    if (context.tenant === null || context.repository === null) {
+      report.skippedFiles.push({ path, reason: context.reason });
+      return;
+    }
+    if (!covers(config, "orbit")) {
+      report.skippedFiles.push({ path, reason: "your consent does not cover reading an Orbit knowledge store yet; run memory init and confirm" });
+      return;
+    }
+    if (!existsSync6(path)) {
+      report.skippedFiles.push({ path, reason: "not there" });
+      return;
+    }
+    const found = orbitFindings(path);
+    if ("reason" in found) {
+      report.skippedFiles.push({ path, reason: found.reason });
+      return;
+    }
+    report.files.push({ path, statements: found.findings.length });
+    for (const reason of found.unreadable) report.refused.push({ source: path, reason });
+    for (const f of found.findings) {
+      const source = `orbit run ${f.run}`;
+      if (refused(source, refusal(f.statement))) continue;
+      candidates.push({
+        tenant: context.tenant,
+        scope: "repository",
+        scopeKey: context.repository,
+        type: f.type,
+        statement: f.statement,
+        rationale: null,
+        anchors: f.anchorPath === null ? [] : [{ path: f.anchorPath }],
+        source,
+        trust: "agent",
+        status: "proposed",
+        evidenceAt: f.at,
+        orbit: f
+      });
+    }
+  };
   const parsers = { rejections, standards: markdown, policy, notes };
   for (const [checkout, silos] of Object.entries(config.imports ?? {}).sort()) {
     const context = resolveContext(checkout, config, configDir);
+    if (orbit) {
+      readOrbit(checkout, silos.orbit ?? ORBIT_STORE, context);
+      continue;
+    }
     for (const silo of SILOS) {
       const rel = silos[silo];
-      if (rel === void 0) continue;
+      if (rel === void 0 || silo === "orbit") continue;
       const path = silo === "decisions" && isAbsolute5(rel) ? rel : join6(checkout, rel);
       if (silo !== "decisions" && !inside3(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
@@ -3202,6 +3335,7 @@ function importSilos(config, data, configDir, dryRun) {
           continue;
         }
         const stored = addItem(db, c);
+        if (c.orbit !== void 0 && stored.kind !== "rejected") keepOrbit(db, stored.id, c.orbit);
         if (stored.kind === "rejected") counts.rejectedBefore++;
         else if (stored.kind === "known") counts.alreadyKnown++;
         else if (stored.kind === "merged") counts.merged++;
@@ -3221,6 +3355,12 @@ function importSilos(config, data, configDir, dryRun) {
   }
   Object.assign(report, counts);
   return report;
+}
+function keepOrbit(db, id, f) {
+  const key = db.prepare("INSERT OR IGNORE INTO item_keys (item_id, kind, key) VALUES (?, ?, ?)");
+  for (const k of f.fingerprints) key.run(id, "fingerprint", k);
+  for (const k of f.checks) key.run(id, "check", k);
+  db.prepare("UPDATE items SET contradictions = ? WHERE id = ? AND contradictions < ?").run(f.contradictions, id, f.contradictions);
 }
 
 // src/report/report.ts
@@ -3363,14 +3503,14 @@ function foreignRepository(dir, config, tenant) {
 // src/recall/diff.ts
 import { posix as posix3 } from "node:path";
 var DIFF_BUDGET = 600;
-var TYPES2 = /* @__PURE__ */ new Set(["precedent", "hazard"]);
+var TYPES3 = /* @__PURE__ */ new Set(["precedent", "hazard"]);
 function diffRecall(data, context, cwd, range) {
   if (!range.includes("..") || range.startsWith("-")) return { reason: `--diff takes a range <base>..<head>, not "${range}"` };
   const out = git(cwd, "diff", "--name-only", "--no-renames", "-z", range, "--");
   if (out === null) return { reason: `the range ${range} does not resolve to two commits here` };
   const changed = out.split("\0").filter((p) => p !== "");
   const terms = searchTerms(changed.map((p) => posix3.basename(p, posix3.extname(p))).join(" "));
-  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES2.has(i.type)), changed);
+  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed);
   const rows = [];
   for (const h of hits) {
     const row4 = `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
@@ -3379,6 +3519,57 @@ function diffRecall(data, context, cwd, range) {
     rows.push(row4);
   }
   return { text: rows.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, rows.join("")) };
+}
+
+// src/recall/orbit.ts
+import { existsSync as existsSync8, readFileSync as readFileSync9 } from "node:fs";
+import { join as join8 } from "node:path";
+var ORBIT_ITEMS = 3;
+var ORBIT_EXPIRY_DAYS = 28;
+function lessonsInPrompts(root) {
+  const file = join8(root, ".orbit", "config.yaml");
+  if (!existsSync8(file)) return false;
+  let inKnowledge = false;
+  const seen = {};
+  for (const line of readFileSync9(file, "utf8").split(/\r?\n/)) {
+    if (/^\s*(#.*)?$/.test(line)) continue;
+    if (/^\S/.test(line)) inKnowledge = /^knowledge:\s*(#.*)?$/.test(line);
+    else if (inKnowledge) {
+      const m = /^\s+(enabled|lessons_in_prompts):\s*(true|false)\s*(#.*)?$/.exec(line);
+      if (m) seen[m[1]] = m[2];
+    }
+  }
+  return seen["lessons_in_prompts"] === "true" && seen["enabled"] !== "false";
+}
+function orbitRecall(data, context, cwd, ask) {
+  const root = git(cwd, "rev-parse", "--show-toplevel")?.trim() ?? cwd;
+  if (!lessonsInPrompts(root) || context.tenant === null || context.repository === null) return "";
+  const visible2 = visibleItems(data, context, cwd);
+  const db = openStore(tenantFile(data, context.tenant), false);
+  if (db === null) return "";
+  const keyed = /* @__PURE__ */ new Set();
+  const stale = /* @__PURE__ */ new Set();
+  try {
+    const at2 = (id) => db.prepare("SELECT kind, key FROM item_keys WHERE item_id = ?").all(id);
+    const cutoff = new Date(Date.now() - ORBIT_EXPIRY_DAYS * 864e5).toISOString();
+    for (const item of visible2) {
+      if (at2(item.id).some((k) => (k.kind === "fingerprint" ? ask.fingerprints : ask.checks).includes(k.key))) keyed.add(item.id);
+      const last = db.prepare("SELECT max(captured_at) AS at FROM evidence WHERE item_id = ?").get(item.id);
+      if (item.source.startsWith("orbit run ") && (last.at ?? "") < cutoff) stale.add(item.id);
+    }
+  } finally {
+    db.close();
+  }
+  const today = Date.parse((/* @__PURE__ */ new Date()).toISOString().slice(0, 10));
+  const rows = [];
+  for (const h of rank(visible2.filter((i) => !stale.has(i.id)), ask.paths, today, void 0, keyed)) {
+    if (rows.length === ORBIT_ITEMS) break;
+    const row4 = `${leanRow(h.item, "", LEAN_ROW_TOKENS)}
+`;
+    if (estimate([...rows, row4].join("")) > ask.maxTokens) break;
+    rows.push(row4);
+  }
+  return rows.join("");
 }
 
 // src/review/review.ts
@@ -3460,8 +3651,8 @@ function declineSupersession(db, p) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync8, readFileSync as readFileSync9, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute6, join as join8, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
+import { existsSync as existsSync9, readFileSync as readFileSync10, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute6, join as join9, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
 
 // src/store/ledger.ts
 var AGENT_SESSION_BUDGET = 600;
@@ -3510,11 +3701,11 @@ function enabled(data) {
 }
 function locate(abs) {
   let dir = dirname9(abs);
-  while (!existsSync8(dir) && dirname9(dir) !== dir) dir = dirname9(dir);
+  while (!existsSync9(dir) && dirname9(dir) !== dir) dir = dirname9(dir);
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root = realpathSync4(top);
-  const path = relative4(root, join8(realpathSync4(dir), relative4(dir, abs)));
+  const path = relative4(root, join9(realpathSync4(dir), relative4(dir, abs)));
   return path.startsWith("..") || isAbsolute6(path) ? null : { root, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
@@ -3570,7 +3761,7 @@ function anchored(items, root, t) {
   const read2 = () => {
     if (text2 === void 0) {
       try {
-        text2 = readFileSync9(resolve5(root, t.path), "utf8");
+        text2 = readFileSync10(resolve5(root, t.path), "utf8");
       } catch {
         text2 = null;
       }
@@ -3743,7 +3934,7 @@ function falseRecall(version, events) {
 // src/eval/replay.ts
 import { mkdtempSync, rmSync as rmSync2 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text2) {
   const doc = JSON.parse(text2);
@@ -3770,9 +3961,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync(join9(tmpdir(), "memory-replay-"));
+  const dir = mkdtempSync(join10(tmpdir(), "memory-replay-"));
   try {
-    const db = openStore(join9(dir, "replay.sqlite"), true);
+    const db = openStore(join10(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -3826,7 +4017,7 @@ function replay(version, pulls, since) {
 // src/eval/poison.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -3952,8 +4143,8 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync2(join10(tmpdir2(), "memory-poison-"));
-  const db = openStore(join10(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync2(join11(tmpdir2(), "memory-poison-"));
+  const db = openStore(join11(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
@@ -4030,19 +4221,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync9, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readFileSync as readFileSync10, readdirSync as readdirSync2, rmSync as rmSync4 } from "node:fs";
+import { cpSync, existsSync as existsSync10, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readFileSync as readFileSync11, readdirSync as readdirSync2, rmSync as rmSync4 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname10, join as join11 } from "node:path";
+import { dirname as dirname10, join as join12 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
 var ROOT = dirname10(dirname10(fileURLToPath2(import.meta.url)));
-var TASKS = join11(ROOT, "lab", "tasks");
-var BUNDLE = join11(ROOT, "dist", "memory.mjs");
+var TASKS = join12(ROOT, "lab", "tasks");
+var BUNDLE = join12(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync9(join11(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync10(join12(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -4052,7 +4243,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join11(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join12(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -4071,7 +4262,7 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync9(file) ? jsonLines2(readFileSync10(file, "utf8")) : [];
+var readLines = (file) => existsSync10(file) ? jsonLines2(readFileSync11(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -4085,10 +4276,10 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync3(join11(base2, "run-"));
-  const repo = join11(dir, "repo");
-  const data = join11(dir, "data");
-  const out = join11(dir, "out");
+  const dir = mkdtempSync3(join12(base2, "run-"));
+  const repo = join12(dir, "repo");
+  const data = join12(dir, "data");
+  const out = join12(dir, "out");
   mkdirSync7(data);
   mkdirSync7(out);
   fixtureRepository(task, repo);
@@ -4113,8 +4304,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join11(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join11(hidden, f));
+  const hidden = join12(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join12(hidden, f));
   const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -4122,7 +4313,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join11(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join12(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
@@ -4151,12 +4342,12 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync3(join11(tmpdir3(), "memory-lab-"));
+  const base2 = mkdtempSync3(join12(tmpdir3(), "memory-lab-"));
   try {
-    const plugin = join11(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync9(join11(ROOT, part))) cpSync(join11(ROOT, part), join11(plugin, part), { recursive: true });
+    const plugin = join12(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync10(join12(ROOT, part))) cpSync(join12(ROOT, part), join12(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync10(join11(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync11(join12(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -4215,9 +4406,11 @@ var USAGE = `usage: memory <command>
   report [--tenant <name>]
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
-  import [--dry-run]
+  import [--dry-run] [--orbit]
       read the silos (each bound config's auto memory, and the files under "imports" in config.json)
-      and store each statement as a proposal; with --dry-run, list the files and write nothing
+      and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
+      read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
+      read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals
   review
       the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
   approve <id> [--scope repository|organisation|person|global]
@@ -4248,6 +4441,9 @@ var USAGE = `usage: memory <command>
   recall --diff <base>..<head>
       the precedents and hazards for the paths that range changes, within 600 estimated tokens, for any reviewer to
       read before it reports findings. Exits 2 when the range does not resolve
+  recall --orbit [--path <p>]... [--fingerprint <f>]... [--check <id>]... [--max-tokens <n>]
+      for Orbit's retrieval: at most three lean rows for a run's context, one per line, within --max-tokens, and
+      nothing unless the repository's .orbit/config.yaml has knowledge.lessons_in_prompts true. Exits 2 without a context
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_related, memory_propose, memory_feedback
   session-start
@@ -4512,9 +4708,9 @@ function reportCommand(args, data) {
   else process.stdout.write(out.join(""));
 }
 function importCommand(args, data) {
-  const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" } } });
+  const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" }, orbit: { type: "boolean" } } });
   const dryRun = values["dry-run"] === true;
-  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun), null, 2));
+  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun, values.orbit === true), null, 2));
   if (dryRun) console.error("Nothing was written. Run memory import without --dry-run to store these as proposals.");
 }
 function proposalStores(data, context) {
@@ -4719,7 +4915,17 @@ function recheckCommand(args, data, cwd) {
   }
 }
 function recallCommand(args, data, cwd) {
-  const { values } = parseArgs({ args, options: { diff: { type: "string" } } });
+  const { values } = parseArgs({
+    args,
+    options: { diff: { type: "string" }, orbit: { type: "boolean" }, path: { type: "string", multiple: true }, fingerprint: { type: "string", multiple: true }, check: { type: "string", multiple: true }, "max-tokens": { type: "string" } }
+  });
+  if (values.orbit === true) {
+    const [paths, fingerprints, checks] = [values.path ?? [], values.fingerprint ?? [], values.check ?? []];
+    if (paths.length + fingerprints.length + checks.length === 0) throw new Refusal("recall --orbit needs a context: --path, --fingerprint or --check", 2);
+    const maxTokens = values["max-tokens"] === void 0 ? Infinity : Number(values["max-tokens"]);
+    if (!(maxTokens > 0)) throw new Refusal("--max-tokens takes a positive number", 2);
+    return void process.stdout.write(orbitRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
+  }
   if (values.diff === void 0) throw new Refusal("recall needs --diff <base>..<head>", 2);
   const found = diffRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, values.diff);
   if ("reason" in found) throw new Refusal(found.reason, 2);
@@ -4741,7 +4947,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync11(0, "utf8"));
+    const v = JSON.parse(readFileSync12(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -4844,7 +5050,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync10(file)) return;
+  if (!existsSync11(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -4858,7 +5064,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync11(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync12(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -4913,8 +5119,8 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join12(data, "tenants");
-  const every = existsSync10(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const tenantsDir = join13(data, "tenants");
+  const every = existsSync11(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -4958,7 +5164,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync11(file, "utf8"));
+    return parse(readFileSync12(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }

@@ -22,11 +22,11 @@ export function confidence(item: Pick<Visible, 'reinforced' | 'helped' | 'wrong'
 
 export const band = (c: number): 'low' | 'medium' | 'high' => (c < CONFIDENCE.low ? 'low' : c >= CONFIDENCE.high ? 'high' : 'medium');
 
-// shortcut: no item carries a failure fingerprint or check id yet, so the spec's 2 points for one
-// are not scored; add them with the slice that captures fingerprints.
 export const RANKING = {
   anchor: 4,
   anchorCap: 8,
+  /** An item keyed to a failure fingerprint or check id the caller names (Orbit's recall). */
+  key: 2,
   scope: { repository: 2, organisation: 1, person: 1, global: 0.5 } as Record<string, number>,
   text: 2,
   /** A text match weaker than this share of the best match is noise, not relevance. */
@@ -61,7 +61,7 @@ const tenth = (n: number): number => Math.round(n * 10) / 10;
  * vector is close enough is a hit too, and items sharing an anchored path with one of the
  * best hits get a small bonus and may enter. Without it the sum is the lexical one, exactly.
  */
-export function rank(items: Visible[], paths: string[], now = Date.now(), similarity?: Map<string, number>): Hit[] {
+export function rank(items: Visible[], paths: string[], now = Date.now(), similarity?: Map<string, number>, keyed?: ReadonlySet<string>): Hit[] {
   // The repository root, '.' or './', normalises to '' and holds every anchored path.
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\/?$|^\.\//, '').replace(/\/+$/, ''));
   const score = (item: Visible, near: boolean): Hit | null => {
@@ -73,11 +73,13 @@ export function rank(items: Visible[], paths: string[], now = Date.now(), simila
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === '' || a.path === p || a.path.startsWith(`${p}/`) || p.startsWith(`${a.path}/`))).length;
     if (overlap > 0) add('anchor', Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
+    const key = keyed?.has(item.id) === true;
+    if (key) add('key', RANKING.key);
     const ratio = item.textRatio ?? 0;
     const text = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth((RANKING.semantic * (cos - RANKING.minSimilarity)) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && text === 0 && semantic === 0 && !near) return null;
+    if (overlap === 0 && text === 0 && semantic === 0 && !near && !key) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text > 0) add('text', text);
     if (semantic > 0) add('semantic', semantic);
