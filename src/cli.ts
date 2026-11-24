@@ -39,6 +39,7 @@ import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
 import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
+import { renderReport, tenantReport } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
@@ -70,6 +71,9 @@ const USAGE = `usage: memory <command>
   export --markdown <dir>
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
       for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository
+  report [--tenant <name>]
+      rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
+      no feedback are listed apart. Each tenant is read from its own store only; read only
   import [--dry-run]
       read the silos (each bound config's auto memory, and the files under "imports" in config.json)
       and store each statement as a proposal; with --dry-run, list the files and write nothing
@@ -361,6 +365,26 @@ function exportCommand(args: string[], data: string, cwd: string): void {
   } finally {
     for (const { db } of stores) db.close();
   }
+}
+
+/** `memory report [--tenant <name>]`: the owner's view of which items help and which mislead, one section per tenant bound to this config. */
+function reportCommand(args: string[], data: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { tenant: { type: 'string' } } });
+  if (positionals.length > 0) throw new Refusal('usage: memory report [--tenant <name>]', 2);
+  const bound = setUp(data).configs[currentConfigDir()] ?? [];
+  if (values.tenant !== undefined && !bound.includes(values.tenant)) throw new Refusal(`tenant ${values.tenant} is not bound to this Claude Code config`);
+  const out: string[] = [];
+  for (const tenant of values.tenant === undefined ? [...bound].sort() : [values.tenant]) {
+    const db = openStore(tenantFile(data, tenant), false);
+    if (db === null) continue;
+    try {
+      out.push(renderReport(tenant, tenantReport(db, tenant)));
+    } finally {
+      db.close();
+    }
+  }
+  if (out.length === 0) console.error('No items to report here.');
+  else process.stdout.write(out.join(''));
 }
 
 function importCommand(args: string[], data: string): void {
@@ -938,6 +962,8 @@ async function main(argv: string[]): Promise<void> {
       return exportCommand(rest, data, process.cwd());
     case 'import':
       return importCommand(rest, data);
+    case 'report':
+      return reportCommand(rest, data);
     case 'review':
       return review(data, process.cwd());
     case 'undo':

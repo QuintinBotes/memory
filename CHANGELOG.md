@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `memory report [--tenant <name>]` (#41) ranks each bound tenant's active
+  items by helped minus wrong minus stale, then confidence, then id, with items
+  that have no feedback listed apart. Per tenant, never across tenants;
+  quarantined items show no text; read only.
 - Instruction files are the source of truth (#26, #40): recall reads
   `CLAUDE.md`, `AGENTS.md`, their `@`-imports and the user's `CLAUDE.md`
   read-only, leaves out an item that repeats a loaded line (counted as

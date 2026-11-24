@@ -1002,9 +1002,9 @@ function leanRow(item, why = "", maxTokens = Infinity) {
   const statement = safe(item.statement);
   const taint = item.taint === void 0 ? "" : ` \xB7 tainted: ${safe(taintList(item.taint))}`;
   const build = (s, src2, loc2) => `[${item.id}] ${item.type}${loc2 === "" ? "" : ` \xB7 ${loc2}`} \xB7 ${s}${src2 === "" ? "" : ` (${src2})`}${taint}${why === "" ? "" : ` \xB7 why: ${why}`}`;
-  const row3 = build(statement, source, where2);
+  const row4 = build(statement, source, where2);
   const room = maxTokens * 4;
-  if (row3.length <= room) return row3;
+  if (row4.length <= room) return row4;
   const [src, loc] = [cutLeft(source, 40), cutLeft(where2, 40)];
   return build(cut(statement, room - build("", src, loc).length), src, loc);
 }
@@ -1110,8 +1110,8 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
   };
   const toStale = db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ? AND status = 'active'");
   const toActive = db.prepare("UPDATE items SET status = 'active', status_reason = NULL WHERE id = ? AND status = 'stale'");
-  for (const row3 of rows) {
-    const anchors = JSON.parse(row3.anchors_json);
+  for (const row4 of rows) {
+    const anchors = JSON.parse(row4.anchors_json);
     const texts = anchors.map((a) => read2(a.path));
     if (texts.includes(void 0)) continue;
     result.checked++;
@@ -1119,28 +1119,28 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW } = {}) {
     const failed = checks.find((c) => !c.ok);
     if (failed !== void 0 && !failed.ok) {
       result.stale++;
-      result.staleItems.push({ id: row3.id, reason: failed.reason });
+      result.staleItems.push({ id: row4.id, reason: failed.reason });
       transition(
         db,
-        () => toStale.run(failed.reason, row3.id).changes === 1,
-        () => recordAudit(db, "item_stale", { type: "item", id: row3.id }, { reason: failed.reason })
+        () => toStale.run(failed.reason, row4.id).changes === 1,
+        () => recordAudit(db, "item_stale", { type: "item", id: row4.id }, { reason: failed.reason })
       );
       continue;
     }
     result.current++;
     const now = checks.map((c) => c.ok ? c.anchor : anchors[0]);
     const moved = JSON.stringify(now);
-    if (moved !== row3.anchors_json) {
+    if (moved !== row4.anchors_json) {
       transition(
         db,
-        () => db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(moved, row3.id).changes === 1,
-        () => recordAudit(db, "anchor_moved", { type: "item", id: row3.id }, { from: anchors.map(at), to: now.map(at) })
+        () => db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(moved, row4.id).changes === 1,
+        () => recordAudit(db, "anchor_moved", { type: "item", id: row4.id }, { from: anchors.map(at), to: now.map(at) })
       );
     }
     const restored = transition(
       db,
-      () => toActive.run(row3.id).changes === 1,
-      () => recordAudit(db, "item_restored", { type: "item", id: row3.id })
+      () => toActive.run(row4.id).changes === 1,
+      () => recordAudit(db, "item_restored", { type: "item", id: row4.id })
     );
     if (restored) result.restored++;
   }
@@ -2506,51 +2506,51 @@ function get(args, data, context, cwd) {
   const format = args["format"] === void 0 ? "rows" : oneOf(args["format"], ["rows", "json"], "format");
   const found = first(data, context, (db, store) => {
     const checked = store.tenant === "" ? void 0 : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository, cwd, { id }));
-    const row4 = db.prepare(
+    const row5 = db.prepare(
       `SELECT *, coalesce(reinforced_at, valid_from) AS reinforced, (${READS_EXPIRED}) AS expired FROM items
          WHERE id = ? AND ${store.where} AND status NOT IN ('proposed', 'rejected') AND statement != ''`
     ).get(id, ...store.params);
-    if (row4 === void 0) return void 0;
+    if (row5 === void 0) return void 0;
     const evidence2 = db.prepare("SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id").all(id);
-    return { row: row4, evidence: evidence2, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
+    return { row: row5, evidence: evidence2, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
   });
   if (found === void 0) throw new ToolError(`no item ${id} here; memory_search finds the items this repository may see`);
-  const { row: row3, evidence, gone } = found;
-  const anchors = JSON.parse(row3.anchors_json);
-  const status = row3.status === "active" && row3.expired === 1 ? "expired" : row3.status;
+  const { row: row4, evidence, gone } = found;
+  const anchors = JSON.parse(row4.anchors_json);
+  const status = row4.status === "active" && row4.expired === 1 ? "expired" : row4.status;
   const anchorStatus = anchors.length === 0 ? "none" : gone ?? "current";
-  const level = band(confidence(row3));
+  const level = band(confidence(row4));
   const taint = [...new Set(evidence.flatMap((e) => e.taint === null ? [] : [e.taint]))].join(",");
   if (format === "json") {
     return fence(ITEMS_LABEL, `${safeJson({
-      id: row3.id,
-      type: row3.type,
-      scope: row3.scope,
-      scopeKey: row3.scope_key,
-      statement: row3.statement,
-      rationale: row3.rationale,
+      id: row4.id,
+      type: row4.type,
+      scope: row4.scope,
+      scopeKey: row4.scope_key,
+      statement: row4.statement,
+      rationale: row4.rationale,
       status,
-      statusReason: row3.status_reason,
-      trust: row3.origin_trust,
-      quarantine: row3.quarantine,
+      statusReason: row4.status_reason,
+      trust: row4.origin_trust,
+      quarantine: row4.quarantine,
       anchors,
       anchorStatus,
-      support: row3.support,
-      helped: row3.helped,
-      wrong: row3.wrong,
-      contradictions: row3.contradictions,
+      support: row4.support,
+      helped: row4.helped,
+      wrong: row4.wrong,
+      contradictions: row4.contradictions,
       confidence: level,
-      validFrom: row3.valid_from,
+      validFrom: row4.valid_from,
       taint: taint === "" ? null : taintList(taint),
       evidence
     })}
 `);
   }
-  const item = { ...row3, anchors, source: evidence[0]?.source ?? "", ...taint === "" ? {} : { taint } };
+  const item = { ...row4, anchors, source: evidence[0]?.source ?? "", ...taint === "" ? {} : { taint } };
   return fence(ITEMS_LABEL, [
     leanRow(item),
-    ...row3.rationale === null ? [] : [safe(`because: ${row3.rationale}`)],
-    safe(`status ${status}${row3.status_reason === null ? "" : ` (${row3.status_reason})`} \xB7 confidence ${level} \xB7 support ${row3.support} \xB7 helped ${row3.helped} \xB7 wrong ${row3.wrong} \xB7 contradicted ${row3.contradictions} \xB7 anchor ${anchorStatus}`),
+    ...row4.rationale === null ? [] : [safe(`because: ${row4.rationale}`)],
+    safe(`status ${status}${row4.status_reason === null ? "" : ` (${row4.status_reason})`} \xB7 confidence ${level} \xB7 support ${row4.support} \xB7 helped ${row4.helped} \xB7 wrong ${row4.wrong} \xB7 contradicted ${row4.contradictions} \xB7 anchor ${anchorStatus}`),
     ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.taint === null ? "" : `, tainted by ${taintList(e.taint)}`}`))
   ].map((l) => `${l}
 `).join(""));
@@ -3164,6 +3164,33 @@ function importSilos(config, data, configDir, dryRun) {
   return report;
 }
 
+// src/report/report.ts
+var net = (r) => r.helped - r.wrong - r.stale;
+var byId = (a, b) => a.id < b.id ? -1 : 1;
+function tenantReport(db, tenant, now = Date.now()) {
+  const rows = db.prepare(
+    `SELECT id, type, scope, statement, quarantine, helped, wrong, stale_reports AS stale, coalesce(reinforced_at, valid_from) AS reinforced
+       FROM items WHERE tenant = ? AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`
+  ).all(tenant);
+  const all = rows.map(({ reinforced, ...r }) => ({ ...r, confidence: confidence({ reinforced, helped: r.helped, wrong: r.wrong }, now) }));
+  const has = (r) => r.helped + r.wrong + r.stale > 0;
+  return {
+    // Ids are unique, so the order is total.
+    ranked: all.filter(has).sort((a, b) => net(b) - net(a) || b.confidence - a.confidence || byId(a, b)),
+    none: all.filter((r) => !has(r)).sort(byId)
+  };
+}
+var row2 = (r) => safe(
+  `- [${r.id}] ${r.type}, ${r.scope}, net ${net(r)} (helped ${r.helped}, wrong ${r.wrong}, stale ${r.stale}), confidence ${r.confidence.toFixed(2)}` + // A quarantined item reads as an instruction: its text is never shown.
+  (r.quarantine === null ? `: ${JSON.stringify(safe(r.statement))}` : `, quarantined (${r.quarantine}), statement withheld`)
+) + "\n";
+function renderReport(tenant, { ranked, none }) {
+  const section = (title, list2) => `${title}
+${list2.length === 0 ? "(none)\n" : list2.map(row2).join("")}`;
+  return `Tenant ${tenant}
+` + fence(PROPOSALS_LABEL, `${section("Ranked by net feedback, then confidence", ranked)}${section("No feedback", none)}`);
+}
+
 // src/export/markdown.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync6, readFileSync as readFileSync8, rmSync, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname8, join as join7, resolve as resolve4 } from "node:path";
@@ -3224,7 +3251,7 @@ function read(db, tenant) {
   const evidence = db.prepare("SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE tenant = ?) ORDER BY item_id, captured_at, source_ref, author_role, taint, id").all(tenant);
   const byItem = /* @__PURE__ */ new Map();
   for (const e of evidence) byItem.set(e.item_id, [...byItem.get(e.item_id) ?? [], e]);
-  return rows.map((row3) => ({ row: row3, evidence: byItem.get(row3.id) ?? [] }));
+  return rows.map((row4) => ({ row: row4, evidence: byItem.get(row4.id) ?? [] }));
 }
 function writeIfChanged(path, content, mayExist) {
   if (mayExist) {
@@ -3238,7 +3265,7 @@ function writeIfChanged(path, content, mayExist) {
 function exportMarkdown(stores2, dir) {
   const all = stores2.flatMap(({ db, tenant }) => read(db, tenant)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
   const successors = /* @__PURE__ */ new Map();
-  for (const { row: row3 } of all) if (row3.supersedes !== null) successors.set(row3.supersedes, [...successors.get(row3.supersedes) ?? [], row3.id]);
+  for (const { row: row4 } of all) if (row4.supersedes !== null) successors.set(row4.supersedes, [...successors.get(row4.supersedes) ?? [], row4.id]);
   const items = join7(dir, "items");
   mkdirSync6(items, { recursive: true });
   const current = new Set(all.map((a) => a.row.id));
@@ -3249,13 +3276,13 @@ function exportMarkdown(stores2, dir) {
   }
   const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
   for (const id of listed) if (!current.has(id)) rmSync(join7(items, `${id}.md`), { force: true });
-  for (const { row: row3, evidence } of all) writeIfChanged(join7(items, `${row3.id}.md`), itemFile(row3, evidence, successors.get(row3.id) ?? []), listed.size > 0);
+  for (const { row: row4, evidence } of all) writeIfChanged(join7(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
   const index = ["# Memory export", "", "Read only: editing these files changes nothing in memory.", ""];
   const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
   for (const status of statuses) {
     const group = all.filter((a) => a.row.status === status);
     index.push(`## ${status} (${group.length})`, "");
-    for (const { row: row3 } of group) index.push(`- [${row3.id}](items/${row3.id}.md) ${span(row3.type)} ${span(where(row3))}`);
+    for (const { row: row4 } of group) index.push(`- [${row4.id}](items/${row4.id}.md) ${span(row4.type)} ${span(where(row4))}`);
     index.push("");
   }
   writeIfChanged(join7(dir, "index.md"), `${index.join("\n")}
@@ -3287,10 +3314,10 @@ function diffRecall(data, context, cwd, range) {
   const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES2.has(i.type)), changed);
   const rows = [];
   for (const h of hits) {
-    const row3 = `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
+    const row4 = `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
 `;
-    if (estimate(fence(ITEMS_LABEL, [...rows, row3].join(""))) > DIFF_BUDGET) break;
-    rows.push(row3);
+    if (estimate(fence(ITEMS_LABEL, [...rows, row4].join(""))) > DIFF_BUDGET) break;
+    rows.push(row4);
   }
   return { text: rows.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, rows.join("")) };
 }
@@ -3511,9 +3538,9 @@ function pointOfAction(data, input2, log) {
     try {
       const found = anchored(anchoredItems(db, context.tenant, context.repository, context.owner, hit.touch.path), hit.root, hit.touch);
       if (found.length === 0) return "";
-      const byId = new Map(found.map((i) => [i.id, i]));
+      const byId2 = new Map(found.map((i) => [i.id, i]));
       const result = claim(db, session, agent, found.map((i) => i.id), (unseen, left) => {
-        const slice = chooseSlice(unseen.map((id) => byId.get(id)), Math.min(INJECTION_BUDGET, left));
+        const slice = chooseSlice(unseen.map((id) => byId2.get(id)), Math.min(INJECTION_BUDGET, left));
         const rows = slice.shown.map((i) => ({ id: i.id, tokens: estimate(row(i)) }));
         if (rows.length > 0) rows[0].tokens += estimate(slice.text) - rows.reduce((sum, r) => sum + r.tokens, 0);
         return { text: slice.text, shown: rows };
@@ -3569,7 +3596,7 @@ function afterCompaction(data, input2) {
 
 // src/eval/scorecard.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-var row2 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
+var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
   measure: m.measure,
   arm,
   version,
@@ -3578,7 +3605,7 @@ var row2 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []
   bar: m.bar,
   ...fields
 });
-var notRun = (version, m, note, figures2, extra = {}) => ["off", "on"].map((arm) => row2(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures2.map((f) => [f, "not run"])), note }));
+var notRun = (version, m, note, figures2, extra = {}) => ["off", "on"].map((arm) => row3(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures2.map((f) => [f, "not run"])), note }));
 var seededRecall = (version) => notRun(
   version,
   { measure: "review-voice-seeded-recall", on: ["memory_search"], bar: "seeded recall unchanged with memory on" },
@@ -3643,8 +3670,8 @@ function falseRecall(version, events) {
   const sessions = new Set(all.map((v) => v.session)).size;
   const rate = all.length === 0 ? null : Math.round((wrong + untouched) / all.length * 1e3) / 1e3;
   return [
-    row2(version, FALSE_RECALL, "off", "measured", { samples: { sessions: 0, recalled: 0 }, false_recall: null, note: "memory off recalls nothing" }),
-    row2(version, FALSE_RECALL, "on", "measured", {
+    row3(version, FALSE_RECALL, "off", "measured", { samples: { sessions: 0, recalled: 0 }, false_recall: null, note: "memory off recalls nothing" }),
+    row3(version, FALSE_RECALL, "on", "measured", {
       samples: { sessions, recalled: all.length },
       false_recall: rate,
       why: { marked_wrong_or_stale: wrong, no_anchor_touched: untouched },
@@ -3725,8 +3752,8 @@ function replay(version, pulls, since) {
   const kept = held(learned, repeats2);
   const samples = (memory) => ({ pulls_before: before.length, pulls_after: after.length, findings_after: findingsAfter.length, restatements: repeats2.length, memory_items: memory });
   return [
-    row2(version, REPLAY, "off", "measured", { since, samples: samples(0), repeats: repeats2.length, held: 0 }),
-    row2(version, REPLAY, "on", "measured", {
+    row3(version, REPLAY, "off", "measured", { since, samples: samples(0), repeats: repeats2.length, held: 0 }),
+    row3(version, REPLAY, "on", "measured", {
       since,
       samples: samples(learned.length),
       repeats: repeats2.length - kept,
@@ -4074,10 +4101,10 @@ function lab(version, agent, model, only) {
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
-        row2(version, LAB, "off", "measured", { task, model, ...off }),
+        row3(version, LAB, "off", "measured", { task, model, ...off }),
         // A run that failed to start counts as failed, but the bar is not judged on it: a lab whose agent never ran,
         // or whose off arm lost runs, would otherwise show memory no worse.
-        on.samples.agent_failed + off.samples.agent_failed > 0 ? row2(version, LAB, "on", "measured", { task, model, ...on, meets_bar: null, note: "a run failed to start, so the bar is not judged; run the lab again" }) : row2(version, LAB, "on", "measured", { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate })
+        on.samples.agent_failed + off.samples.agent_failed > 0 ? row3(version, LAB, "on", "measured", { task, model, ...on, meets_bar: null, note: "a run failed to start, so the bar is not judged; run the lab again" }) : row3(version, LAB, "on", "measured", { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate })
       ];
     });
   } finally {
@@ -4126,6 +4153,9 @@ var USAGE = `usage: memory <command>
   export --markdown <dir>
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
       for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository
+  report [--tenant <name>]
+      rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
+      no feedback are listed apart. Each tenant is read from its own store only; read only
   import [--dry-run]
       read the silos (each bound config's auto memory, and the files under "imports" in config.json)
       and store each statement as a proposal; with --dry-run, list the files and write nothing
@@ -4397,6 +4427,24 @@ function exportCommand(args, data, cwd) {
   } finally {
     for (const { db } of stores2) db.close();
   }
+}
+function reportCommand(args, data) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { tenant: { type: "string" } } });
+  if (positionals.length > 0) throw new Refusal("usage: memory report [--tenant <name>]", 2);
+  const bound = setUp(data).configs[currentConfigDir()] ?? [];
+  if (values.tenant !== void 0 && !bound.includes(values.tenant)) throw new Refusal(`tenant ${values.tenant} is not bound to this Claude Code config`);
+  const out = [];
+  for (const tenant of values.tenant === void 0 ? [...bound].sort() : [values.tenant]) {
+    const db = openStore(tenantFile(data, tenant), false);
+    if (db === null) continue;
+    try {
+      out.push(renderReport(tenant, tenantReport(db, tenant)));
+    } finally {
+      db.close();
+    }
+  }
+  if (out.length === 0) console.error("No items to report here.");
+  else process.stdout.write(out.join(""));
 }
 function importCommand(args, data) {
   const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" } } });
@@ -4903,6 +4951,8 @@ async function main(argv) {
       return exportCommand(rest, data, process.cwd());
     case "import":
       return importCommand(rest, data);
+    case "report":
+      return reportCommand(rest, data);
     case "review":
       return review(data, process.cwd());
     case "undo":
