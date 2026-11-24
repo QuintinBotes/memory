@@ -1435,9 +1435,10 @@ var DATA_CATEGORIES = [
   { id: "anchors", since: 1, text: "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves" },
   { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
   { id: "injections", since: 2, text: "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
-  { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, and the decisions in a Review Voice store (read-only), listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
+  { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
   { id: "embeddings", since: 4, text: "Embeddings, with the provider in config.json (voyage-4 by default, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query, are sent to the provider's servers and the vectors that come back are kept in the item's own file. Quarantined text is never sent. Without a key or a network, nothing is sent and recall uses words and paths only" },
-  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" }
+  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
+  { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -2581,7 +2582,7 @@ function reviewVoiceDecisions(path) {
   try {
     const runs = db.prepare("SELECT review_run_id, repository, pull_number, output_json FROM review_runs ORDER BY created_at, review_run_id").all();
     const feedback2 = db.prepare("SELECT review_run_id, finding_id, action, replacement_text FROM feedback ORDER BY created_at, feedback_id").all();
-    const outcomes = db.prepare("SELECT review_run_id, finding_id FROM finding_outcomes WHERE outcome = 'dismissed' AND strength = 'strong' ORDER BY review_run_id, finding_id").all();
+    const outcomes = db.prepare("SELECT review_run_id, finding_id, decided_by FROM finding_outcomes WHERE outcome = 'dismissed' AND strength = 'strong' ORDER BY review_run_id, finding_id").all();
     const unreadable = [];
     const byRun = /* @__PURE__ */ new Map();
     for (const run of runs) {
@@ -2613,7 +2614,8 @@ function reviewVoiceDecisions(path) {
         statement,
         // A file at the root has no directory to stand for: its own path is the anchor.
         anchorPath: dir === "." ? found.path : dir,
-        trust
+        // The decision is the owner's; the finding text was written by a model from the pull request, so text that reads as an instruction is not.
+        trust: trust === "owner" && authorityViolations(found.text).length > 0 ? "agent" : trust
       });
     };
     for (const f of feedback2) {
@@ -2624,7 +2626,7 @@ ${f.finding_id}`);
     }
     for (const o of outcomes) {
       if (!decided.has(`${o.review_run_id}
-${o.finding_id}`)) add(o.review_run_id, o.finding_id, "team", (text2) => `Declined in review by a team member: ${text2}`);
+${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "agent" : "team", (text2) => `Declined in review by ${o.decided_by == null ? "someone unnamed" : "a team member"}: ${text2}`);
     }
     return { decisions, unreadable };
   } catch (error) {
@@ -2729,6 +2731,10 @@ function importSilos(config, data, configDir, dryRun) {
         continue;
       }
       if (silo === "decisions") {
+        if (!covers(config, "decisions")) {
+          report.skippedFiles.push({ path, reason: "your consent does not cover reading a Review Voice store yet; run memory init and confirm" });
+          continue;
+        }
         const found = reviewVoiceDecisions(path);
         if ("reason" in found) {
           report.skippedFiles.push({ path, reason: found.reason });

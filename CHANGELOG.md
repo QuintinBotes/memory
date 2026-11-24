@@ -7,17 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-11-24
-
 ### Added
 
 - Review precedents reach every reviewer (#9): `memory import` reads Review
   Voice's store read-only (`decisions` under `imports`) and proposes a
   `precedent` for each owner `keep`, `dismiss`, `never_flag` and `rewrite`,
   anchored to the finding's directory with the pull request link as source; a
-  teammate's strong dismissal arrives with team trust. `memory recall --diff
+  teammate's strong dismissal arrives with team trust and one with no
+  `decided_by` with agent trust. Reading the store is a new `decisions` consent
+  category (plan version 5): until you confirm the plan again, import skips it
+  and says why. The decision keeps its trust, but finding text a model wrote
+  that reads as an instruction arrives quarantined with agent trust. `memory recall --diff
   <base>..<head>` prints the precedents and hazards for the changed paths in
   600 estimated tokens. Review Voice's agents still never receive the slice.
+
+## [0.5.0] - 2026-11-24
+
+### Added
 
 - Standing red-team suite (#22): `test/poison.test.mjs` replays one test per
   published poisoning attack class against every capture path (owner

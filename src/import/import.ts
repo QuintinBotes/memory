@@ -9,6 +9,7 @@ import { insertItem, knownItem, quarantineOf, reduceTombstones, type Anchor, typ
 import { openStore } from '../store/db.ts';
 import { recordAudit } from '../store/audit.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
+import { covers } from '../consent/plan.ts';
 import { reviewVoiceDecisions } from './review-voice.ts';
 import { inside, markdown, notes, policy, rejections, symbolPath, type Parsed } from './silos.ts';
 
@@ -152,6 +153,10 @@ export function importSilos(config: Config, data: string, configDir: string, dry
         continue;
       }
       if (silo === 'decisions') {
+        if (!covers(config, 'decisions')) {
+          report.skippedFiles.push({ path, reason: 'your consent does not cover reading a Review Voice store yet; run memory init and confirm' });
+          continue;
+        }
         const found = reviewVoiceDecisions(path);
         if ('reason' in found) {
           report.skippedFiles.push({ path, reason: found.reason });

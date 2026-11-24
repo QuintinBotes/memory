@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { posix } from 'node:path';
 import type { Trust } from '../items.ts';
+import { authorityViolations } from '../authority.ts';
 import { inside } from './silos.ts';
 
 /**
@@ -56,8 +57,8 @@ export function reviewVoiceDecisions(path: string): { decisions: Decision[]; unr
       review_run_id: string; finding_id: string; action: string; replacement_text: string | null;
     }[];
     const outcomes = db
-      .prepare("SELECT review_run_id, finding_id FROM finding_outcomes WHERE outcome = 'dismissed' AND strength = 'strong' ORDER BY review_run_id, finding_id")
-      .all() as unknown as { review_run_id: string; finding_id: string }[];
+      .prepare("SELECT review_run_id, finding_id, decided_by FROM finding_outcomes WHERE outcome = 'dismissed' AND strength = 'strong' ORDER BY review_run_id, finding_id")
+      .all() as unknown as { review_run_id: string; finding_id: string; decided_by: string | null }[];
 
     const unreadable: string[] = [];
     const byRun = new Map<string, { run: Run; findings: Map<string, Found> }>();
@@ -91,7 +92,8 @@ export function reviewVoiceDecisions(path: string): { decisions: Decision[]; unr
         statement,
         // A file at the root has no directory to stand for: its own path is the anchor.
         anchorPath: dir === '.' ? found.path : dir,
-        trust,
+        // The decision is the owner's; the finding text was written by a model from the pull request, so text that reads as an instruction is not.
+        trust: trust === 'owner' && authorityViolations(found.text).length > 0 ? 'agent' : trust,
       });
     };
     for (const f of feedback) {
@@ -100,7 +102,7 @@ export function reviewVoiceDecisions(path: string): { decisions: Decision[]; unr
       if (statement !== undefined) add(f.review_run_id, f.finding_id, 'owner', (text) => statement(text, f.replacement_text?.trim() || null));
     }
     for (const o of outcomes) {
-      if (!decided.has(`${o.review_run_id}\n${o.finding_id}`)) add(o.review_run_id, o.finding_id, 'team', (text) => `Declined in review by a team member: ${text}`);
+      if (!decided.has(`${o.review_run_id}\n${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? 'agent' : 'team', (text) => `Declined in review by ${o.decided_by == null ? 'someone unnamed' : 'a team member'}: ${text}`);
     }
     return { decisions, unreadable };
   } catch (error) {
