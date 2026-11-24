@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { appendFileSync as appendFileSync2, existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync8, readdirSync as readdirSync4, renameSync as renameSync3, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { appendFileSync as appendFileSync2, existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync9, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname8, isAbsolute as isAbsolute3, join as join10, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -2724,7 +2724,7 @@ function importSilos(config, data, configDir, dryRun) {
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync5, readdirSync as readdirSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname6, join as join6, resolve as resolve3 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "rejected", "expired"];
 var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
@@ -2780,8 +2780,19 @@ function itemFile(r, evidence, supersededBy) {
 }
 function read(db, tenant) {
   const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE tenant = ? ORDER BY id`).all(tenant);
-  const evidence = db.prepare("SELECT source_ref, author_role, captured_at, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, source_ref, author_role");
-  return rows.map((row3) => ({ row: row3, evidence: evidence.all(row3.id) }));
+  const evidence = db.prepare("SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE tenant = ?) ORDER BY item_id, captured_at, source_ref, author_role, taint, id").all(tenant);
+  const byItem = /* @__PURE__ */ new Map();
+  for (const e of evidence) byItem.set(e.item_id, [...byItem.get(e.item_id) ?? [], e]);
+  return rows.map((row3) => ({ row: row3, evidence: byItem.get(row3.id) ?? [] }));
+}
+function writeIfChanged(path, content, mayExist) {
+  if (mayExist) {
+    try {
+      if (readFileSync7(path, "utf8") === content) return;
+    } catch {
+    }
+  }
+  writeFileSync3(path, content);
 }
 function exportMarkdown(stores2, dir) {
   const all = stores2.flatMap(({ db, tenant }) => read(db, tenant)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
@@ -2789,8 +2800,15 @@ function exportMarkdown(stores2, dir) {
   for (const { row: row3 } of all) if (row3.supersedes !== null) successors.set(row3.supersedes, [...successors.get(row3.supersedes) ?? [], row3.id]);
   const items = join6(dir, "items");
   mkdirSync5(items, { recursive: true });
-  for (const f of readdirSync2(items)) if (f.endsWith(".md")) rmSync(join6(items, f));
-  for (const { row: row3, evidence } of all) writeFileSync3(join6(items, `${row3.id}.md`), itemFile(row3, evidence, successors.get(row3.id) ?? []));
+  const current = new Set(all.map((a) => a.row.id));
+  let previous = "";
+  try {
+    previous = readFileSync7(join6(dir, "index.md"), "utf8");
+  } catch {
+  }
+  const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
+  for (const id of listed) if (!current.has(id)) rmSync(join6(items, `${id}.md`), { force: true });
+  for (const { row: row3, evidence } of all) writeIfChanged(join6(items, `${row3.id}.md`), itemFile(row3, evidence, successors.get(row3.id) ?? []), listed.size > 0);
   const index = ["# Memory export", "", "Read only: editing these files changes nothing in memory.", ""];
   const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
   for (const status of statuses) {
@@ -2799,8 +2817,8 @@ function exportMarkdown(stores2, dir) {
     for (const { row: row3 } of group) index.push(`- [${row3.id}](items/${row3.id}.md) ${span(row3.type)} ${span(where(row3))}`);
     index.push("");
   }
-  writeFileSync3(join6(dir, "index.md"), `${index.join("\n")}
-`);
+  writeIfChanged(join6(dir, "index.md"), `${index.join("\n")}
+`, previous !== "");
   return all.length;
 }
 function foreignRepository(dir, config, tenant) {
@@ -3270,7 +3288,7 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync7, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync3, readFileSync as readFileSync7, readdirSync as readdirSync3, rmSync as rmSync4 } from "node:fs";
+import { cpSync, existsSync as existsSync7, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync3, readFileSync as readFileSync8, readdirSync as readdirSync2, rmSync as rmSync4 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { dirname as dirname7, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -3282,7 +3300,7 @@ var BUNDLE = join9(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync3(TASKS).filter((t) => existsSync7(join9(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync7(join9(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -3311,7 +3329,7 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync7(file) ? jsonLines2(readFileSync7(file, "utf8")) : [];
+var readLines = (file) => existsSync7(file) ? jsonLines2(readFileSync8(file, "utf8")) : [];
 var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -3354,7 +3372,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join9(TASKS, task, "hidden");
-  const tests = readdirSync3(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join9(hidden, f));
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join9(hidden, f));
   const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -3396,7 +3414,7 @@ function lab(version, agent, model, only) {
     const plugin = join9(base2, "plugin");
     for (const part of PLUGIN_PARTS) if (existsSync7(join9(ROOT, part))) cpSync(join9(ROOT, part), join9(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync7(join9(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync8(join9(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -3838,7 +3856,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync8(0, "utf8"));
+    const v = JSON.parse(readFileSync9(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -3936,7 +3954,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync8(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync9(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -3992,7 +4010,7 @@ function purge(args, data, cwd) {
     all: values.all
   };
   const tenantsDir = join10(data, "tenants");
-  const every = existsSync8(tenantsDir) ? readdirSync4(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const every = existsSync8(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -4036,7 +4054,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync8(file, "utf8"));
+    return parse(readFileSync9(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }

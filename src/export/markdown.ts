@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../config.ts';
@@ -98,11 +98,27 @@ function itemFile(r: ItemRow, evidence: EvidenceRow[], supersededBy: string[]): 
   return `${lines.join('\n')}\n`;
 }
 
-/** Items of `tenant` ('' for the person file) in id order, each with the file it would be written to. */
+/** Items of `tenant` ('' for the person file) in id order, each with its evidence: two queries, not one per item. */
 function read(db: DatabaseSync, tenant: string): { row: ItemRow; evidence: EvidenceRow[] }[] {
   const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE tenant = ? ORDER BY id`).all(tenant) as unknown as ItemRow[];
-  const evidence = db.prepare('SELECT source_ref, author_role, captured_at, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, source_ref, author_role');
-  return rows.map((row) => ({ row, evidence: evidence.all(row.id) as unknown as EvidenceRow[] }));
+  const evidence = db
+    .prepare('SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE tenant = ?) ORDER BY item_id, captured_at, source_ref, author_role, taint, id')
+    .all(tenant) as unknown as (EvidenceRow & { item_id: string })[];
+  const byItem = new Map<string, EvidenceRow[]>();
+  for (const e of evidence) byItem.set(e.item_id, [...(byItem.get(e.item_id) ?? []), e]);
+  return rows.map((row) => ({ row, evidence: byItem.get(row.id) ?? [] }));
+}
+
+/** Writes only when the content differs, so an unchanged export touches no file. */
+function writeIfChanged(path: string, content: string, mayExist: boolean): void {
+  if (mayExist) {
+    try {
+      if (readFileSync(path, 'utf8') === content) return;
+    } catch {
+      // unreadable: write it
+    }
+  }
+  writeFileSync(path, content);
 }
 
 /** Writes `index.md` and `items/<id>.md` under `dir`, replacing a previous export there; returns the number of items. */
@@ -113,8 +129,18 @@ export function exportMarkdown(stores: { db: DatabaseSync; tenant: string }[], d
 
   const items = join(dir, 'items');
   mkdirSync(items, { recursive: true });
-  for (const f of readdirSync(items)) if (f.endsWith('.md')) rmSync(join(items, f));
-  for (const { row, evidence } of all) writeFileSync(join(items, `${row.id}.md`), itemFile(row, evidence, successors.get(row.id) ?? []));
+  // Only files the previous export listed in its index are ours to remove; anything else in items/ belongs to the user.
+  const current = new Set(all.map((a) => a.row.id));
+  let previous = '';
+  try {
+    previous = readFileSync(join(dir, 'index.md'), 'utf8');
+  } catch {
+    // no previous export
+  }
+  const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]!));
+  for (const id of listed) if (!current.has(id)) rmSync(join(items, `${id}.md`), { force: true });
+  // A file the previous export did not list may still exist (a user's, or one the index no longer names), so it is compared too.
+  for (const { row, evidence } of all) writeIfChanged(join(items, `${row.id}.md`), itemFile(row, evidence, successors.get(row.id) ?? []), listed.size > 0);
 
   const index = ['# Memory export', '', 'Read only: editing these files changes nothing in memory.', ''];
   const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
@@ -124,7 +150,7 @@ export function exportMarkdown(stores: { db: DatabaseSync; tenant: string }[], d
     for (const { row } of group) index.push(`- [${row.id}](items/${row.id}.md) ${span(row.type)} ${span(where(row))}`);
     index.push('');
   }
-  writeFileSync(join(dir, 'index.md'), `${index.join('\n')}\n`);
+  writeIfChanged(join(dir, 'index.md'), `${index.join('\n')}\n`, previous !== '');
   return all.length;
 }
 

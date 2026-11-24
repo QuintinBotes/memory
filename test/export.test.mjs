@@ -186,3 +186,37 @@ test('S9 without confirmed consent nothing is exported', () => {
   assert.match(r.stderr, /not set up/);
   assert.equal(existsSync(dir), false);
 });
+
+test('S10 an export removes the item files it wrote before and keeps a file of the user', () => {
+  const s = seeded();
+  const dir = join(s.base, 'out');
+  assert.equal(exportTo(s, dir).status, 0);
+  const gone = idOf(s, 'Web uses server rendering');
+  writeFileSync(join(dir, 'items', 'mine.md'), 'my notes');
+  const d = db(s, 'tenants/acme.sqlite');
+  d.prepare('DELETE FROM items WHERE id = ?').run(gone);
+  d.close();
+  assert.equal(exportTo(s, dir).status, 0);
+  const names = readdirSync(join(dir, 'items'));
+  assert.ok(names.includes('mine.md'), 'the user file survives');
+  assert.ok(!names.includes(`${gone}.md`), 'the stale exported file is removed');
+});
+
+test('S11 evidence that differs only in taint comes out in a fixed order, and the export reads evidence in one query', () => {
+  const s = seeded();
+  const id = idOf(s, 'Web uses server rendering');
+  const d = db(s, 'tenants/acme.sqlite');
+  const base = d.prepare('SELECT * FROM evidence WHERE item_id = ?').get(id);
+  const cols = Object.keys(base);
+  const ins = d.prepare(`INSERT INTO evidence (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`);
+  for (const [n, taint] of [['z', 'web:b'], ['a', 'web:a']]) ins.run(...cols.map((c) => (c === 'id' ? `ev-${n}` : c === 'taint' ? taint : base[c])));
+  d.close();
+  const dir = join(s.base, 'out');
+  const log = join(s.base, 'work.json');
+  const r = run(['export', '--markdown', dir], { cwd: s.acmeApi, data: s.data, config: s.configA, env: { WORK_LOG: log } });
+  assert.equal(r.status, 0, r.stderr);
+  const text = readFileSync(join(dir, 'items', `${id}.md`), 'utf8');
+  assert.ok(text.indexOf('web:a') > 0 && text.indexOf('web:a') < text.indexOf('web:b'), 'sorted by taint, then row id');
+  const work = JSON.parse(readFileSync(log, 'utf8'));
+  assert.ok(work.statements <= 20, `${work.statements} statements for a handful of items: one evidence query, not one per item`);
+});
