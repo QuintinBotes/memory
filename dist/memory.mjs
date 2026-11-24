@@ -3,7 +3,7 @@
 // src/cli.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync10, readFileSync as readFileSync11, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { isAbsolute as isAbsolute6, join as join12, normalize as normalize2 } from "node:path";
+import { isAbsolute as isAbsolute7, join as join12, normalize as normalize3 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -864,7 +864,7 @@ function inTransaction(db, work) {
 
 // src/items.ts
 var SCOPES = ["repository", "organisation", "person", "global"];
-var TYPES = ["preference", "convention", "decision", "hazard", "precedent", "failure-pattern", "repair-recipe"];
+var TYPES = ["preference", "convention", "decision", "hazard", "precedent", "failure-pattern", "repair-recipe", "open_question"];
 var ORIGINS = ["agent", "team", "external", "bot"];
 var cleanTaint = (taint) => {
   const t = (taint ?? "").replace(/[\s,]+/g, "_").slice(0, 120);
@@ -945,8 +945,23 @@ function anchoredItems(db, tenant, repository, owner, path) {
   if (ids.length === 0) return [];
   return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE} AND id IN (${ids.map(() => "?").join(", ")})`).all(tenant, repository, owner, ...ids));
 }
+function anchoredUnder(db, tenant, repository, owner, target, depth = Infinity) {
+  const file = target.split("#")[0];
+  const rows = db.prepare("SELECT DISTINCT item_id FROM item_anchors WHERE path = ? OR (path >= ? AND path < ?)").all(file, `${file}/`, `${file}0`);
+  if (rows.length === 0) return [];
+  const items = visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE} AND id IN (${rows.map(() => "?").join(", ")})`).all(tenant, repository, owner, ...rows.map((r) => r.item_id)));
+  const inside4 = (a) => target.includes("#") ? a.path === file && a.symbol?.startsWith(target) === true : a.path === target || a.path.startsWith(`${target}/`) && a.path.slice(target.length + 1).split("/").length <= depth;
+  return items.filter((i) => i.anchors.some(inside4));
+}
 function personItems(db) {
   return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all());
+}
+function closeQuestion(db, id) {
+  return inTransaction(db, () => {
+    const { changes } = db.prepare("UPDATE items SET status = 'closed', valid_to = ?, status_reason = 'closed by the owner' WHERE id = ? AND type = 'open_question' AND status = 'active'").run((/* @__PURE__ */ new Date()).toISOString(), id);
+    if (changes === 1) recordAudit(db, "question_closed", { type: "item", id }, {});
+    return changes === 1;
+  });
 }
 function textMatches(db, terms) {
   if (terms.length === 0) return /* @__PURE__ */ new Map();
@@ -1224,7 +1239,7 @@ function withFileLock(lock, work, waitMs = 0) {
 var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lock`, work);
 
 // src/mcp/server.ts
-import { isAbsolute as isAbsolute2, relative as relative2 } from "node:path";
+import { isAbsolute as isAbsolute3, relative as relative3 } from "node:path";
 import { createInterface } from "node:readline";
 
 // src/automation.ts
@@ -2347,6 +2362,28 @@ async function similarities(data, context, config, query, items) {
   return { similarity: new Map([...stored].map(([id, v]) => [id, cosine(q, v)])) };
 }
 
+// src/recall/related.ts
+import { isAbsolute as isAbsolute2, normalize, relative as relative2 } from "node:path";
+function relatedTarget(cwd, target) {
+  const top = isAbsolute2(target) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
+  const clean = normalize(isAbsolute2(target) && top !== void 0 ? relative2(top, target) : target).replace(/\/+$/, "");
+  return clean === "" || clean === "." || isAbsolute2(clean) || clean.split(/[\\/]/).includes("..") ? null : clean;
+}
+function related(data, config, context, cwd, target, depth) {
+  if (context.tenant === null || context.repository === null || context.owner === null) return "";
+  const file = tenantFile(data, context.tenant);
+  const db = openStore(file, false);
+  if (db === null) return "";
+  try {
+    withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd));
+    const found = anchoredUnder(db, context.tenant, context.repository, context.owner, target, depth);
+    const items = screen(db, found, loadInstructions(cwd, currentConfigDir()), false, []);
+    return chooseSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text;
+  } finally {
+    db.close();
+  }
+}
+
 // src/recall/visible.ts
 function withTextRatio(items, matches) {
   const best = Math.min(0, ...items.map((i) => matches.get(i.id) ?? 0));
@@ -2413,8 +2450,21 @@ var TOOLS = [
     }
   },
   {
+    name: "memory_related",
+    description: `Every active item anchored at or under a path or symbol of this repository, as rows within the session budget, whole rows only. For "what do we know about this module". ${FACTS}`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path_or_symbol: { type: "string", description: "A path relative to the repository root, or a symbol key path#name#kind; a directory matches everything under it." },
+        depth: { type: "integer", minimum: 0, description: "How many path segments below the prefix to match; 0 is the prefix itself. Default: all." }
+      },
+      required: ["path_or_symbol"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "memory_propose",
-    description: 'Propose one short factual statement with its evidence. It waits for the owner in memory review and is never active until the owner approves it. Write a fact ("releases are cut from main"), not an instruction: text that reads as an instruction is quarantined.',
+    description: 'Propose one short factual statement with its evidence, or, with type open_question, a question the team has not settled (not a fact; the owner closes it). It waits for the owner in memory review and is never active until the owner approves it. Write a fact ("releases are cut from main"), not an instruction: text that reads as an instruction is quarantined.',
     inputSchema: {
       type: "object",
       properties: {
@@ -2488,8 +2538,8 @@ async function search(args, data, config, context, cwd) {
   const query = text(args, "query");
   const paths = args["paths"] ?? [];
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string")) throw new ToolError("paths is a list of strings");
-  const top = paths.some((p) => isAbsolute2(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
-  const relativePaths = paths.map((p) => isAbsolute2(p) && top !== void 0 ? relative2(top, p) : p);
+  const top = paths.some((p) => isAbsolute3(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
+  const relativePaths = paths.map((p) => isAbsolute3(p) && top !== void 0 ? relative3(top, p) : p);
   const withheld = [];
   const items = visibleItems(data, context, cwd, searchTerms(query), void 0, withheld);
   logWithheld(data, config, "memory_search", "mcp", withheld);
@@ -2500,6 +2550,13 @@ async function search(args, data, config, context, cwd) {
   if (hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
 `).join(""));
+}
+function relatedTool(args, data, config, context, cwd) {
+  const target = relatedTarget(cwd, text(args, "path_or_symbol"));
+  if (target === null) throw new ToolError("path_or_symbol is a path inside the repository, or a symbol key path#name#kind");
+  const depth = args["depth"];
+  if (depth !== void 0 && (typeof depth !== "number" || !Number.isInteger(depth) || depth < 0)) throw new ToolError("depth is a whole number, 0 or more");
+  return related(data, config, context, cwd, target, depth) || `No memory item is anchored at or under ${target}.`;
 }
 function get(args, data, context, cwd) {
   const id = text(args, "id");
@@ -2636,6 +2693,8 @@ async function call(name, args, data, cwd) {
       return search(args, data, config, context, cwd);
     case "memory_get":
       return get(args, data, context, cwd);
+    case "memory_related":
+      return relatedTool(args, data, config, context, cwd);
     case "memory_propose":
       return propose2(args, data, config, context, cwd);
     case "memory_feedback":
@@ -2796,14 +2855,14 @@ function truncateLog(db) {
 
 // src/import/import.ts
 import { existsSync as existsSync6, lstatSync as lstatSync2, readFileSync as readFileSync7, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
-import { isAbsolute as isAbsolute4, join as join6, sep as sep3 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join6, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
 import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 import { posix as posix2 } from "node:path";
 
 // src/import/silos.ts
-import { isAbsolute as isAbsolute3, normalize } from "node:path";
+import { isAbsolute as isAbsolute4, normalize as normalize2 } from "node:path";
 var parsed = (statements, rest = {}) => ({ statements, links: [], unreadable: [], skippedNotes: 0, ...rest });
 function unquote(v) {
   if (/^'.*'$/.test(v)) return v.slice(1, -1).replace(/''/g, "'");
@@ -2895,7 +2954,7 @@ function notes(text2) {
   return parsed(statements, { unreadable, skippedNotes });
 }
 var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
-var inside3 = (path) => !isAbsolute3(path) && !normalize(path).split(/[\\/]/).includes("..");
+var inside3 = (path) => !isAbsolute4(path) && !normalize2(path).split(/[\\/]/).includes("..");
 
 // src/import/review-voice.ts
 var REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/;
@@ -3054,7 +3113,7 @@ function importSilos(config, data, configDir, dryRun) {
     for (const silo of SILOS) {
       const rel = silos[silo];
       if (rel === void 0) continue;
-      const path = silo === "decisions" && isAbsolute4(rel) ? rel : join6(checkout, rel);
+      const path = silo === "decisions" && isAbsolute5(rel) ? rel : join6(checkout, rel);
       if (silo !== "decisions" && !inside3(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
@@ -3167,7 +3226,7 @@ function importSilos(config, data, configDir, dryRun) {
 // src/export/markdown.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync6, readFileSync as readFileSync8, rmSync, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname8, join as join7, resolve as resolve4 } from "node:path";
-var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "rejected", "expired"];
+var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
   anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
 function span(text2) {
@@ -3375,7 +3434,7 @@ function declineSupersession(db, p) {
 
 // src/hooks/point-of-action.ts
 import { existsSync as existsSync8, readFileSync as readFileSync9, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute5, join as join8, relative as relative3, resolve as resolve5, sep as sep4 } from "node:path";
+import { dirname as dirname9, isAbsolute as isAbsolute6, join as join8, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
 
 // src/store/ledger.ts
 var AGENT_SESSION_BUDGET = 600;
@@ -3428,8 +3487,8 @@ function locate(abs) {
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root = realpathSync4(top);
-  const path = relative3(root, join8(realpathSync4(dir), relative3(dir, abs)));
-  return path.startsWith("..") || isAbsolute5(path) ? null : { root, path: path.split(sep4).join("/") };
+  const path = relative4(root, join8(realpathSync4(dir), relative4(dir, abs)));
+  return path.startsWith("..") || isAbsolute6(path) ? null : { root, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
   const tool = input2["tool_name"];
@@ -4150,11 +4209,17 @@ var USAGE = `usage: memory <command>
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
+  related <path-or-symbol> [--depth <n>]
+      the active items anchored at or under that path (or symbol key, path#name#kind) in this repository, as the session
+      slice prints them, within its budget: whole rows only. --depth limits the path segments matched below it
+  close <id>
+      close an open question, an owner action: it leaves recall at once and stays on record as closed. Only an approved
+      (active) open_question can be closed; an agent proposes one with memory_propose and it waits for memory approve
   recall --diff <base>..<head>
       the precedents and hazards for the paths that range changes, within 600 estimated tokens, for any reviewer to
       read before it reports findings. Exits 2 when the range does not resolve
   mcp
-      the MCP server over stdio: memory_search, memory_get, memory_propose, memory_feedback
+      the MCP server over stdio: memory_search, memory_get, memory_related, memory_propose, memory_feedback
   session-start
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
@@ -4283,8 +4348,8 @@ async function embedCommand(args, data, cwd) {
 function anchorAt(cwd, spec) {
   const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(spec);
   const path = m?.[1] ?? "";
-  const clean = normalize2(path);
-  if (!m || isAbsolute6(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
+  const clean = normalize3(path);
+  if (!m || isAbsolute7(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
     throw new Refusal("an anchor is a path inside the repository, as path or path:start-end");
   }
   const top = git(cwd, "rev-parse", "--show-toplevel")?.trim();
@@ -4545,6 +4610,31 @@ async function decideCommand(args, data, cwd, decision) {
     }
   }
   throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+}
+function relatedCommand(args, data, cwd) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { depth: { type: "string" } } });
+  if (positionals.length !== 1) throw new Refusal("give one path or symbol", 2);
+  if (values.depth !== void 0 && !/^\d+$/.test(values.depth)) throw new Refusal("--depth takes a whole number", 2);
+  const target = relatedTarget(cwd, positionals[0]);
+  if (target === null) throw new Refusal("give a path inside the repository, or a symbol key path#name#kind", 2);
+  const config = setUp(data);
+  const out = related(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, target, values.depth === void 0 ? void 0 : Number(values.depth));
+  if (out === "") console.error(`No memory item is anchored at or under ${target}.`);
+  else process.stdout.write(out);
+}
+function closeCommand(args, data, cwd) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length !== 1) throw new Refusal("give one open question id", 2);
+  for (const { file } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      if (closeQuestion(db, positionals[0])) return void console.log(`closed ${positionals[0]}; it stays on record and is no longer recalled`);
+    } finally {
+      db.close();
+    }
+  }
+  throw new Refusal(`no active open question ${positionals[0]} here; a proposed one is decided with memory approve or memory reject`);
 }
 function undoCommand(args, data, cwd) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
@@ -4916,6 +5006,10 @@ async function main(argv) {
       return sweepCommand(data, process.cwd(), false);
     case "recheck":
       return recheckCommand(rest, data, process.cwd());
+    case "related":
+      return relatedCommand(rest, data, process.cwd());
+    case "close":
+      return closeCommand(rest, data, process.cwd());
     case "recall":
       return recallCommand(rest, data, process.cwd());
     case "mcp":

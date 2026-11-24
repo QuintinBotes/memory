@@ -19,6 +19,7 @@ export type AuditAction =
   | 'import'
   | 'proposal_approved'
   | 'proposal_rejected'
+  | 'question_closed'
   | 'proposal_received'
   | 'feedback'
   | 'tombstones_reduced'
