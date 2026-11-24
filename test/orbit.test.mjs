@@ -410,12 +410,31 @@ test('finding 10 an observation no run repeated for 28 days is not offered, a re
   const s = orbit({
     lessons: [],
     observations: [
-      { id: 'o1', run: 'run-old', ageDays: 40, state: 'EXHAUSTED', failureClass: 'timeout', checks: [{ check_id: 'browser-journey', signature: 'fp:old' }] },
-      { id: 'o2', run: 'run-new', ageDays: 2, checks: [{ check_id: 'typecheck', signature: 'fp:new' }] },
+      { id: 'o1', run: 'run-old', ageDays: 40, checks: [{ check_id: 'old-check', signature: 'fp:old' }] },
+      { id: 'o2', run: 'run-new', ageDays: 2, checks: [{ check_id: 'new-check', signature: 'fp:new' }] },
     ],
   });
   importIt(s);
   approveAll(s);
   assert.equal(ask(s, '--fingerprint', 'fp:old'), '');
-  assert.match(ask(s, '--fingerprint', 'fp:new'), /typecheck/);
+  assert.match(ask(s, '--fingerprint', 'fp:new'), /new-check/);
 });
+
+for (const [name, a, b] of [
+  ['check id', { check_id: 'unit', signature: FP }, { check_id: 'lint', signature: FP }],
+  ['fingerprint', { check_id: 'unit', signature: 'fp:tsc:TS2322' }, { check_id: 'unit', signature: 'fp:tsx:TS2322' }],
+]) {
+  test(`two failures that differ only in ${name} stay two items, each with its own evidence and keys`, () => {
+    const s = orbit({ lessons: [], observations: [{ id: 'o1', run: 'run-a', ageDays: 2, checks: [a] }, { id: 'o2', run: 'run-b', ageDays: 1, checks: [b] }] });
+    const report = importIt(s);
+    assert.equal(report.proposed, 2);
+    assert.equal(report.merged ?? 0, 0);
+    const found = items(s);
+    assert.equal(found.length, 2);
+    assert.deepEqual(found.map((i) => i.source).sort(), ['orbit run run-a', 'orbit run run-b']);
+    for (const i of found) assert.equal(rows(s, 'SELECT count(*) AS n FROM evidence WHERE item_id = ?', i.id)[0].n, 1);
+    const keys = (run) => rows(s, 'SELECT k.kind, k.key FROM item_keys k JOIN evidence e ON e.item_id = k.item_id WHERE e.source_ref = ? ORDER BY k.kind', `orbit run ${run}`).map((r) => `${r.kind}:${r.key}`);
+    assert.deepEqual(keys('run-a'), [`check:${a.check_id}`, `fingerprint:${a.signature}`]);
+    assert.deepEqual(keys('run-b'), [`check:${b.check_id}`, `fingerprint:${b.signature}`]);
+  });
+}

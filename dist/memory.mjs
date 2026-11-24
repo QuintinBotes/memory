@@ -1319,7 +1319,7 @@ function addItem(db, c) {
   for (const r of rows) {
     if (!anchorsOverlap(c.anchors, JSON.parse(r.anchors_json))) continue;
     if (r.statement_key === key) return mergeEvidence(db, r.id, c);
-    if (r.type !== c.type) continue;
+    if (r.type !== c.type || c.exactOnly === true) continue;
     const theirs = words(r.statement);
     const sim = similarity(mine, theirs);
     if (sim >= REPEAT && sameNumbers(mine, theirs)) return mergeEvidence(db, r.id, c);
@@ -3246,7 +3246,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
         trust: "agent",
         status: "proposed",
         evidenceAt: f.at,
-        orbit: f
+        orbit: f,
+        ...f.kind === "observation" ? { exactOnly: true } : {}
       });
     }
   };

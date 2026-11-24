@@ -105,7 +105,7 @@ export function addItem(db: DatabaseSync, c: NewItem): Stored {
     if (!anchorsOverlap(c.anchors, JSON.parse(r.anchors_json) as Anchor[])) continue;
     // The exact statement is a repeat whatever its type, as it always was; a looser match needs the same type.
     if (r.statement_key === key) return mergeEvidence(db, r.id, c);
-    if (r.type !== c.type) continue;
+    if (r.type !== c.type || c.exactOnly === true) continue;
     const theirs = words(r.statement);
     const sim = similarity(mine, theirs);
     // "retry 3 times" and "retry 5 times" are about one subject, not one claim.

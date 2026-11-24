@@ -171,7 +171,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
       if (refused(source, refusal(f.statement))) continue;
       candidates.push({
         tenant: context.tenant, scope: 'repository', scopeKey: context.repository, type: f.type, statement: f.statement, rationale: null,
-        anchors: f.anchorPath === null ? [] : [{ path: f.anchorPath }], source, trust: 'agent', status: 'proposed', evidenceAt: f.at, orbit: f,
+        anchors: f.anchorPath === null ? [] : [{ path: f.anchorPath }], source, trust: 'agent', status: 'proposed', evidenceAt: f.at, orbit: f, ...(f.kind === 'observation' ? { exactOnly: true } : {}),
       });
     }
   };
