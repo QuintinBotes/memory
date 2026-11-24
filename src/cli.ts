@@ -11,6 +11,7 @@ import {
   TENANT_NAME,
   TENANT_PATTERN,
   consented,
+  recallOn,
   currentConfigDir,
   emptyConfig,
   loadConfig,
@@ -46,6 +47,9 @@ import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
+import { captureCi } from './capture/ci.ts';
+import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './capture/failures.ts';
+import { scanReverts } from './capture/reverts.ts';
 import { failureRecall, weakSignature } from './hooks/failure.ts';
 import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
 import { capture, captureWanted } from './capture/capture.ts';
@@ -62,9 +66,13 @@ suppressSqliteExperimentalWarning();
 
 const USAGE = `usage: memory <command>
 
-  init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off] [--confirm]
+  init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
+       [--failing-commands on|off] [--recall on] [--confirm]
       show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
-      sessions started by automation (headless runs, CI jobs) capture and propose; off is the default
+      sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
+      --failing-commands on keeps failed Bash commands as scrubbed episodes, 30 days, so the same command passing
+      later becomes a repair proposal; off is the default. --recall on turns recall back on after memory turned it
+      off itself, when two memory-linked reverts came within seven days
   remember [--scope repository|organisation|person|global] [--type <type>]
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
@@ -127,6 +135,15 @@ const USAGE = `usage: memory <command>
   failure-recall
       the PostToolUseFailure hook on Bash: the failure patterns and repair recipes whose signature (the statement up to ' => ') the error carries, once
       per agent and fingerprint, within 120 tokens. A repeat after that counts as a contradiction. Needs no opt-in; stores no error text
+  command-passed
+      the PostToolUse hook on Bash: a command that passes after failing earlier in the session (with --failing-commands on)
+      becomes a repair proposal; a git commit is linked to the items shown in the session; a git revert of such a commit
+      counts as a contradiction of them, and two within seven days turn recall off. Any other command does nothing
+  ci
+      read this repository's CI runs with gh: a failed run followed by a passing run on another commit becomes a repair
+      proposal with the fingerprint, the fix commit and both runs as evidence
+  reverts
+      count the reverts of commits memory linked items to, as the hook does after a git revert
   pre-compact
       the PreCompact hook: at most 1,000 characters of the items shown at the point of action this session
   capture [--foreground]
@@ -175,7 +192,7 @@ function setUp(data: string): Config {
 function init(args: string[], data: string): void {
   const { values } = parseArgs({
     args,
-    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, confirm: { type: 'boolean' } },
+    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, 'failing-commands': { type: 'string' }, recall: { type: 'string' }, confirm: { type: 'boolean' } },
   });
   const network = networkFilesystem(data);
   if (network !== undefined) {
@@ -203,6 +220,15 @@ function init(args: string[], data: string): void {
     if (values.automation === 'on') config.automation = true;
     else delete config.automation;
   }
+  if (values['failing-commands'] !== undefined) {
+    if (values['failing-commands'] !== 'on' && values['failing-commands'] !== 'off') throw new Refusal('--failing-commands is on or off', 2);
+    config.optIns.failingCommands = values['failing-commands'] === 'on';
+  }
+  if (values.recall !== undefined) {
+    if (values.recall !== 'on') throw new Refusal('--recall can only be on: memory turns it off itself', 2);
+    delete config.recallOff;
+  }
+  if (config.recallOff !== undefined) console.error(`Recall is off: ${config.recallOff.reason}. Run memory init --recall on to turn it on.`);
   const plan = buildConsentPlan(config, data);
   console.log(JSON.stringify(plan, null, 2));
   const added = config.consent === undefined ? [] : uncovered(config);
@@ -668,6 +694,7 @@ function sweepCommand(data: string, cwd: string, due: boolean): void {
     if (db === null) continue;
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
+      expireEpisodes(db);
     } finally {
       db.close();
     }
@@ -706,7 +733,7 @@ function sessionStart(data: string): void {
     // A session started with --agent names its agent; one that may never get the slice gets none here either.
     if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
-    if (!consented(config)) return;
+    if (!recallOn(config)) return;
     if (input['source'] === 'compact') {
       try {
         afterCompaction(data, input);
@@ -738,7 +765,7 @@ function subagentStart(data: string): void {
     const input = hookInput();
     const type = input['agent_type'];
     const config = loadConfig(data);
-    if (!consented(config) || typeof type !== 'string' || !subagentAllowed(config, type)) return;
+    if (!recallOn(config) || typeof type !== 'string' || !subagentAllowed(config, type)) return;
     const id = (v: unknown) => (typeof v === 'string' && v !== '' ? v : 'unknown');
     let slice: ReturnType<typeof hookSlice>;
     const withheld: Withheld[] = [];
@@ -775,12 +802,48 @@ function pointOfActionHook(data: string): void {
   }
 }
 
-/** The PostToolUseFailure hook on Bash; see `failureRecall`. Silent on any failure. */
+/** The PostToolUseFailure hook on Bash: failure recall, then the failing-command episode when its opt-in is on. Silent on any failure. */
 function failureRecallHook(data: string): void {
+  const input = hookInput();
   try {
-    process.stdout.write(failureRecall(data, hookInput(), (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+    process.stdout.write(failureRecall(data, input, (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
   } catch {
-    // Silent by design: advisory memory never costs a tool call.
+    // A hook never fails the tool call.
+  }
+  try {
+    recordEpisode(data, input);
+  } catch {
+    // A busy or unreadable store loses one episode, never the command.
+  }
+}
+
+/** The PostToolUse hook on Bash; see `commandPassed`. Silent on any failure. */
+function commandPassedHook(data: string): void {
+  try {
+    process.stdout.write(commandPassed(data, hookInput()));
+  } catch {
+    // A hook never fails the tool call.
+  }
+}
+
+/** `memory ci`: repair proposals from failed CI runs that a later run fixed. */
+function ciCommand(data: string, cwd: string): void {
+  for (const line of captureCi(data, setUp(data), cwd)) console.log(line);
+}
+
+/** `memory reverts`: counts the reverts of commits memory linked items to, the scan the PostToolUse hook runs after a `git revert`. */
+function revertsCommand(data: string, cwd: string): void {
+  const config = setUp(data);
+  if (!covers(config, 'failures')) throw new Refusal('your consent does not cover reverts yet; run memory init and confirm');
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null) throw new Refusal(context.reason);
+  const db = openStore(tenantFile(data, context.tenant), false);
+  if (db === null) return console.log('nothing to count');
+  try {
+    const message = revertMessage(data, config, scanReverts(db, cwd));
+    console.log(message === '' ? 'no new memory-linked reverts' : (JSON.parse(message) as { systemMessage: string }).systemMessage);
+  } finally {
+    db.close();
   }
 }
 
@@ -1061,6 +1124,12 @@ async function main(argv: string[]): Promise<void> {
       return pointOfActionHook(data);
     case 'failure-recall':
       return failureRecallHook(data);
+    case 'command-passed':
+      return commandPassedHook(data);
+    case 'ci':
+      return ciCommand(data, process.cwd());
+    case 'reverts':
+      return revertsCommand(data, process.cwd());
     case 'pre-compact':
       return preCompactHook(data);
     case 'capture':

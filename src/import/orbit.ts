@@ -11,7 +11,7 @@ import { inside } from './silos.ts';
  */
 export interface OrbitFinding {
   /** `lesson` or `observation`. */
-  kind: 'lesson' | 'observation';
+  kind: 'lesson' | 'observation' | 'repair';
   statement: string;
   type: string;
   /** The run the finding rests on: its newest supporting run for a lesson. */
@@ -23,7 +23,12 @@ export interface OrbitFinding {
   checks: string[];
   /** Distinct runs that contradicted the lesson. */
   contradictions: number;
+  /** For a repair (#18): the evidence source it carries, naming both runs and the `passed-after:` marker. */
+  evidence?: string;
 }
+
+/** The states of a run that ended without a failure; any other state is a failed run. */
+const PASSED = /^(?:passed|succeeded|success|completed|done)$/i;
 
 const TYPES: Record<string, string> = { practice: 'convention', convention: 'convention', hazard: 'hazard', 'failure-pattern': 'failure-pattern', 'repair-recipe': 'repair-recipe' };
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x !== '') : []);
@@ -84,11 +89,33 @@ export function orbitFindings(path: string): { findings: OrbitFinding[]; unreada
         unreadable.push(`lesson ${n.id}: not JSON`);
       }
     }
+    // The latest failing run of each check, until a later run of that check passes: that pair is a repair (#18).
+    const failing = new Map<string, { run: string; fingerprint: string }>();
     for (const o of observations) {
       try {
         const { checks } = JSON.parse(o.data_json) as { checks?: { check_id?: unknown; signature?: unknown }[] };
         for (const c of checks ?? []) {
-          if (typeof c.check_id !== 'string' || typeof c.signature !== 'string' || c.signature === '') continue;
+          if (typeof c.check_id !== 'string') continue;
+          if (PASSED.test(o.state)) {
+            const failed = failing.get(c.check_id);
+            if (failed === undefined) continue;
+            failing.delete(c.check_id);
+            findings.push({
+              kind: 'repair',
+              statement: `check ${c.check_id} failing with ${failed.fingerprint} => a later Orbit run passed the check (run ${o.run_id} after run ${failed.run})`,
+              type: 'repair-recipe',
+              run: o.run_id,
+              at: new Date(o.created_at).toISOString(),
+              anchorPath: null,
+              fingerprints: [failed.fingerprint],
+              checks: [c.check_id],
+              contradictions: 0,
+              evidence: `orbit failed-run:${failed.run} passed-run:${o.run_id} passed-after:${o.run_id}`,
+            });
+            continue;
+          }
+          if (typeof c.signature !== 'string' || c.signature === '') continue;
+          failing.set(c.check_id, { run: o.run_id, fingerprint: c.signature });
           findings.push({
             kind: 'observation',
             statement: `A run that ended ${o.state}${o.failure_class === null ? '' : ` (${o.failure_class})`} failed check ${c.check_id} with ${c.signature}`,

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileLines, rangeHash } from '../anchors.ts';
-import { consented, currentConfigDir, loadConfig, subagentAllowed, type Config } from '../config.ts';
+import { recallOn, currentConfigDir, loadConfig, subagentAllowed, type Config } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { git, resolveContext } from '../context.ts';
 import { anchoredItems, type Anchor, type Visible } from '../items.ts';
@@ -33,7 +33,7 @@ interface Touch {
 /** The hook's on switch: the capability is configured on, and the owner's consent covers the injection log. */
 export function enabled(data: string): Config | null {
   const config = loadConfig(data);
-  return consented(config) && config.pointOfAction === true && covers(config, 'injections') ? config : null;
+  return recallOn(config) && config.pointOfAction === true && covers(config, 'injections') ? config : null;
 }
 
 /** The root of the repository holding `abs`, and its path there; null outside one. The deepest existing directory is asked, so a new file works. */

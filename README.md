@@ -209,6 +209,39 @@ Data lives in `~/Library/Application Support/claude-code-memory` on macOS,
 on Linux, or wherever `MEMORY_DATA_DIR` points: `config.json`, one
 `tenants/<name>.sqlite` per tenant, and `person.sqlite`.
 
+### Failures and reverts become proposals
+
+A fixed failure is worth remembering, so memory proposes it. These are always
+proposals: `memory review` and `memory approve` as ever.
+
+- `memory ci` reads this repository's runs with `gh run list`. A failed run
+  followed by a passing run on another commit (same workflow and branch) gives
+  a repair recipe whose evidence names the fingerprint, the fix commit and both
+  runs (`passed-after:<sha>`). Its signature is one line of the failed log,
+  scrubbed of credentials, emails, handles and the repository's committers'
+  names, and normalised; no line fit to recall by means no proposal. A failure
+  with no later pass gives nothing.
+- `memory import --orbit` proposes the same for a check Orbit's observations
+  show failing and then passing. Orbit stores a fingerprint hash, not error
+  text, so these are keyed by it and will not match a Bash error by words.
+- `memory init --failing-commands on --confirm` is a separate opt-in, off by
+  default. With it, a failed Bash command is kept as an episode (scrubbed error
+  line, scrubbed command of at most 160 characters, fingerprint, session, HEAD)
+  for 30 days, and the same command passing later in that session becomes a
+  proposal with `passed-after:<ref>`. Pushes, commits, `gh pr`, `gh issue`,
+  `gh api` and memory's own commands are never captured. With it off, nothing
+  from a session command is stored.
+- Commits and reverts need no opt-in. A `git commit` is linked to the items shown
+  in that session (at a failing command or at the point of action). A revert of
+  that commit counts once as a contradiction of each. Two such reverts less than
+  seven days apart turn recall off; memory says why, `memory init` repeats it and
+  `memory init --recall on` turns it back on. `memory reverts` scans on demand,
+  for reverts made outside a session.
+
+The `PostToolUse` hook on Bash runs after every command: it opens no store for
+one that is not a `git commit`, a `git revert` or (with the opt-in) a command
+with an open episode, and takes the write lock only to write.
+
 ## Reading memory as files
 
 `memory export --markdown <dir>` writes this repository's tenant and the person

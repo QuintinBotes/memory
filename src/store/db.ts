@@ -189,6 +189,38 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     PRIMARY KEY (kind, key, item_id)
   ) WITHOUT ROWID;
   `,
+
+  // v12 - failures and reverts (#18). An episode is one failed session command, scrubbed, kept 30 days (only with the
+  // failing-commands opt-in); commit_items names the items shown in the session that made a commit, and reverts the
+  // reverts of such commits already counted, so one revert is never counted twice.
+  `
+  CREATE TABLE IF NOT EXISTS episodes (
+    id TEXT PRIMARY KEY,
+    session TEXT NOT NULL,
+    command_key TEXT NOT NULL,
+    command TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    head TEXT NOT NULL,
+    at TEXT NOT NULL,
+    repaired_at TEXT,
+    UNIQUE (session, command_key, fingerprint)
+  );
+  CREATE INDEX IF NOT EXISTS idx_episodes_open ON episodes (session, command_key);
+  CREATE TABLE IF NOT EXISTS commit_items (
+    commit_sha TEXT NOT NULL,
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    session TEXT NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (commit_sha, item_id)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS reverts (
+    revert_sha TEXT PRIMARY KEY,
+    reverted_sha TEXT NOT NULL,
+    at TEXT NOT NULL,
+    seen_at TEXT NOT NULL
+  );
+  `,
 ];
 const SECURE_DELETE = 6;
 

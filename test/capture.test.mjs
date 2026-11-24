@@ -237,7 +237,7 @@ test('S6c a version 3 consent covers capture but not embeddings; confirming the 
   assert.match(init.stderr, /Embeddings, with the provider/);
   assert.doesNotMatch(init.stderr, /sent to Anthropic's API/);
   assert.equal(run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 6);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 7);
   assert.equal(run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   assert.equal(vectors(), 1);
 });

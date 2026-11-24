@@ -284,7 +284,7 @@ test('SC-003 a store written before the anchor index is migrated and its existin
   db.close();
   assert.match(context(await write(s, 'src/a.ts', 'one')), /computeTotal rounds/);
   assert.deepEqual(sql(s, 'SELECT item_id, path FROM item_anchors').map((r) => ({ ...r })), [{ item_id: s.hazard, path: 'src/a.ts' }]);
-  assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 11);
+  assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 12);
   sql(s, "UPDATE items SET anchors_json = '[{\"path\":\"src/b.ts\"}]' WHERE id = ?", s.hazard);
   assert.deepEqual(sql(s, 'SELECT path FROM item_anchors').map((r) => ({ ...r })), [{ path: 'src/b.ts' }], 'a later write keeps the index in step');
 });

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Failures and reverts become proposals (#18). `memory ci` reads this
+  repository's GitHub Actions runs with `gh`: a failed run followed by a
+  passing run on another commit gives a `repair-recipe` proposal whose evidence
+  names the fingerprint, the fix commit and both runs, with a
+  `passed-after:<sha>` marker so failure recall labels it verified once
+  approved. Its signature is one scrubbed, normalised line of the failed log
+  that failure recall can match; none that can means no proposal.
+  `memory import --orbit` does the same for a check Orbit's run-end
+  observations show failing and then passing. A new `PostToolUse` hook on Bash
+  (`command-passed`) turns a command that fails and then passes in a session
+  into a proposal, only with the new opt-in `memory init --failing-commands on`:
+  the failed command is kept as a scrubbed episode for 30 days (removed by the
+  sweep, by the next failure and by `memory purge`). The hook also links a
+  `git commit` to the items shown in the session and counts a `git revert` of
+  that commit once as a contradiction of them; `memory reverts` does the same
+  scan on demand. Two such reverts within seven days turn recall off
+  (`recallOff` in config.json) until `memory init --recall on`. Consent plan 7
+  adds the `failures` category; schema 12 adds `episodes`, `commit_items` and
+  `reverts`.
 - Failure recall at the failing command (#15): a `PostToolUseFailure` hook on
   Bash shows the failure patterns and repair recipes whose signature (the
   statement up to ` => `, at least two words that are not common or
