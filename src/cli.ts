@@ -46,6 +46,7 @@ import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
+import { failureRecall, weakSignature } from './hooks/failure.ts';
 import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
 import { capture, captureWanted } from './capture/capture.ts';
 import { HOOK_BUSY_MS, openStore } from './store/db.ts';
@@ -123,6 +124,9 @@ const USAGE = `usage: memory <command>
   point-of-action
       the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
       agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
+  failure-recall
+      the PostToolUseFailure hook on Bash: the failure patterns and repair recipes whose signature (the statement up to ' => ') the error carries, once
+      per agent and fingerprint, within 120 tokens. A repeat after that counts as a contradiction. Needs no opt-in; stores no error text
   pre-compact
       the PreCompact hook: at most 1,000 characters of the items shown at the point of action this session
   capture [--foreground]
@@ -312,6 +316,9 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
     if (why !== null) throw new Refusal(`not remembered: ${what} is refused because ${why}`);
   }
 
+  if ((values.type === 'failure-pattern' || values.type === 'repair-recipe') && weakSignature(statement)) {
+    console.error("memory: this will never be recalled at a failing command: its signature (the statement up to ' => ') has fewer than two words other than error, failed, fail, warning, exit, code and placeholders such as paths and numbers");
+  }
   const anchors = values.anchor === undefined ? [] : [anchorAt(cwd, values.anchor)];
   const tenant = personal ? '' : context.tenant!;
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';
@@ -768,6 +775,15 @@ function pointOfActionHook(data: string): void {
   }
 }
 
+/** The PostToolUseFailure hook on Bash; see `failureRecall`. Silent on any failure. */
+function failureRecallHook(data: string): void {
+  try {
+    process.stdout.write(failureRecall(data, hookInput(), (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+  } catch {
+    // Silent by design: advisory memory never costs a tool call.
+  }
+}
+
 /** The PreCompact hook: the items shown at the point of action this session, so the summary can keep them. */
 function preCompactHook(data: string): void {
   try {
@@ -1043,6 +1059,8 @@ async function main(argv: string[]): Promise<void> {
       return subagentStart(data);
     case 'point-of-action':
       return pointOfActionHook(data);
+    case 'failure-recall':
+      return failureRecallHook(data);
     case 'pre-compact':
       return preCompactHook(data);
     case 'capture':

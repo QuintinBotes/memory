@@ -206,6 +206,17 @@ export function anchoredUnder(db: DatabaseSync, tenant: string, repository: stri
   return items.filter((i) => i.anchors.some(inside));
 }
 
+/** The id and statement of each active failure pattern and repair recipe this repository may see, and nothing else of them. */
+export function failureStatements(db: DatabaseSync, tenant: string, repository: string, owner: string): { id: string; statement: string }[] {
+  return db
+    .prepare(`SELECT id, statement FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED} AND type IN ('failure-pattern', 'repair-recipe') AND ${TENANT_SCOPE}`)
+    .all(tenant, repository, owner) as { id: string; statement: string }[];
+}
+
+/** The active items of these ids, whole, as the slice shows them. */
+export const itemsById = (db: DatabaseSync, ids: string[]): Visible[] =>
+  ids.length === 0 ? [] : visible(db.prepare(`${SELECT} AND id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as unknown as Row[]);
+
 export function personItems(db: DatabaseSync): Visible[] {
   return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all() as unknown as Row[]);
 }

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Failure recall at the failing command (#15): a `PostToolUseFailure` hook on
+  Bash shows the failure patterns and repair recipes whose signature (the
+  statement up to ` => `, at least two words that are not common or
+  placeholders) is in one line of the error, within 120 tokens, once per item
+  per fingerprint per agent. The error is fingerprinted with a copy of Orbit's
+  failure fingerprint, check id fixed to `bash`. A recipe whose evidence has a
+  `passed-after:<ref>` source is labelled `verified`. A repeat in the same
+  session and agent counts once per session as a contradiction. Interrupts
+  print nothing, and a failure with nothing to show takes no write lock. Needs
+  no opt-in and no new consent category: it stores no error text, and its
+  ledger is made on first use.
+
 ## [0.6.0] - 2026-11-24
 
 ### Added
