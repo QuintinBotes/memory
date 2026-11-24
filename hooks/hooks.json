@@ -1,5 +1,5 @@
 {
-  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget. With pointOfAction on in config, items anchored to code appear when an agent reads or edits that code instead. At Stop and SessionEnd it captures lessons and decisions from the session, in a detached process.",
+  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget. With pointOfAction on in config, items anchored to code appear when an agent reads or edits that code instead. When a Bash command fails with an error a failure pattern or repair recipe names, it appears beside the error. At Stop and SessionEnd it captures lessons and decisions from the session, in a detached process.",
   "hooks": {
     "SessionStart": [
       {
@@ -31,6 +31,18 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" point-of-action",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" failure-recall",
             "timeout": 2
           }
         ]

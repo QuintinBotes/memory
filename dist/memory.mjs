@@ -692,10 +692,10 @@ function isNegated(text2, index) {
   const before = text2.slice(0, index);
   let clauseStart = -1;
   for (const mark of [".", ";", ":", "!", "?", "\n", ","]) clauseStart = Math.max(clauseStart, before.lastIndexOf(mark));
-  const words2 = before.slice(clauseStart + 1).toLowerCase().split(/\s+/).map((w) => w.replace(/^[^\p{L}']+|[^\p{L}']+$/gu, "")).filter(Boolean).slice(-NEGATION_REACH);
-  for (let i = words2.length - 1; i >= 0; i--) {
-    if (isNegation(words2[i], words2[i - 1])) return true;
-    if (!NEGATION_FILLER.has(words2[i])) return false;
+  const words3 = before.slice(clauseStart + 1).toLowerCase().split(/\s+/).map((w) => w.replace(/^[^\p{L}']+|[^\p{L}']+$/gu, "")).filter(Boolean).slice(-NEGATION_REACH);
+  for (let i = words3.length - 1; i >= 0; i--) {
+    if (isNegation(words3[i], words3[i - 1])) return true;
+    if (!NEGATION_FILLER.has(words3[i])) return false;
   }
   return false;
 }
@@ -953,6 +953,10 @@ function anchoredUnder(db, tenant, repository, owner, target, depth = Infinity) 
   const inside4 = (a) => target.includes("#") ? a.path === file && a.symbol?.startsWith(target) === true : a.path === target || a.path.startsWith(`${target}/`) && a.path.slice(target.length + 1).split("/").length <= depth;
   return items.filter((i) => i.anchors.some(inside4));
 }
+function failureStatements(db, tenant, repository, owner) {
+  return db.prepare(`SELECT id, statement FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED} AND type IN ('failure-pattern', 'repair-recipe') AND ${TENANT_SCOPE}`).all(tenant, repository, owner);
+}
+var itemsById = (db, ids) => ids.length === 0 ? [] : visible(db.prepare(`${SELECT} AND id IN (${ids.map(() => "?").join(", ")})`).all(...ids));
 function personItems(db) {
   return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all());
 }
@@ -2385,17 +2389,17 @@ function related(data, config, context, cwd, target, depth) {
 }
 
 // src/recall/visible.ts
-function withTextRatio(items, matches) {
-  const best = Math.min(0, ...items.map((i) => matches.get(i.id) ?? 0));
+function withTextRatio(items, matches2) {
+  const best = Math.min(0, ...items.map((i) => matches2.get(i.id) ?? 0));
   return items.map((item) => {
-    const bm25 = matches.get(item.id);
+    const bm25 = matches2.get(item.id);
     return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
   });
 }
 function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = []) {
   const out = [];
   const instructions = withheld === null ? null : loadInstructions(cwd, currentConfigDir());
-  const add = (items, matches) => void out.push(...withTextRatio(items, matches));
+  const add = (items, matches2) => void out.push(...withTextRatio(items, matches2));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const file = tenantFile(data, context.tenant);
     const db = openStore(file, false, busyMs);
@@ -3459,9 +3463,44 @@ function declineSupersession(db, p) {
   }
 }
 
-// src/hooks/point-of-action.ts
-import { existsSync as existsSync8, readFileSync as readFileSync9, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute6, join as join8, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
+// src/fingerprint.ts
+import { createHash as createHash5 } from "node:crypto";
+var MAX_LINE = 400;
+var MAX_SCANNED_LINES = 2e3;
+var MAX_CHARS = 1e6;
+var ANSI = /\u001B\[[0-9;?]*[ -/]*[@-~]|\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u001B[@-Z\\-_]/g;
+var RELEVANT = /\b(error|errors|fail|failed|failure|failing|exception|assert|assertion|assertionerror|panic|fatal|expected|received|not ok|typeerror|referenceerror|syntaxerror|rangeerror|cannot find|enoent|eacces|traceback|unhandled|timeout|timed out|refused|denied|undefined is not|is not a function|is not defined)\b|[✗✖×]|^\s*FAIL\b|^\s*●|^\s*not ok\b/i;
+var SUMMARY = /\b\d+\s+(?:passed|failed|skipped|total|todo|pending|passing|failing)\b|\b(?:tests?|test files|suites?|duration|time|snapshots?)\s*:/i;
+var STACK_FRAME = /^\s+at\s|^\s+\S+:\d+(?::\d+)?\s*$|^\s*File ".+", line \d+/;
+var stripAnsi = (text2) => text2.replace(ANSI, "");
+function normalizeLine(line) {
+  const s = stripAnsi(line).replace(/\r/g, "").replace(/(?:\/private)?\/var\/folders\/[^\s'"():]+/g, "<tmp>").replace(/(?:\/private)?\/tmp\/[^\s'"():]+/g, "<tmp>").replace(/\b(?:orbit|tmp|temp)[-_.][A-Za-z0-9]{6,}\b/g, "<tmp>").replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, "<time>").replace(/\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b/g, "<time>").replace(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}(?:,?\s+\d{4})?\b/g, "<time>").replace(/\b1[5-9]\d{11}\b/g, "<time>").replace(/\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?|µs|us|ns|seconds?|secs?|s|minutes?|mins?)\b/gi, "<dur>").replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<uuid>").replace(/\b0x[0-9a-f]+\b/gi, "<hex>").replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b/gi, "<hex>").replace(/\b\d{7,}\b/g, "<n>").replace(/\b(pid|process|port)\s*[:=]?\s*\d+\b/gi, "$1 <n>").replace(/\b(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d{2,5}\b/g, "$1:<port>").replace(/(?<![\w:/.~<>-])\/(?:[^\s:'"()<>[\]]+\/)+[^\s:'"()<>[\]]+/g, (m) => `<path>/${m.split("/").filter(Boolean).slice(-2).join("/")}`).replace(/(\.[A-Za-z0-9]{1,6}):\d+(?::\d+)?/g, "$1:<n>").replace(/\b(line|col|column|ln)\s+\d+\b/gi, "$1 <n>").replace(/\((\d+):(\d+)\)/g, "(<n>:<n>)").replace(/\s+/g, " ").trim();
+  return s.length > MAX_LINE ? s.slice(0, MAX_LINE) : s;
+}
+function fingerprintFailure(output) {
+  const lines2 = stripAnsi(output.slice(-MAX_CHARS)).split("\n").slice(-MAX_SCANNED_LINES);
+  const picked = [];
+  let expectFrame = false;
+  for (const raw of lines2) {
+    const line = raw.replace(/\r$/, "");
+    if (!line.trim()) {
+      expectFrame = false;
+    } else if (RELEVANT.test(line) && !SUMMARY.test(line)) {
+      picked.push(normalizeLine(line));
+      expectFrame = true;
+    } else if (expectFrame && STACK_FRAME.test(line)) {
+      picked.push(normalizeLine(line));
+      expectFrame = false;
+    } else {
+      expectFrame = false;
+    }
+  }
+  let signature = [...new Set(picked.filter(Boolean))].sort();
+  if (signature.length === 0) {
+    signature = lines2.map(normalizeLine).filter(Boolean).slice(-3).sort();
+  }
+  return { fingerprint: `fp:${createHash5("sha256").update(JSON.stringify(["bash", signature])).digest("hex").slice(0, 16)}`, signature };
+}
 
 // src/store/ledger.ts
 var AGENT_SESSION_BUDGET = 600;
@@ -3499,10 +3538,78 @@ function resetMain(db, session) {
   });
 }
 
+// src/hooks/failure.ts
+var FAILURE_BUDGET = 120;
+var CREATE2 = `CREATE TABLE IF NOT EXISTS failure_ledger (
+  session TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  contradicted INTEGER NOT NULL DEFAULT 0,
+  at TEXT NOT NULL,
+  PRIMARY KEY (session, agent, fingerprint, item_id)
+)`;
+var KEEP_DAYS2 = 14;
+var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
+var words2 = (line) => line.toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter((w) => w !== "");
+var SIGNATURE_END = " => ";
+function matches(statement, signature) {
+  const mine = new Set(words2(normalizeLine(statement.split(SIGNATURE_END)[0])));
+  return mine.size >= 2 && signature.some((line) => [...mine].every((w) => line.has(w)));
+}
+var verified = (db, id) => db.prepare("SELECT source_ref FROM evidence WHERE item_id = ?").all(id).some((e) => /(^|\s)passed(\s|$)/.test(e.source_ref));
+function failureRecall(data, input2, log) {
+  const config = loadConfig(data);
+  const agentType = str(input2["agent_type"]);
+  const error = str(input2["error"]);
+  if (!consented(config) || input2["tool_name"] !== "Bash" || input2["is_interrupt"] === true || error === void 0) return "";
+  if (agentType !== void 0 && !subagentAllowed(config, agentType)) return "";
+  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  if (context.tenant === null || context.repository === null || context.owner === null) return "";
+  const { fingerprint, signature } = fingerprintFailure(error);
+  const lines2 = signature.map((l) => new Set(words2(l)));
+  const session = str(input2["session_id"]) ?? "unknown";
+  const agent = str(input2["agent_id"]) ?? MAIN_AGENT;
+  const base2 = { session, agent, via: "failure-recall", at: (/* @__PURE__ */ new Date()).toISOString() };
+  try {
+    const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
+    if (db === null) return "";
+    try {
+      const result = inTransaction(db, () => {
+        db.exec(CREATE2);
+        const shown = db.prepare("SELECT item_id FROM failure_ledger WHERE session = ? AND agent = ? AND fingerprint = ? AND contradicted = 0").all(session, agent, fingerprint);
+        const seen = db.prepare("SELECT 1 FROM failure_ledger WHERE session = ? AND agent = ? AND fingerprint = ? LIMIT 1").get(session, agent, fingerprint);
+        if (seen !== void 0) {
+          for (const { item_id } of shown) db.prepare("UPDATE items SET contradictions = contradictions + 1 WHERE id = ?").run(item_id);
+          db.prepare("UPDATE failure_ledger SET contradicted = 1 WHERE session = ? AND agent = ? AND fingerprint = ?").run(session, agent, fingerprint);
+          return { text: "", shown: [] };
+        }
+        const found = failureStatements(db, context.tenant, context.repository, context.owner).filter((i) => matches(i.statement, lines2));
+        const items = itemsById(db, found.map((i) => i.id)).map((i) => verified(db, i.id) ? { ...i, type: `${i.type} (verified)` } : i);
+        const slice = chooseSlice(items, FAILURE_BUDGET);
+        const at2 = (/* @__PURE__ */ new Date()).toISOString();
+        for (const i of slice.shown) db.prepare("INSERT INTO failure_ledger (session, agent, fingerprint, item_id, at) VALUES (?, ?, ?, ?, ?)").run(session, agent, fingerprint, i.id, at2);
+        db.prepare("DELETE FROM failure_ledger WHERE at < ?").run(new Date(Date.now() - KEEP_DAYS2 * 864e5).toISOString());
+        return slice;
+      });
+      if (result.text === "") return "";
+      if (covers(config, "injections")) log(result.shown.map((i) => ({ event: "injected", ...base2, item: i.id, anchors: [], tokens: estimate(row(i)) })));
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: result.text } });
+    } finally {
+      db.close();
+    }
+  } catch {
+    if (covers(config, "injections")) log([{ event: "skipped", ...base2 }]);
+    return "";
+  }
+}
+
 // src/hooks/point-of-action.ts
+import { existsSync as existsSync8, readFileSync as readFileSync9, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute6, join as join8, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
-var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
+var str2 = (v) => typeof v === "string" && v !== "" ? v : void 0;
 var num = (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : void 0;
 function enabled(data) {
   const config = loadConfig(data);
@@ -3520,7 +3627,7 @@ function locate(abs) {
 function touched2(input2, cwd) {
   const tool = input2["tool_name"];
   const args = input2["tool_input"] ?? {};
-  const file = str(args["file_path"]) ?? str(args["notebook_path"]);
+  const file = str2(args["file_path"]) ?? str2(args["notebook_path"]);
   if (file === void 0 || typeof tool !== "string") return null;
   const at2 = locate(resolve5(cwd, file));
   if (at2 === null) return null;
@@ -3531,11 +3638,11 @@ function touched2(input2, cwd) {
     const limit = num(args["limit"]);
     if (offset !== void 0 || limit !== void 0) ranges = [[offset ?? 1, limit === void 0 ? Infinity : (offset ?? 1) + limit - 1]];
   } else if (tool === "Edit") {
-    replaced = [str(args["old_string"])].filter((s) => s !== void 0);
+    replaced = [str2(args["old_string"])].filter((s) => s !== void 0);
     ranges = [];
   } else if (tool === "MultiEdit") {
     const edits2 = Array.isArray(args["edits"]) ? args["edits"] : [];
-    replaced = edits2.map((e) => str(e["old_string"])).filter((s) => s !== void 0);
+    replaced = edits2.map((e) => str2(e["old_string"])).filter((s) => s !== void 0);
     ranges = [];
   } else if (tool !== "Write" && tool !== "NotebookEdit") {
     return null;
@@ -3581,15 +3688,15 @@ function anchored(items, root, t) {
 }
 function pointOfAction(data, input2, log) {
   const config = enabled(data);
-  const agentType = str(input2["agent_type"]);
+  const agentType = str2(input2["agent_type"]);
   if (config === null || agentType !== void 0 && !subagentAllowed(config, agentType)) return "";
-  const cwd = str(input2["cwd"]) ?? process.cwd();
+  const cwd = str2(input2["cwd"]) ?? process.cwd();
   const hit = touched2(input2, cwd);
   if (hit === null) return "";
   const context = resolveContext(hit.root, config, currentConfigDir());
   if (context.tenant === null || context.repository === null || context.owner === null) return "";
-  const session = str(input2["session_id"]) ?? "unknown";
-  const agent = str(input2["agent_id"]) ?? MAIN_AGENT;
+  const session = str2(input2["session_id"]) ?? "unknown";
+  const agent = str2(input2["agent_id"]) ?? MAIN_AGENT;
   const base2 = { session, agent, via: "point-of-action", at: (/* @__PURE__ */ new Date()).toISOString() };
   try {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
@@ -3617,9 +3724,9 @@ function pointOfAction(data, input2, log) {
 }
 function preCompact(data, input2) {
   const config = enabled(data);
-  const session = str(input2["session_id"]);
+  const session = str2(input2["session_id"]);
   if (config === null || session === void 0) return "";
-  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  const context = resolveContext(str2(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null) return "";
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return "";
@@ -3640,9 +3747,9 @@ function preCompact(data, input2) {
 }
 function afterCompaction(data, input2) {
   const config = enabled(data);
-  const session = str(input2["session_id"]);
+  const session = str2(input2["session_id"]);
   if (config === null || session === void 0) return;
-  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  const context = resolveContext(str2(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null) return;
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return;
@@ -4257,6 +4364,9 @@ var USAGE = `usage: memory <command>
   point-of-action
       the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
       agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
+  failure-recall
+      the PostToolUseFailure hook on Bash: the failure patterns and repair recipes whose signature (the statement up to ' => ') the error carries, once
+      per agent and fingerprint, within 120 tokens. A repeat after that counts as a contradiction. Needs no opt-in; stores no error text
   pre-compact
       the PreCompact hook: at most 1,000 characters of the items shown at the point of action this session
   capture [--foreground]
@@ -4814,6 +4924,13 @@ function pointOfActionHook(data) {
   } catch {
   }
 }
+function failureRecallHook(data) {
+  try {
+    process.stdout.write(failureRecall(data, hookInput(), (lines2) => appendInjections(data, lines2.map((l) => `${JSON.stringify(l)}
+`))));
+  } catch {
+  }
+}
 function preCompactHook(data) {
   try {
     process.stdout.write(preCompact(data, hookInput()));
@@ -5070,6 +5187,8 @@ async function main(argv) {
       return subagentStart(data);
     case "point-of-action":
       return pointOfActionHook(data);
+    case "failure-recall":
+      return failureRecallHook(data);
     case "pre-compact":
       return preCompactHook(data);
     case "capture":

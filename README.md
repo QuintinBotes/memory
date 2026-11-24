@@ -167,6 +167,24 @@ characters of the items shown this session, and a session start after a
 compaction lets the main agent be shown its items again. Edits made through
 Bash bypass the hook; diff recall still sees them at review.
 
+### Recall at a failing command
+
+No switch and no extra consent: it stores no error text. A `PostToolUseFailure`
+hook on Bash fingerprints the error with a copy of Orbit's failure
+fingerprint (failure-relevant lines, normalised, sorted and deduplicated, at
+most the last 2,000 lines) and shows the active `failure-pattern` and
+`repair-recipe` items whose signature the error carries, beside the error,
+within 120 tokens. An item's signature is its statement up to ` => `, or all of
+it without one, so write a recipe as `ERR_MODULE_NOT_FOUND esbuild => run npm ci in the
+repository root`. It matches when all its words (at least two) are in one
+normalised line of the error. A recipe whose evidence has a source containing
+the word `passed` (the command passed after it) is labelled `(verified)`.
+Each fingerprint is shown once per agent per session; the same fingerprint
+failing again prints nothing and counts once as a contradiction of what was
+shown. An interrupted command prints nothing. The ledger holds the
+fingerprint's hash and item ids, never the error, and goes with an item on a
+purge. Shown items are logged by id as for point-of-action recall.
+
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your
 Claude Code permissions.
@@ -512,8 +530,8 @@ each proposal's statement in quotes.
 | A diff, at review or commit | 600 tokens |
 
 A hook with nothing to say prints nothing. The slice at session start, after
-a compaction and at a subagent's start, a diff at review and, with
-`pointOfAction` on, reading or editing anchored code exist so far; the other
+a compaction and at a subagent's start, a diff at review, a failing
+command and, with `pointOfAction` on, reading or editing anchored code exist so far; the other
 moments arrive with later slices.
 
 ## Measuring memory
