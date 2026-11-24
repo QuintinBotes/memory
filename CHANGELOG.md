@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PreCompact` prints at most 1,000 characters of what was shown, and a
   session start after a compaction resets the main agent's ledger. The ledger
   is a table in the tenant file, created on first use.
+  The hook finds items through an indexed anchor-path table (schema version 9,
+  kept by triggers and backfilled on open), so it loads only the items anchored
+  at the touched path or a directory above it, and none for an unanchored path.
 - Review precedents reach every reviewer (#9): `memory import` reads Review
   Voice's store read-only (`decisions` under `imports`) and proposes a
   `precedent` for each owner `keep`, `dismiss`, `never_flag` and `rewrite`,

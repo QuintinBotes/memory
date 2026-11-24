@@ -4,7 +4,7 @@ import { fileLines, rangeHash } from '../anchors.ts';
 import { consented, currentConfigDir, loadConfig, subagentAllowed, type Config } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { git, resolveContext } from '../context.ts';
-import { tenantItems, type Anchor, type Visible } from '../items.ts';
+import { anchoredItems, type Anchor, type Visible } from '../items.ts';
 import { ITEMS_LABEL, fence, safe } from '../render/rows.ts';
 import { chooseSlice, estimate, row } from '../slice.ts';
 import { HOOK_BUSY_MS, openStore } from '../store/db.ts';
@@ -101,7 +101,7 @@ function anchorHit(a: Anchor, t: Touch, file: () => string | null): boolean {
   });
 }
 
-/** The items whose anchors the call touches, from one pass over the tenant's active items. */
+/** The items whose anchors the call touches, from the few already found anchored at its path. */
 function anchored(items: Visible[], root: string, t: Touch): Visible[] {
   let text: string | null | undefined;
   const read = (): string | null => {
@@ -138,7 +138,7 @@ export function pointOfAction(data: string, input: Input, log: Log): string {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
     if (db === null) return '';
     try {
-      const found = anchored(tenantItems(db, context.tenant, context.repository, context.owner), hit.root, hit.touch);
+      const found = anchored(anchoredItems(db, context.tenant, context.repository, context.owner, hit.touch.path), hit.root, hit.touch);
       if (found.length === 0) return '';
       const byId = new Map(found.map((i) => [i.id, i]));
       const result = claim(db, session, agent, found.map((i) => i.id), (unseen, left) => {

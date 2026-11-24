@@ -937,6 +937,14 @@ var PERSON_SCOPE = "tenant = '' AND scope IN ('person', 'global')";
 function tenantItems(db, tenant, repository, owner) {
   return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE}`).all(tenant, repository, owner));
 }
+var anchorPaths = (path) => path.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+function anchoredItems(db, tenant, repository, owner, path) {
+  const paths = anchorPaths(path);
+  const marks = paths.map(() => "?").join(", ");
+  const ids = db.prepare(`SELECT DISTINCT item_id FROM item_anchors WHERE path IN (${marks})`).all(...paths).map((r) => r.item_id);
+  if (ids.length === 0) return [];
+  return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE} AND id IN (${ids.map(() => "?").join(", ")})`).all(tenant, repository, owner, ...ids));
+}
 function personItems(db) {
   return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all());
 }
@@ -1589,7 +1597,29 @@ var MIGRATIONS = [
   (db) => {
     const has = db.prepare("PRAGMA table_info(evidence)").all().some((c) => c.name === "taint");
     if (!has) db.exec("ALTER TABLE evidence ADD COLUMN taint TEXT;");
-  }
+  },
+  // v9 - anchor paths (#14, SC-003): one row per item and anchor path, kept by triggers so every writer of
+  // `anchors_json` maintains it, and backfilled for stores written before it. The point-of-action hook looks
+  // items up by path here instead of parsing every item's anchors. IF NOT EXISTS, so a rolled-back store reopens.
+  `
+  CREATE TABLE IF NOT EXISTS item_anchors (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    PRIMARY KEY (path, item_id)
+  ) WITHOUT ROWID;
+  CREATE TRIGGER IF NOT EXISTS item_anchors_insert AFTER INSERT ON items BEGIN
+    INSERT OR IGNORE INTO item_anchors SELECT NEW.id, json_extract(value, '$.path') FROM json_each(NEW.anchors_json)
+      WHERE json_extract(value, '$.path') IS NOT NULL;
+  END;
+  CREATE TRIGGER IF NOT EXISTS item_anchors_update AFTER UPDATE OF anchors_json ON items BEGIN
+    DELETE FROM item_anchors WHERE item_id = NEW.id;
+    INSERT OR IGNORE INTO item_anchors SELECT NEW.id, json_extract(value, '$.path') FROM json_each(NEW.anchors_json)
+      WHERE json_extract(value, '$.path') IS NOT NULL;
+  END;
+  DELETE FROM item_anchors;
+  INSERT OR IGNORE INTO item_anchors SELECT items.id, json_extract(a.value, '$.path') FROM items, json_each(items.anchors_json) a
+    WHERE items.anchors_json != '[]' AND json_extract(a.value, '$.path') IS NOT NULL;
+  `
 ];
 var SECURE_DELETE = 6;
 var WRITE_BUSY_MS = 5e3;
@@ -3181,7 +3211,7 @@ function pointOfAction(data, input2, log) {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
     if (db === null) return "";
     try {
-      const found = anchored(tenantItems(db, context.tenant, context.repository, context.owner), hit.root, hit.touch);
+      const found = anchored(anchoredItems(db, context.tenant, context.repository, context.owner, hit.touch.path), hit.root, hit.touch);
       if (found.length === 0) return "";
       const byId = new Map(found.map((i) => [i.id, i]));
       const result = claim(db, session, agent, found.map((i) => i.id), (unseen, left) => {

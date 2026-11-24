@@ -258,3 +258,52 @@ test('hooks.json registers PreToolUse on the five file tools and PreCompact, eac
   assert.match(hooks.PreCompact[0].hooks[0].command, /memory\.mjs" pre-compact$/);
   assert.ok(hooks.PreCompact[0].hooks[0].timeout <= 2);
 });
+
+// The hook finds items through the anchor-path index (#14, SC-003), so its work does not grow with the store.
+const write = (s, file, session) => hook(s, 'Write', { file_path: join(s.acmeApi, file), content: 'x' }, { session_id: session });
+
+test('SC-003 the hook loads only the rows anchored at the touched path: unrelated rows are never read, and an unanchored path loads none', async () => {
+  const s = seeded();
+  const db = new DatabaseSync(tenantFile(s));
+  // A row the hook loaded would fail to parse and make it skip; the triggers are dropped so the index does not see the damage.
+  db.exec('DROP TRIGGER item_anchors_insert; DROP TRIGGER item_anchors_update;');
+  for (let n = 0; n < 50; n++) {
+    db.prepare(`INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, status, authority, origin_trust, anchors_json, valid_from, created_at)
+      VALUES (?, 'acme', 'repository', 'acme/api', 'hazard', ?, ?, 'active', 'advisory', 'owner', '{not json', 'x', 'x')`).run(`bad-${n}`, `Unrelated ${n}`, `k${n}`);
+  }
+  db.close();
+  assert.match(context(await write(s, 'src/a.ts', 'one')), /computeTotal rounds/, 'the matching item is still found');
+  assert.equal(context(await write(s, 'src/b.ts', 'two')), null);
+  assert.equal(logged(s).filter((l) => l.event === 'skipped').length, 0, 'no unrelated row was parsed');
+});
+
+test('SC-003 a store written before the anchor index is migrated and its existing anchors backfilled', async () => {
+  const s = seeded();
+  const db = new DatabaseSync(tenantFile(s));
+  db.exec('DROP TRIGGER item_anchors_insert; DROP TRIGGER item_anchors_update; DROP TABLE item_anchors; PRAGMA user_version = 8;');
+  db.close();
+  assert.match(context(await write(s, 'src/a.ts', 'one')), /computeTotal rounds/);
+  assert.deepEqual(sql(s, 'SELECT item_id, path FROM item_anchors').map((r) => ({ ...r })), [{ item_id: s.hazard, path: 'src/a.ts' }]);
+  assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 9);
+  sql(s, "UPDATE items SET anchors_json = '[{\"path\":\"src/b.ts\"}]' WHERE id = ?", s.hazard);
+  assert.deepEqual(sql(s, 'SELECT path FROM item_anchors').map((r) => ({ ...r })), [{ path: 'src/b.ts' }], 'a later write keeps the index in step');
+});
+
+test('SC-003 the index finds the same items as comparing every anchor with the touched path', async () => {
+  const s = seeded();
+  const anchors = { h1: ['src/a.ts'], h2: ['src/api', 'docs/x.md'], h3: ['src/api/deep/f.ts'], h4: ['src'] };
+  const ids = {};
+  for (const [name, paths] of Object.entries(anchors)) {
+    assert.equal(remember(s.acmeApi, s.data, s.configA, `Hazard ${name} of the totals code`, '--scope', 'repository', '--type', 'hazard', '--anchor', 'src/a.ts:40-60').status, 0);
+    ids[name] = sql(s, 'SELECT id FROM items WHERE statement = ?', `Hazard ${name} of the totals code`)[0].id;
+    sql(s, 'UPDATE items SET anchors_json = ? WHERE id = ?', JSON.stringify(paths.map((path) => ({ path }))), ids[name]);
+  }
+  sql(s, "UPDATE items SET anchors_json = '[]' WHERE id = ?", s.hazard);
+  const hits = (file) => sql(s, "SELECT id, anchors_json FROM items WHERE status = 'active'").filter((r) => JSON.parse(r.anchors_json).some((a) => a.path === file || file.startsWith(`${a.path}/`))).map((r) => r.id).sort();
+  let n = 0;
+  for (const file of ['src/a.ts', 'src/api/deep/f.ts', 'src/apix/q.ts', 'docs/x.md', 'other/z.ts']) {
+    const before = logged(s).length;
+    context(await write(s, file, `s${n++}`));
+    assert.deepEqual(logged(s).slice(before).map((l) => l.item).sort(), hits(file), file);
+  }
+});
