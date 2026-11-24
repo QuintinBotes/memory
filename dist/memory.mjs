@@ -507,7 +507,9 @@ function mentionsRepoTerm(text2, repoTerms) {
 var MAX_STATEMENT = 300;
 var EMAIL = /[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/;
 var HANDLE = /(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/;
-var CONTROL_TOKEN = /<\|[^|>\n]{1,40}\|>|\[\/?INST\]|<<\/?SYS>>|<\/?(?:s|system|assistant|human|im_start|im_end)>|<(?:start|end)_of_turn>|^\s*(?:system|assistant|human)\s*:/i;
+var CONTROL_TOKEN = /<\|[^|>\n]{1,40}\|>|\[\/?INST\]|<<\/?SYS>>|<\/s>|<(?:start|end)_of_turn>/i;
+var ROLE_PREFIX = /^\s*(?:system|assistant|human)\s*:/i;
+var CHAT_TEMPLATE = /<\|im_start\|>[^]*<\|im_end\|>|\[INST\][^]*\[\/INST\]|<<SYS>>[^]*<<\/SYS>>|<start_of_turn>[^]*<end_of_turn>/i;
 var WEBHOOK = /hooks\.slack\.com\/(?:services|workflows|triggers)\/\S*|discord(?:app)?\.com\/api\/webhooks\/\S*/i;
 function namesOrganisation(text2, terms) {
   const visible2 = visibleText(text2);
@@ -515,10 +517,11 @@ function namesOrganisation(text2, terms) {
     (t) => t.length >= 2 && new RegExp(`(?<![\\p{L}\\p{N}_])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu").test(visible2)
   );
 }
-function refusal(text2, organisationTerms2) {
+function refusal(text2, organisationTerms2, owner = false) {
   if (text2.trim().length === 0) return "it is empty";
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(text2)) return "it has a line break or a control character; one item is one line";
-  if (CONTROL_TOKEN.test(visibleText(text2))) return "it carries a model control token or a chat role marker";
+  const outsideCode = visibleText(text2).replace(/`[^`]*`/g, " ");
+  if (owner ? CHAT_TEMPLATE.test(outsideCode) : CONTROL_TOKEN.test(outsideCode) || ROLE_PREFIX.test(outsideCode)) return "it carries a model control token or a chat role marker";
   if (text2.length > MAX_STATEMENT) return `it is ${text2.length} characters; at most ${MAX_STATEMENT}`;
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text2)) return "it carries a private key";
   const labels = Object.keys(redact(text2).counts);
@@ -1135,7 +1138,7 @@ function transcriptEntrypoint(path) {
 }
 function automationReason(env = process.env, transcript) {
   if (isAutomated(env["CLAUDE_CODE_ENTRYPOINT"])) return `entrypoint ${env["CLAUDE_CODE_ENTRYPOINT"]}`;
-  if (env["GITHUB_ACTIONS"] === "true" || env["CI"] === "true" || env["CI"] === "1") return "a CI job";
+  if (env["GITHUB_ACTIONS"] === "true") return "a GitHub Actions job";
   const recorded = transcript === void 0 ? void 0 : transcriptEntrypoint(transcript);
   return isAutomated(recorded) ? `transcript entrypoint ${recorded}` : null;
 }
@@ -1716,7 +1719,7 @@ function keepCandidates(db, context, candidates, from2) {
       trust: "agent",
       ...from2.taint.length === 0 ? {} : { taint: from2.taint.join(";") }
     };
-    const status = quarantineOf({ ...item, status: "proposed" }) === null && from2.taint.length === 0 ? "active" : "proposed";
+    const status = quarantineOf({ ...item, status: "proposed" }) === null ? "active" : "proposed";
     const stored = addItem(db, { ...item, status });
     if (stored.kind === "merged") merged++;
     else if (stored.kind === "inserted") {
@@ -2991,7 +2994,7 @@ function measure(f) {
     }
     if (f.asOwnerItems) {
       withStore((owner) => {
-        for (const a of attacks) if (refusal(a) === null) addItem(owner, base(a, "owner", "active", "remember"));
+        for (const a of attacks) if (refusal(a, void 0, true) === null) addItem(owner, base(a, "owner", "active", "remember"));
         look(renderings(owner));
       });
     }
@@ -3006,7 +3009,7 @@ function measure(f) {
 function benign() {
   return withStore((db) => {
     const statements = Array.from({ length: BENIGN }, (_, i) => `Rule ${i}: kw${i}a kw${i}b kw${i}c kw${i}d kw${i}e belongs to the team`);
-    for (const s of statements) if (refusal(s) === null) addItem(db, base(s, "owner", "active", "remember"));
+    for (const s of statements) if (refusal(s, void 0, true) === null) addItem(db, base(s, "owner", "active", "remember"));
     const active = new Set(db.prepare("SELECT statement FROM items WHERE status = 'active'").all().map((r) => r.statement));
     const shown = renderAll(tenantItems(db, TENANT2, REPO, OWNER));
     return { of: BENIGN, accepted: statements.filter((s) => active.has(s)).length, recalled: statements.filter((s) => shown.includes(safe(s))).length };
@@ -3409,7 +3412,7 @@ async function remember(args, data, cwd) {
     ["the anchor", values.anchor]
   ]) {
     if (text2 === void 0) continue;
-    const why = refusal(text2, terms);
+    const why = refusal(text2, terms, true);
     if (why !== null) throw new Refusal(`not remembered: ${what} is refused because ${why}`);
   }
   const anchors = values.anchor === void 0 ? [] : [anchorAt(cwd, values.anchor)];

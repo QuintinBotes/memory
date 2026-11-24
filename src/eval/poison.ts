@@ -232,7 +232,7 @@ function measure(f: Family): PoisonRow {
     if (f.asOwnerItems) {
       // The same text as the owner's own active items, which is how text copied from code reaches recall.
       withStore((owner) => {
-        for (const a of attacks) if (refusal(a) === null) addItem(owner, base(a, 'owner', 'active', 'remember'));
+        for (const a of attacks) if (refusal(a, undefined, true) === null) addItem(owner, base(a, 'owner', 'active', 'remember'));
         look(renderings(owner));
       });
     }
@@ -249,7 +249,7 @@ function measure(f: Family): PoisonRow {
 function benign(): { of: number; accepted: number; recalled: number } {
   return withStore((db) => {
     const statements = Array.from({ length: BENIGN }, (_, i) => `Rule ${i}: kw${i}a kw${i}b kw${i}c kw${i}d kw${i}e belongs to the team`);
-    for (const s of statements) if (refusal(s) === null) addItem(db, base(s, 'owner', 'active', 'remember'));
+    for (const s of statements) if (refusal(s, undefined, true) === null) addItem(db, base(s, 'owner', 'active', 'remember'));
     const active = new Set((db.prepare("SELECT statement FROM items WHERE status = 'active'").all() as { statement: string }[]).map((r) => r.statement));
     const shown = renderAll(tenantItems(db, TENANT, REPO, OWNER));
     return { of: BENIGN, accepted: statements.filter((s) => active.has(s)).length, recalled: statements.filter((s) => shown.includes(safe(s))).length };

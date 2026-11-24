@@ -354,8 +354,6 @@ test('P10 text with a model control token or a chat role marker is refused at ev
   writeFileSync(join(memFolder, 'MEMORY.md'), CONTROL_TOKENS.map((t) => `- ${t}`).join('\n') + '\n');
 
   for (const t of CONTROL_TOKENS) {
-    const r = remember(s.acmeApi, s.data, s.configA, t, '--scope', 'repository');
-    assert.notEqual(r.status, 0, `remember accepted: ${t}`);
     const p = propose(s, t, { origin: 'external', source: `tok-${CONTROL_TOKENS.indexOf(t)}` });
     assert.equal(p.isError, true, `memory_propose accepted: ${t}`);
   }

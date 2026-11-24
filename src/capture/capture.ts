@@ -173,7 +173,8 @@ export async function capture(data: string, input: Record<string, unknown>): Pro
 
 /**
  * Stores what the filter kept as agent-trust items, merging repeats as evidence. Text that reads as an instruction,
- * and anything from a session that read external content (`taint` names it), waits for the owner as a proposal; the rest is active.
+ * waits for the owner as a proposal; the rest is active. A session that read external content (`taint` names it) only
+ * labels what it kept: the label is evidence, not a reason to queue.
  */
 export function keepCandidates(
   db: DatabaseSync,
@@ -200,7 +201,7 @@ export function keepCandidates(
       trust: 'agent' as const,
       ...(from.taint.length === 0 ? {} : { taint: from.taint.join(';') }),
     };
-    const status = quarantineOf({ ...item, status: 'proposed' }) === null && from.taint.length === 0 ? ('active' as const) : ('proposed' as const);
+    const status = quarantineOf({ ...item, status: 'proposed' }) === null ? ('active' as const) : ('proposed' as const);
     const stored = addItem(db, { ...item, status });
     if (stored.kind === 'merged') merged++;
     else if (stored.kind === 'inserted') {

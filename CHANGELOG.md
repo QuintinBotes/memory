@@ -27,19 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Taint labels (#22, FR-006): evidence records the external content its session
   read (migration 8). `memory_propose` takes `evidence.tainted_by` and names an
   `external` or `bot` source itself; capture reads web fetches, searches and
-  MCP tool calls from the transcript and queues what it keeps for review
-  instead of saving it active. The label shows in review, `memory_get`, search
+  MCP tool calls from the transcript and labels what it keeps; the items stay
+  active, and imperative text is quarantined as before. The label shows in review, `memory_get`, search
   and the session slice, and survives merges and supersession.
 - Automation sessions (#22, FR-008): a session started by automation (headless
-  entrypoint, CI) neither captures nor proposes unless the consent plan names
+  entrypoint, GitHub Actions; a bare `CI=true` is not read) neither captures nor proposes unless the consent plan names
   it (`memory init --automation on`); the plan shows `automationSessions`.
   Consent given before this stays valid.
 
 ### Fixed
 
-- Text carrying a model control token or chat role marker (`<|im_start|>`,
-  `[INST]`, `<<SYS>>`, `</s>`, a leading `System:` or `Assistant:`) was
-  stored by every capture path; the refusal check now refuses it.
+- Text carrying a model control token (`<|im_start|>`, `[INST]`, `<<SYS>>`,
+  `</s>`) or a leading `System:` or `Assistant:` was stored by every capture
+  path; the refusal check now refuses it. Code spans are ignored, and your own
+  `memory remember` is refused only a full chat-template sequence.
 
 ## [0.4.0] - 2026-11-24
 

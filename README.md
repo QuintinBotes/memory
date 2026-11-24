@@ -260,10 +260,11 @@ repository that matches no tenant is skipped: no model call, nothing written.
 - **Off:** `"capture": { "enabled": false }` in `config.json`.
 - **Tainted sessions:** when the transcript shows the session read a web page
   or search (`WebFetch`, `WebSearch`) or called a tool of any MCP server but
-  memory's own, what capture keeps is not saved active: it waits in `memory
-  review` as a proposal, labelled `tainted by web:<host>` or `mcp:<server>`.
+  memory's own, what capture keeps is still saved active, labelled `tainted
+  by web:<host>` or `mcp:<server>` in recall and review. Imperative text from
+  such a session is quarantined as usual.
 - **Automation sessions:** a session started by automation (`claude -p`, the
-  SDK, a CI job) neither captures nor proposes unless the consent plan names
+  SDK, a GitHub Actions job) neither captures nor proposes unless the consent plan names
   them: `memory init --automation on --confirm`. See SECURITY.md for how a
   session is told apart and what that cannot see.
 

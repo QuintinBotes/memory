@@ -23,9 +23,13 @@ no tenant, or in a Claude Code config not bound to that tenant.
   addresses, handles and webhook URLs. Pattern matching cannot recognise a
   credential that does not look like one, such as a plain password written
   in prose. Do not ask memory to remember secrets.
-- **Model control tokens.** Text carrying a special token or chat role marker
-  (`<|im_start|>`, `[INST]`, `<<SYS>>`, `</s>`, a leading `System:`) is refused
-  at every path that stores an item.
+- **Model control tokens.** Text carrying a special token
+  (`<|im_start|>`, `<|endoftext|>`, `[INST]`, `<<SYS>>`, `</s>`) or a leading
+  role prefix (`System:`, `Assistant:`, `Human:`) is refused from the agent,
+  capture and import paths. Backtick code spans are ignored and the bare `<s>`
+  and `<system>` tags are not tokens. Your own `memory remember` is refused
+  only a full chat-template sequence (`<|im_start|>` ... `<|im_end|>`,
+  `[INST]` ... `[/INST]`), so you can write about tokens and roles.
 - **Red-team suite.** `test/poison.test.mjs` replays the published poisoning
   attacks (query-only injection, planted items that fire later, attacks split
   over items, trust laundered through merged evidence, role spoofing, fence
@@ -43,8 +47,9 @@ no tenant, or in a Claude Code config not bound to that tenant.
   `memory_propose` names it (`evidence.tainted_by`, and a source from
   `external` or `bot` automatically); capture reads it from the transcript's
   tool calls: `WebFetch` and `WebSearch` (by host) and any MCP server's tools
-  but memory's own (by server). A tainted capture is queued in `memory review`
-  rather than saved active. The label shows in review, `memory_get`, search
+  but memory's own (by server). Taint is a label: a capture from such a
+  session is still saved active, and imperative text from it is quarantined as
+  usual. The label shows in review, `memory_get`, search
   and the session slice, and is kept through merges and supersession. Limits:
   a page read through a shell command (`curl`, `gh`) is not seen, a tool
   result from inside your tenant is not told from one outside it, and an
@@ -54,7 +59,8 @@ no tenant, or in a Claude Code config not bound to that tenant.
   (`memory init --automation on --confirm`, which changes the plan hash).
   Claude Code gives hooks no field that says a session is headless, so memory
   reads what it leaves: the `CLAUDE_CODE_ENTRYPOINT` it exports (`sdk-*`,
-  `github-action`), `CI=true` or `GITHUB_ACTIONS=true`, and an `entrypoint` it
+  `github-action`), `GITHUB_ACTIONS=true` (a bare `CI=true` is not read: a
+  developer shell often has it), and an `entrypoint` it
   records on transcript lines. This is detection by convention, not a
   guarantee: a process that clears those variables looks like a person, a
   person running `claude -p` looks like automation, and the transcript field

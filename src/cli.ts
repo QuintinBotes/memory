@@ -265,7 +265,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
     ['the anchor', values.anchor],
   ] as const) {
     if (text === undefined) continue;
-    const why = refusal(text, terms);
+    const why = refusal(text, terms, true);
     if (why !== null) throw new Refusal(`not remembered: ${what} is refused because ${why}`);
   }
 

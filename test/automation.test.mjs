@@ -50,7 +50,6 @@ test('capture in a person-started session still works', () => {
 for (const [name, env, entrypoint] of [
   ['a headless Claude Code entrypoint', HEADLESS, undefined],
   ['a GitHub Actions job', { GITHUB_ACTIONS: 'true' }, undefined],
-  ['a CI environment', { CI: 'true' }, undefined],
   ['a transcript that records an SDK entrypoint', {}, 'sdk-cli'],
 ]) {
   test(`capture is refused in ${name}`, () => {
@@ -59,6 +58,14 @@ for (const [name, env, entrypoint] of [
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /started by automation/);
     assert.equal(itemCount(s), 0);
+  });
+}
+
+for (const env of [{ CI: 'true' }, { CI: '1' }, { CLAUDE_CODE_ENTRYPOINT: 'cli' }]) {
+  test(`capture and propose still work in a developer shell with ${JSON.stringify(env)}`, () => {
+    const s = setup();
+    assert.match(capture(s, env).stderr, /captured 1/);
+    assert.notEqual(propose(s, env).isError, true);
   });
 }
 
