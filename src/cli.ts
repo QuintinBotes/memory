@@ -654,7 +654,8 @@ function recallCommand(args: string[], data: string, cwd: string): void {
     return void process.stdout.write(orbitRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === undefined) throw new Refusal('recall needs --diff <base>..<head>', 2);
-  const found = diffRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, values.diff);
+  const config = setUp(data);
+  const found = diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ('reason' in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }

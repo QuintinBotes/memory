@@ -33,6 +33,8 @@ export interface Config {
   automation?: boolean;
   /** Recall at the point of action (#14): items anchored where an agent reads or edits; off unless true. */
   pointOfAction?: boolean;
+  /** The code anchor provider `memory recall --diff` asks for a change's impact (#16): a command, run without a shell. */
+  impactProvider?: { command: string[] };
 }
 
 export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
@@ -149,6 +151,13 @@ export function loadConfig(data: string): Config | null {
   }
   if (c.automation !== undefined && typeof c.automation !== 'boolean') throw new ConfigError('automation must be true or false');
   if (c.pointOfAction !== undefined && typeof c.pointOfAction !== 'boolean') throw new ConfigError('pointOfAction must be true or false');
+  const impact = c.impactProvider;
+  if (
+    impact !== undefined &&
+    !(typeof impact === 'object' && impact !== null && !Array.isArray(impact) && isList(impact.command) && impact.command.length > 0 && impact.command.every((a) => a !== ''))
+  ) {
+    throw new ConfigError('impactProvider must be {"command": [program, arguments...]}');
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -161,6 +170,7 @@ export function loadConfig(data: string): Config | null {
     ...(capture !== undefined ? { capture } : {}),
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
+    ...(impact !== undefined ? { impactProvider: impact } : {}),
   };
 }
 

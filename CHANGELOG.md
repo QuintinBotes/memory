@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Impact-aware diff recall (#16): with `impactProvider` in `config.json` (a
+  command, run without a shell, speaking one JSON line each way),
+  `memory recall --diff` also recalls items on the depth-1 dependents a change
+  reaches: 2 points (`dependent` in the why), 1 more for a dependent neither
+  changed nor tested, within the same 600 tokens. No snapshot, a failing
+  provider or no consent to the new plan item falls back to path overlap and
+  says so. Dependents of another repository are dropped. Consent plan version
+  9 adds the `impact` category; no schema change.
 - Failure recall at the failing command (#15): a `PostToolUseFailure` hook on
   Bash shows the failure patterns and repair recipes whose signature (the
   statement up to ` => `, at least two words that are not common or

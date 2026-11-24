@@ -320,6 +320,30 @@ inside the advisory fence and within 600 estimated tokens, whole rows only. A
 precedent anchored to a directory covers every path under it. A range that does
 not resolve exits 2 with the reason.
 
+#### Items on what the change reaches
+
+A hazard on a caller the change did not touch is where breakage hides. With a
+code anchor provider set in `config.json`,
+
+```json
+"impactProvider": { "command": ["node", "/path/to/provider.mjs"] }
+```
+
+`memory recall --diff` runs that command once, without a shell, with only `PATH`
+and `HOME` in its environment, and writes one line to its standard input:
+`{"op": "impact", "repository": "owner/repo", "range": "<base>..<head>", "changed": ["path", ...]}`.
+It answers `{"status": "no_snapshot"}` or `{"status": "ok", "dependents": [...]}`, each
+dependent `{"path", "relation": "caller"|"implementer"|"importer", "status": "changed"|"tested"|"neither"}`
+with an optional `symbol` and `repository`. Items on a changed path score 4 as before;
+items on a depth-1 dependent score 2 (`dependent 2` in the row's why), and 1 more
+(`neither changed nor tested 1`) when the change neither edits nor tests that
+dependent. A `changed` dependent adds nothing, and a dependent of another
+repository is dropped: items are kept per repository. The answer is not stored.
+The budget stays 600 estimated tokens. With no provider, or a failing one, recall is
+path overlap as before; when a provider could not help (no snapshot yet, it failed,
+or you have not agreed to plan version 9 with `memory init`), one line after the
+rows says why. Memory names no provider; a code graph adapts to this line protocol.
+
 ## Repeats and conflicts
 
 Nothing is stored twice, and nothing is rewritten or deleted. When a statement

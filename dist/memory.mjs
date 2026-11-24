@@ -105,6 +105,10 @@ function loadConfig(data) {
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
   if (c.pointOfAction !== void 0 && typeof c.pointOfAction !== "boolean") throw new ConfigError("pointOfAction must be true or false");
+  const impact2 = c.impactProvider;
+  if (impact2 !== void 0 && !(typeof impact2 === "object" && impact2 !== null && !Array.isArray(impact2) && isList(impact2.command) && impact2.command.length > 0 && impact2.command.every((a) => a !== ""))) {
+    throw new ConfigError('impactProvider must be {"command": [program, arguments...]}');
+  }
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -116,7 +120,8 @@ function loadConfig(data) {
     ...c.consent !== void 0 ? { consent: c.consent } : {},
     ...capture2 !== void 0 ? { capture: capture2 } : {},
     ...c.automation !== void 0 ? { automation: c.automation } : {},
-    ...c.pointOfAction !== void 0 ? { pointOfAction: c.pointOfAction } : {}
+    ...c.pointOfAction !== void 0 ? { pointOfAction: c.pointOfAction } : {},
+    ...impact2 !== void 0 ? { impactProvider: impact2 } : {}
   };
 }
 function saveConfig(data, config) {
@@ -741,11 +746,14 @@ var RANKING = {
   /** An item sharing an anchored path with one of the `graphTop` best hits. */
   graph: 1,
   graphTop: 3,
+  /** An item anchored on a depth-1 dependent of a change (#16); `untested` is added when that dependent is neither changed nor tested. Provisional until the review replay shows dependent false recall under 10%. */
+  dependent: 2,
+  untested: 1,
   /** Most rows one search returns. */
   limit: 10
 };
 var tenth = (n) => Math.round(n * 10) / 10;
-function rank(items, paths, now = Date.now(), similarity2, keyed) {
+function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = []) {
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\/?$|^\.\//, "").replace(/\/+$/, ""));
   const score = (item, near) => {
     const parts = [];
@@ -756,13 +764,18 @@ function rank(items, paths, now = Date.now(), similarity2, keyed) {
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === "" || a.path === p || a.path.startsWith(`${p}/`) || p.startsWith(`${a.path}/`))).length;
     if (overlap > 0) add("anchor", Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
+    const reached = overlap > 0 ? [] : dependents.filter((d) => item.anchors.some((a) => a.path === d.path || a.path.startsWith(`${d.path}/`)));
+    if (reached.length > 0) {
+      add("dependent", RANKING.dependent);
+      if (reached.some((d) => d.neither)) add("neither changed nor tested", RANKING.untested);
+    }
     const key = keyed?.has(item.id) === true;
     if (key) add("key", RANKING.key);
     const ratio = item.textRatio ?? 0;
     const text2 = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity2?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth(RANKING.semantic * (cos - RANKING.minSimilarity) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && text2 === 0 && semantic === 0 && !near && !key) return null;
+    if (overlap === 0 && reached.length === 0 && text2 === 0 && semantic === 0 && !near && !key) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text2 > 0) add("text", text2);
     if (semantic > 0) add("semantic", semantic);
@@ -1722,7 +1735,8 @@ var DATA_CATEGORIES = [
   { id: "embeddings", since: 4, text: "Embeddings, with the provider in config.json (voyage-4 by default, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query, are sent to the provider's servers and the vectors that come back are kept in the item's own file. Quarantined text is never sent. Without a key or a network, nothing is sent and recall uses words and paths only" },
   { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
-  { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" }
+  { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
+  { id: "impact", since: 9, text: "When impactProvider is set in config.json, memory recall --diff runs that command, without a shell, once per call and sends it on standard input the repository's owner/name, the range and the paths the range changes; what it answers (dependents' paths and symbol keys) is used to rank items and is not stored. Without impactProvider, or before you agree to this plan, nothing is run" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -3520,16 +3534,66 @@ function foreignRepository(dir, config, tenant) {
 }
 
 // src/recall/diff.ts
+import { posix as posix4 } from "node:path";
+
+// src/recall/impact.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
 import { posix as posix3 } from "node:path";
+var RELATIONS = /* @__PURE__ */ new Set(["caller", "implementer", "importer"]);
+var STATUSES = /* @__PURE__ */ new Set(["changed", "tested", "neither"]);
+var PROVIDER_TIMEOUT_MS = 5e3;
+var MAX_DEPENDENTS = 1e3;
+function impact(config, context, cwd, range, changed) {
+  if (config.impactProvider === void 0) return null;
+  if (!covers(config, "impact")) return { note: "The impact provider was not run: agree to the current plan with memory init, then recall again. Path overlap only." };
+  const [program, ...args] = config.impactProvider.command;
+  const env = { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" };
+  const r = spawnSync2(program, args, {
+    cwd,
+    env,
+    input: `${JSON.stringify({ op: "impact", repository: context.repository, range, changed })}
+`,
+    encoding: "utf8",
+    timeout: PROVIDER_TIMEOUT_MS,
+    maxBuffer: 4 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "ignore"]
+  });
+  const failed = { note: "The impact provider failed or answered unexpectedly. Path overlap only." };
+  if (r.error !== void 0 || r.status !== 0) return failed;
+  let answer;
+  try {
+    answer = JSON.parse(r.stdout);
+  } catch {
+    return failed;
+  }
+  if (answer?.status === "no_snapshot") return { note: "No impact snapshot for this change yet. Path overlap only." };
+  if (answer?.status !== "ok" || !Array.isArray(answer.dependents)) return failed;
+  const dependents = [];
+  for (const d of answer.dependents.slice(0, MAX_DEPENDENTS)) {
+    if (typeof d?.["path"] !== "string" || !RELATIONS.has(d["relation"]) || !STATUSES.has(d["status"])) return failed;
+    const repository = d["repository"];
+    if (repository !== void 0 && (typeof repository !== "string" || repository.toLowerCase() !== context.repository)) continue;
+    const path = posix3.normalize(d["path"]);
+    if (d["status"] === "changed" || path.startsWith("/") || path.split("/").includes("..")) continue;
+    dependents.push({ path, neither: d["status"] === "neither" });
+  }
+  return { dependents };
+}
+
+// src/recall/diff.ts
 var DIFF_BUDGET = 600;
 var TYPES3 = /* @__PURE__ */ new Set(["precedent", "hazard"]);
-function diffRecall(data, context, cwd, range) {
+function diffRecall(data, config, context, cwd, range) {
   if (!range.includes("..") || range.startsWith("-")) return { reason: `--diff takes a range <base>..<head>, not "${range}"` };
   const out = git(cwd, "diff", "--name-only", "--no-renames", "-z", range, "--");
   if (out === null) return { reason: `the range ${range} does not resolve to two commits here` };
   const changed = out.split("\0").filter((p) => p !== "");
-  const terms = searchTerms(changed.map((p) => posix3.basename(p, posix3.extname(p))).join(" "));
-  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed);
+  const terms = searchTerms(changed.map((p) => posix4.basename(p, posix4.extname(p))).join(" "));
+  const reach = impact(config, context, cwd, range, changed);
+  const dependents = reach !== null && "dependents" in reach ? reach.dependents : [];
+  const note = reach !== null && "note" in reach ? `${reach.note}
+` : "";
+  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed, Date.now(), void 0, void 0, dependents);
   const rows = [];
   for (const h of hits) {
     const row4 = `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
@@ -3537,7 +3601,7 @@ function diffRecall(data, context, cwd, range) {
     if (estimate(fence(ITEMS_LABEL, [...rows, row4].join(""))) > DIFF_BUDGET) break;
     rows.push(row4);
   }
-  return { text: rows.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, rows.join("")) };
+  return { text: (rows.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, rows.join(""))) + note };
 }
 
 // src/recall/orbit.ts
@@ -4011,7 +4075,7 @@ function afterCompaction(data, input2) {
 }
 
 // src/eval/scorecard.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
   measure: m.measure,
   arm,
@@ -4029,7 +4093,7 @@ var seededRecall = (version) => notRun(
   ["recall"]
 );
 function orbitArm(version) {
-  const r = spawnSync2("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
+  const r = spawnSync3("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
   const found = r.status === 0 ? r.stdout.trim().split("\n")[0] : void 0;
   const note = r.error?.code === "ENOENT" ? "Orbit is not installed (no orbit on PATH), so its arm is skipped" : found === void 0 ? "orbit --version failed, so its arm is skipped" : `Orbit ${found} is installed, but its benchmark has no memory switch until QuintinBotes/orbit#233; a live run calls a model and spends money, which this harness never does`;
   return notRun(
@@ -4386,7 +4450,7 @@ function poison(version) {
 }
 
 // src/eval/lab.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync4 } from "node:child_process";
 import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync4, readFileSync as readFileSync11, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname10, join as join13 } from "node:path";
@@ -4412,11 +4476,11 @@ function fixtureRepository(task, repo) {
   cpSync(join13(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
-    check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
+    check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
   }
 }
 function seed(task, t, repo, data) {
-  const memory = (args) => check(`seed ${task}'s memory`, spawnSync3(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
+  const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
 }
@@ -4460,7 +4524,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   if (arm === "on") env["MEMORY_LAB_PLUGIN"] = plugin;
   else delete env["MEMORY_LAB_PLUGIN"];
-  const r = spawnSync3("/bin/sh", ["-c", agent], {
+  const r = spawnSync4("/bin/sh", ["-c", agent], {
     cwd: repo,
     env,
     input: t.prompt,
@@ -4472,7 +4536,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join13(TASKS, task, "hidden");
   const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join13(hidden, f));
-  const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const grade = agentFailed ? null : spawnSync4(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
     agentFailed,
@@ -5099,7 +5163,8 @@ function recallCommand(args, data, cwd) {
     return void process.stdout.write(orbitRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === void 0) throw new Refusal("recall needs --diff <base>..<head>", 2);
-  const found = diffRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, values.diff);
+  const config = setUp(data);
+  const found = diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ("reason" in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }

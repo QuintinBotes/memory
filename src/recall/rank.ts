@@ -39,6 +39,9 @@ export const RANKING = {
   /** An item sharing an anchored path with one of the `graphTop` best hits. */
   graph: 1,
   graphTop: 3,
+  /** An item anchored on a depth-1 dependent of a change (#16); `untested` is added when that dependent is neither changed nor tested. Provisional until the review replay shows dependent false recall under 10%. */
+  dependent: 2,
+  untested: 1,
   /** Most rows one search returns. */
   limit: 10,
 } as const;
@@ -61,7 +64,14 @@ const tenth = (n: number): number => Math.round(n * 10) / 10;
  * vector is close enough is a hit too, and items sharing an anchored path with one of the
  * best hits get a small bonus and may enter. Without it the sum is the lexical one, exactly.
  */
-export function rank(items: Visible[], paths: string[], now = Date.now(), similarity?: Map<string, number>, keyed?: ReadonlySet<string>): Hit[] {
+export function rank(
+  items: Visible[],
+  paths: string[],
+  now = Date.now(),
+  similarity?: Map<string, number>,
+  keyed?: ReadonlySet<string>,
+  dependents: readonly { path: string; neither: boolean }[] = [],
+): Hit[] {
   // The repository root, '.' or './', normalises to '' and holds every anchored path.
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\/?$|^\.\//, '').replace(/\/+$/, ''));
   const score = (item: Visible, near: boolean): Hit | null => {
@@ -73,13 +83,19 @@ export function rank(items: Visible[], paths: string[], now = Date.now(), simila
     };
     const overlap = item.anchors.filter((a) => want.some((p) => p === '' || a.path === p || a.path.startsWith(`${p}/`) || p.startsWith(`${a.path}/`))).length;
     if (overlap > 0) add('anchor', Math.min(RANKING.anchorCap, overlap * RANKING.anchor));
+    // An item on the change itself needs no second reason to be shown; one only on what the change reaches gets these.
+    const reached = overlap > 0 ? [] : dependents.filter((d) => item.anchors.some((a) => a.path === d.path || a.path.startsWith(`${d.path}/`)));
+    if (reached.length > 0) {
+      add('dependent', RANKING.dependent);
+      if (reached.some((d) => d.neither)) add('neither changed nor tested', RANKING.untested);
+    }
     const key = keyed?.has(item.id) === true;
     if (key) add('key', RANKING.key);
     const ratio = item.textRatio ?? 0;
     const text = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth((RANKING.semantic * (cos - RANKING.minSimilarity)) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && text === 0 && semantic === 0 && !near && !key) return null;
+    if (overlap === 0 && reached.length === 0 && text === 0 && semantic === 0 && !near && !key) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (text > 0) add('text', text);
     if (semantic > 0) add('semantic', semantic);
