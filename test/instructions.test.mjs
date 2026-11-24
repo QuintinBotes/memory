@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setup, remember, sessionStart, run, tools } from './helpers.mjs';
 
 const sha = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -301,4 +302,20 @@ test('40.8 conflicts apply --confirm from a pipe is refused unless --yes-non-int
   assert.equal(r.status, 2);
   assert.match(r.stderr, /terminal|--yes-non-interactive/);
   assert.equal(sha(s.agents), before);
+});
+
+test('40.9 a v9 store upgrades to v10, and a v8 store goes 8 to 9 to 10, with both tables present', () => {
+  const tables = (db) => db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('item_anchors', 'instruction_edits') ORDER BY name").all().map((r) => r.name);
+  for (const [from, drop] of [[9, 'DROP TABLE instruction_edits;'], [8, 'DROP TRIGGER item_anchors_insert; DROP TRIGGER item_anchors_update; DROP TABLE item_anchors; DROP TABLE instruction_edits;']]) {
+    const s = fixture();
+    const file = join(s.data, 'tenants/acme.sqlite');
+    const db = new DatabaseSync(file);
+    db.exec(`${drop} PRAGMA user_version = ${from};`);
+    db.close();
+    assert.match(run(['list'], { cwd: s.repo, data: s.data, config: s.configA }).stdout, /shared logger/);
+    const after = new DatabaseSync(file, { readOnly: true });
+    assert.equal(after.prepare('PRAGMA user_version').get().user_version, 10, `from ${from}`);
+    assert.deepEqual(tables(after), ['instruction_edits', 'item_anchors'], `from ${from}`);
+    after.close();
+  }
 });

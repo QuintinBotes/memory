@@ -137,7 +137,30 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     if (!has) db.exec('ALTER TABLE evidence ADD COLUMN taint TEXT;');
   },
 
-  // v9 - edits to an instruction file (#26, #40): a conflict with a loaded line, or a promotion into the file. A row
+  // v9 - anchor paths (#14, SC-003): one row per item and anchor path, kept by triggers so every writer of
+  // `anchors_json` maintains it, and backfilled for stores written before it. The point-of-action hook looks
+  // items up by path here instead of parsing every item's anchors. IF NOT EXISTS, so a rolled-back store reopens.
+  `
+  CREATE TABLE IF NOT EXISTS item_anchors (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    PRIMARY KEY (path, item_id)
+  ) WITHOUT ROWID;
+  CREATE TRIGGER IF NOT EXISTS item_anchors_insert AFTER INSERT ON items BEGIN
+    INSERT OR IGNORE INTO item_anchors SELECT NEW.id, json_extract(value, '$.path') FROM json_each(NEW.anchors_json)
+      WHERE json_extract(value, '$.path') IS NOT NULL;
+  END;
+  CREATE TRIGGER IF NOT EXISTS item_anchors_update AFTER UPDATE OF anchors_json ON items BEGIN
+    DELETE FROM item_anchors WHERE item_id = NEW.id;
+    INSERT OR IGNORE INTO item_anchors SELECT NEW.id, json_extract(value, '$.path') FROM json_each(NEW.anchors_json)
+      WHERE json_extract(value, '$.path') IS NOT NULL;
+  END;
+  DELETE FROM item_anchors;
+  INSERT OR IGNORE INTO item_anchors SELECT items.id, json_extract(a.value, '$.path') FROM items, json_each(items.anchors_json) a
+    WHERE items.anchors_json != '[]' AND json_extract(a.value, '$.path') IS NOT NULL;
+  `,
+
+  // v10 - edits to an instruction file (#26, #40): a conflict with a loaded line, or a promotion into the file. A row
   // is only ever a proposal; `memory conflicts apply --confirm` is the one writer of the file. Deleted with its item.
   // IF NOT EXISTS, so a store a test or an older install rolled back by version alone still opens.
   `

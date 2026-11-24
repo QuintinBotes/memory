@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync9, readFileSync as readFileSync10, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join11, normalize as normalize2 } from "node:path";
+import { existsSync as existsSync10, readFileSync as readFileSync11, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { isAbsolute as isAbsolute6, join as join12, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -98,12 +98,13 @@ function loadConfig(data) {
   const capture2 = c.capture;
   if (capture2 !== void 0) {
     const ok = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
-    const { enabled, model, maxCandidates, apiModel } = ok ? capture2 : {};
-    if (!ok || enabled !== void 0 && typeof enabled !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) {
+    const { enabled: enabled2, model, maxCandidates, apiModel } = ok ? capture2 : {};
+    if (!ok || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) {
       throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias }');
     }
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
+  if (c.pointOfAction !== void 0 && typeof c.pointOfAction !== "boolean") throw new ConfigError("pointOfAction must be true or false");
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -114,7 +115,8 @@ function loadConfig(data) {
     ...emb !== void 0 ? { embeddings: emb } : {},
     ...c.consent !== void 0 ? { consent: c.consent } : {},
     ...capture2 !== void 0 ? { capture: capture2 } : {},
-    ...c.automation !== void 0 ? { automation: c.automation } : {}
+    ...c.automation !== void 0 ? { automation: c.automation } : {},
+    ...c.pointOfAction !== void 0 ? { pointOfAction: c.pointOfAction } : {}
   };
 }
 function saveConfig(data, config) {
@@ -935,6 +937,14 @@ var PERSON_SCOPE = "tenant = '' AND scope IN ('person', 'global')";
 function tenantItems(db, tenant, repository, owner) {
   return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE}`).all(tenant, repository, owner));
 }
+var anchorPaths = (path) => path.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+function anchoredItems(db, tenant, repository, owner, path) {
+  const paths = anchorPaths(path);
+  const marks = paths.map(() => "?").join(", ");
+  const ids = db.prepare(`SELECT DISTINCT item_id FROM item_anchors WHERE path IN (${marks})`).all(...paths).map((r) => r.item_id);
+  if (ids.length === 0) return [];
+  return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE} AND id IN (${ids.map(() => "?").join(", ")})`).all(tenant, repository, owner, ...ids));
+}
 function personItems(db) {
   return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all());
 }
@@ -1013,24 +1023,27 @@ function row(item) {
   const taint = item.taint === void 0 ? "" : ` [tainted: ${taintList(item.taint)}]`;
   return safe(`- [${item.id}] ${item.type}: ${item.statement}${anchors ? ` (${anchors})` : ""}${source}${taint}`) + "\n";
 }
-function compose(rows, more) {
+function compose(rows, more, anchored2) {
+  const note = anchored2 > 0 ? `+${anchored2} anchored to code: shown when you read or edit it
+` : "";
   return fence(ITEMS_LABEL, rows.join("") + (more > 0 ? `+${more} more: memory list
-` : ""));
+` : "") + note);
 }
-function chooseSlice(items, budget) {
-  if (budget <= 0 || items.length === 0) return { text: "", shown: [] };
+function chooseSlice(items, budget, anchored2 = 0) {
+  if (budget <= 0 || items.length === 0 && anchored2 === 0) return { text: "", shown: [] };
   const ranked = rank2(items);
   const rows = ranked.map(row);
   const chosen = [];
   for (let i = 0; i < rows.length; i++) {
     const candidate = [...chosen, i].map((j) => rows[j]);
-    if (estimate(compose(candidate, rows.length - candidate.length)) <= budget) chosen.push(i);
+    if (estimate(compose(candidate, rows.length - candidate.length, anchored2)) <= budget) chosen.push(i);
   }
-  if (chosen.length === 0) return { text: "", shown: [] };
-  return { text: compose(chosen.map((j) => rows[j]), rows.length - chosen.length), shown: chosen.map((j) => ranked[j]) };
+  const text2 = compose(chosen.map((j) => rows[j]), rows.length - chosen.length, anchored2);
+  if (chosen.length === 0 && anchored2 === 0 || estimate(text2) > budget) return { text: "", shown: [] };
+  return { text: text2, shown: chosen.map((j) => ranked[j]) };
 }
 function renderAll(items) {
-  return items.length === 0 ? "" : compose(rank2(items).map(row), 0);
+  return items.length === 0 ? "" : compose(rank2(items).map(row), 0, 0);
 }
 
 // src/anchors.ts
@@ -1681,7 +1694,7 @@ var DATA_CATEGORIES = [
   { id: "statements", since: 1, text: "Statements you ask memory to remember, each with its scope, type and an optional source reference" },
   { id: "anchors", since: 1, text: "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves" },
   { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
-  { id: "injections", since: 2, text: "Which items a subagent was shown, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
+  { id: "injections", since: 2, text: "Which items a subagent was shown, and with pointOfAction on which an agent was shown when it read or edited anchored code, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
   { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
   { id: "embeddings", since: 4, text: "Embeddings, with the provider in config.json (voyage-4 by default, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query, are sent to the provider's servers and the vectors that come back are kept in the item's own file. Quarantined text is never sent. Without a key or a network, nothing is sent and recall uses words and paths only" },
   { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
@@ -1881,7 +1894,29 @@ var MIGRATIONS = [
     const has = db.prepare("PRAGMA table_info(evidence)").all().some((c) => c.name === "taint");
     if (!has) db.exec("ALTER TABLE evidence ADD COLUMN taint TEXT;");
   },
-  // v9 - edits to an instruction file (#26, #40): a conflict with a loaded line, or a promotion into the file. A row
+  // v9 - anchor paths (#14, SC-003): one row per item and anchor path, kept by triggers so every writer of
+  // `anchors_json` maintains it, and backfilled for stores written before it. The point-of-action hook looks
+  // items up by path here instead of parsing every item's anchors. IF NOT EXISTS, so a rolled-back store reopens.
+  `
+  CREATE TABLE IF NOT EXISTS item_anchors (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    PRIMARY KEY (path, item_id)
+  ) WITHOUT ROWID;
+  CREATE TRIGGER IF NOT EXISTS item_anchors_insert AFTER INSERT ON items BEGIN
+    INSERT OR IGNORE INTO item_anchors SELECT NEW.id, json_extract(value, '$.path') FROM json_each(NEW.anchors_json)
+      WHERE json_extract(value, '$.path') IS NOT NULL;
+  END;
+  CREATE TRIGGER IF NOT EXISTS item_anchors_update AFTER UPDATE OF anchors_json ON items BEGIN
+    DELETE FROM item_anchors WHERE item_id = NEW.id;
+    INSERT OR IGNORE INTO item_anchors SELECT NEW.id, json_extract(value, '$.path') FROM json_each(NEW.anchors_json)
+      WHERE json_extract(value, '$.path') IS NOT NULL;
+  END;
+  DELETE FROM item_anchors;
+  INSERT OR IGNORE INTO item_anchors SELECT items.id, json_extract(a.value, '$.path') FROM items, json_each(items.anchors_json) a
+    WHERE items.anchors_json != '[]' AND json_extract(a.value, '$.path') IS NOT NULL;
+  `,
+  // v10 - edits to an instruction file (#26, #40): a conflict with a loaded line, or a promotion into the file. A row
   // is only ever a proposal; `memory conflicts apply --confirm` is the one writer of the file. Deleted with its item.
   // IF NOT EXISTS, so a store a test or an older install rolled back by version alone still opens.
   `
@@ -3338,6 +3373,200 @@ function declineSupersession(db, p) {
   }
 }
 
+// src/hooks/point-of-action.ts
+import { existsSync as existsSync8, readFileSync as readFileSync9, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute5, join as join8, relative as relative3, resolve as resolve5, sep as sep4 } from "node:path";
+
+// src/store/ledger.ts
+var AGENT_SESSION_BUDGET = 600;
+var MAIN_AGENT = "main";
+var KEEP_DAYS = 14;
+var CREATE = `CREATE TABLE IF NOT EXISTS ledger (
+  session TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  tokens INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (session, agent, item_id)
+)`;
+function claim(db, session, agent, candidates, pick) {
+  return inTransaction(db, () => {
+    db.exec(CREATE);
+    const rows = db.prepare("SELECT item_id, tokens FROM ledger WHERE session = ? AND agent = ?").all(session, agent);
+    const seen = new Set(rows.map((r) => r.item_id));
+    const used = rows.reduce((sum, r) => sum + r.tokens, 0);
+    const result = pick(candidates.filter((id) => !seen.has(id)), AGENT_SESSION_BUDGET - used);
+    const at2 = (/* @__PURE__ */ new Date()).toISOString();
+    const insert = db.prepare("INSERT INTO ledger (session, agent, item_id, tokens, at) VALUES (?, ?, ?, ?, ?)");
+    for (const s of result.shown) insert.run(session, agent, s.id, s.tokens, at2);
+    db.prepare("DELETE FROM ledger WHERE at < ?").run(new Date(Date.now() - KEEP_DAYS * 864e5).toISOString());
+    return result;
+  });
+}
+function shownIn(db, session) {
+  return db.prepare("SELECT DISTINCT i.id, i.statement FROM ledger l JOIN items i ON i.id = l.item_id WHERE l.session = ? ORDER BY i.id").all(session);
+}
+function resetMain(db, session) {
+  inTransaction(db, () => {
+    db.exec(CREATE);
+    db.prepare("DELETE FROM ledger WHERE session = ? AND agent = ?").run(session, MAIN_AGENT);
+  });
+}
+
+// src/hooks/point-of-action.ts
+var INJECTION_BUDGET = 120;
+var COMPACT_CHARS = 1e3;
+var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
+var num = (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : void 0;
+function enabled(data) {
+  const config = loadConfig(data);
+  return consented(config) && config.pointOfAction === true && covers(config, "injections") ? config : null;
+}
+function locate(abs) {
+  let dir = dirname9(abs);
+  while (!existsSync8(dir) && dirname9(dir) !== dir) dir = dirname9(dir);
+  const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
+  if (top === void 0 || top === "") return null;
+  const root = realpathSync4(top);
+  const path = relative3(root, join8(realpathSync4(dir), relative3(dir, abs)));
+  return path.startsWith("..") || isAbsolute5(path) ? null : { root, path: path.split(sep4).join("/") };
+}
+function touched2(input2, cwd) {
+  const tool = input2["tool_name"];
+  const args = input2["tool_input"] ?? {};
+  const file = str(args["file_path"]) ?? str(args["notebook_path"]);
+  if (file === void 0 || typeof tool !== "string") return null;
+  const at2 = locate(resolve5(cwd, file));
+  if (at2 === null) return null;
+  let ranges = null;
+  let replaced = [];
+  if (tool === "Read") {
+    const offset = num(args["offset"]);
+    const limit = num(args["limit"]);
+    if (offset !== void 0 || limit !== void 0) ranges = [[offset ?? 1, limit === void 0 ? Infinity : (offset ?? 1) + limit - 1]];
+  } else if (tool === "Edit") {
+    replaced = [str(args["old_string"])].filter((s) => s !== void 0);
+    ranges = [];
+  } else if (tool === "MultiEdit") {
+    const edits2 = Array.isArray(args["edits"]) ? args["edits"] : [];
+    replaced = edits2.map((e) => str(e["old_string"])).filter((s) => s !== void 0);
+    ranges = [];
+  } else if (tool !== "Write" && tool !== "NotebookEdit") {
+    return null;
+  }
+  return { root: at2.root, touch: { path: at2.path, ranges, replaced } };
+}
+var symbolName = (a) => a.symbol?.split("#")[1];
+function anchorHit(a, t, file) {
+  if (a.path !== t.path && !t.path.startsWith(`${a.path}/`)) return false;
+  if (a.start === void 0 || t.ranges === null) return true;
+  const text2 = file();
+  const lines2 = text2 === null ? [] : fileLines(text2);
+  const moved = a.citedHash === void 0 || text2 === null || a.end === void 0 || a.end > lines2.length || rangeHash(lines2, a.start, a.end) !== a.citedHash;
+  const name = symbolName(a);
+  if (t.replaced.length === 0) {
+    return moved || t.ranges.some(([from2, to]) => from2 <= (a.end ?? a.start) && to >= a.start);
+  }
+  return t.replaced.some((old) => {
+    if (!moved && text2 !== null) {
+      const at2 = text2.indexOf(old);
+      if (at2 >= 0) {
+        const first2 = text2.slice(0, at2).split("\n").length;
+        const last = first2 + old.split("\n").length - 1;
+        return first2 <= (a.end ?? a.start) && last >= a.start;
+      }
+    }
+    return name !== void 0 && old.includes(name.split(/[.:]+/).pop());
+  });
+}
+function anchored(items, root, t) {
+  let text2;
+  const read2 = () => {
+    if (text2 === void 0) {
+      try {
+        text2 = readFileSync9(resolve5(root, t.path), "utf8");
+      } catch {
+        text2 = null;
+      }
+    }
+    return text2;
+  };
+  return items.filter((i) => i.anchors.some((a) => anchorHit(a, t, read2)));
+}
+function pointOfAction(data, input2, log) {
+  const config = enabled(data);
+  const agentType = str(input2["agent_type"]);
+  if (config === null || agentType !== void 0 && !subagentAllowed(config, agentType)) return "";
+  const cwd = str(input2["cwd"]) ?? process.cwd();
+  const hit = touched2(input2, cwd);
+  if (hit === null) return "";
+  const context = resolveContext(hit.root, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null || context.owner === null) return "";
+  const session = str(input2["session_id"]) ?? "unknown";
+  const agent = str(input2["agent_id"]) ?? MAIN_AGENT;
+  const base2 = { session, agent, via: "point-of-action", at: (/* @__PURE__ */ new Date()).toISOString() };
+  try {
+    const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
+    if (db === null) return "";
+    try {
+      const found = anchored(anchoredItems(db, context.tenant, context.repository, context.owner, hit.touch.path), hit.root, hit.touch);
+      if (found.length === 0) return "";
+      const byId = new Map(found.map((i) => [i.id, i]));
+      const result = claim(db, session, agent, found.map((i) => i.id), (unseen, left) => {
+        const slice = chooseSlice(unseen.map((id) => byId.get(id)), Math.min(INJECTION_BUDGET, left));
+        const rows = slice.shown.map((i) => ({ id: i.id, tokens: estimate(row(i)) }));
+        if (rows.length > 0) rows[0].tokens += estimate(slice.text) - rows.reduce((sum, r) => sum + r.tokens, 0);
+        return { text: slice.text, shown: rows };
+      });
+      if (result.text === "") return "";
+      log(result.shown.map((s) => ({ event: "injected", ...base2, item: s.id, anchors: [hit.touch.path], tokens: s.tokens })));
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: result.text } });
+    } finally {
+      db.close();
+    }
+  } catch {
+    log([{ event: "skipped", ...base2 }]);
+    return "";
+  }
+}
+function preCompact(data, input2) {
+  const config = enabled(data);
+  const session = str(input2["session_id"]);
+  if (config === null || session === void 0) return "";
+  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  if (context.tenant === null) return "";
+  const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
+  if (db === null) return "";
+  try {
+    const rows = [];
+    for (const item of shownIn(db, session)) {
+      const next = `${safe(`- [${item.id}] ${item.statement}`)}
+`;
+      if (fence(ITEMS_LABEL, [...rows, next].join("")).length > COMPACT_CHARS) break;
+      rows.push(next);
+    }
+    return rows.length === 0 ? "" : fence(ITEMS_LABEL, rows.join(""));
+  } catch {
+    return "";
+  } finally {
+    db.close();
+  }
+}
+function afterCompaction(data, input2) {
+  const config = enabled(data);
+  const session = str(input2["session_id"]);
+  if (config === null || session === void 0) return;
+  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  if (context.tenant === null) return;
+  const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
+  if (db === null) return;
+  try {
+    resetMain(db, session);
+  } finally {
+    db.close();
+  }
+}
+
 // src/eval/scorecard.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
 var row2 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
@@ -3392,18 +3621,18 @@ var FALSE_RECALL = { measure: "false-recall", on: [], bar: "false recall under 1
 var covers2 = (anchor, path) => path === anchor || path.startsWith(`${anchor}/`);
 function falseRecall(version, events) {
   const flagged = /* @__PURE__ */ new Set();
-  const touched2 = /* @__PURE__ */ new Map();
+  const touched3 = /* @__PURE__ */ new Map();
   const verdict2 = /* @__PURE__ */ new Map();
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e.event === "feedback") {
       if (e.signal === "wrong" || e.signal === "stale") flagged.add(e.item);
     } else if (e.event === "touched") {
-      const paths = touched2.get(e.session) ?? [];
+      const paths = touched3.get(e.session) ?? [];
       paths.push(...e.paths);
-      touched2.set(e.session, paths);
+      touched3.set(e.session, paths);
     } else {
-      const paths = touched2.get(e.session) ?? [];
+      const paths = touched3.get(e.session) ?? [];
       const why = flagged.has(e.item) ? "wrong or stale" : e.anchors.length > 0 && !e.anchors.some((a) => paths.some((p) => covers2(a, p))) ? "untouched" : null;
       verdict2.set(JSON.stringify([e.session, e.item]), { session: e.session, via: e.via, why });
     }
@@ -3428,7 +3657,7 @@ function falseRecall(version, events) {
 // src/eval/replay.ts
 import { mkdtempSync, rmSync as rmSync2 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text2) {
   const doc = JSON.parse(text2);
@@ -3455,9 +3684,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync(join8(tmpdir(), "memory-replay-"));
+  const dir = mkdtempSync(join9(tmpdir(), "memory-replay-"));
   try {
-    const db = openStore(join8(dir, "replay.sqlite"), true);
+    const db = openStore(join9(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -3511,7 +3740,7 @@ function replay(version, pulls, since) {
 // src/eval/poison.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -3637,8 +3866,8 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync2(join9(tmpdir2(), "memory-poison-"));
-  const db = openStore(join9(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync2(join10(tmpdir2(), "memory-poison-"));
+  const db = openStore(join10(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
@@ -3715,19 +3944,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync8, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readFileSync as readFileSync9, readdirSync as readdirSync2, rmSync as rmSync4 } from "node:fs";
+import { cpSync, existsSync as existsSync9, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readFileSync as readFileSync10, readdirSync as readdirSync2, rmSync as rmSync4 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname9, join as join10 } from "node:path";
+import { dirname as dirname10, join as join11 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
-var ROOT = dirname9(dirname9(fileURLToPath2(import.meta.url)));
-var TASKS = join10(ROOT, "lab", "tasks");
-var BUNDLE = join10(ROOT, "dist", "memory.mjs");
+var ROOT = dirname10(dirname10(fileURLToPath2(import.meta.url)));
+var TASKS = join11(ROOT, "lab", "tasks");
+var BUNDLE = join11(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync8(join10(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync9(join11(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -3737,7 +3966,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join10(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join11(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -3756,24 +3985,24 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync8(file) ? jsonLines2(readFileSync9(file, "utf8")) : [];
-var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
+var readLines = (file) => existsSync9(file) ? jsonLines2(readFileSync10(file, "utf8")) : [];
+var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
   const models = result?.modelUsage;
   if (typeof models !== "object" || models === null) return null;
   const all = Object.values(models);
   return {
-    input: all.reduce((s, m) => s + num(m?.inputTokens), 0),
-    cacheRead: all.reduce((s, m) => s + num(m?.cacheReadInputTokens), 0),
-    turns: num(result.num_turns)
+    input: all.reduce((s, m) => s + num2(m?.inputTokens), 0),
+    cacheRead: all.reduce((s, m) => s + num2(m?.cacheReadInputTokens), 0),
+    turns: num2(result.num_turns)
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync3(join10(base2, "run-"));
-  const repo = join10(dir, "repo");
-  const data = join10(dir, "data");
-  const out = join10(dir, "out");
+  const dir = mkdtempSync3(join11(base2, "run-"));
+  const repo = join11(dir, "repo");
+  const data = join11(dir, "data");
+  const out = join11(dir, "out");
   mkdirSync7(data);
   mkdirSync7(out);
   fixtureRepository(task, repo);
@@ -3798,8 +4027,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join10(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join10(hidden, f));
+  const hidden = join11(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join11(hidden, f));
   const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -3807,11 +4036,11 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join10(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join11(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
-    injected: { items: injected.length, tokens: injected.reduce((s, e) => s + num(e.tokens), 0) }
+    injected: { items: injected.length, tokens: injected.reduce((s, e) => s + num2(e.tokens), 0) }
   };
 }
 var mean = (xs) => xs.length === 0 ? null : Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
@@ -3836,12 +4065,12 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync3(join10(tmpdir3(), "memory-lab-"));
+  const base2 = mkdtempSync3(join11(tmpdir3(), "memory-lab-"));
   try {
-    const plugin = join10(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync8(join10(ROOT, part))) cpSync(join10(ROOT, part), join10(plugin, part), { recursive: true });
+    const plugin = join11(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync9(join11(ROOT, part))) cpSync(join11(ROOT, part), join11(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync9(join10(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync10(join11(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -3930,6 +4159,11 @@ var USAGE = `usage: memory <command>
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
+  point-of-action
+      the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
+      agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
+  pre-compact
+      the PreCompact hook: at most 1,000 characters of the items shown at the point of action this session
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
       as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
@@ -4050,7 +4284,7 @@ function anchorAt(cwd, spec) {
   const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(spec);
   const path = m?.[1] ?? "";
   const clean = normalize2(path);
-  if (!m || isAbsolute5(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
+  if (!m || isAbsolute6(path) || clean.startsWith("..") || clean.split(/[\\/]/).includes("..")) {
     throw new Refusal("an anchor is a path inside the repository, as path or path:start-end");
   }
   const top = git(cwd, "rev-parse", "--show-toplevel")?.trim();
@@ -4369,7 +4603,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync10(0, "utf8"));
+    const v = JSON.parse(readFileSync11(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -4377,7 +4611,10 @@ function hookInput() {
 }
 function hookSlice(data, config, input2, budget, withheld = []) {
   const cwd = typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd();
-  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld), budget);
+  const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld);
+  if (config.pointOfAction !== true) return chooseSlice(items, budget);
+  const unanchored = items.filter((i) => i.anchors.length === 0);
+  return chooseSlice(unanchored, budget, items.length - unanchored.length);
 }
 function sessionStart(data) {
   try {
@@ -4385,6 +4622,12 @@ function sessionStart(data) {
     if (typeof input2["agent_type"] === "string" && neverSubagent(input2["agent_type"])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
+    if (input2["source"] === "compact") {
+      try {
+        afterCompaction(data, input2);
+      } catch {
+      }
+    }
     const withheld = [];
     process.stdout.write(hookSlice(data, config, input2, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, withheld).text);
     logWithheld(data, config, "session-start", typeof input2["session_id"] === "string" ? input2["session_id"] : "unknown", withheld);
@@ -4426,6 +4669,19 @@ function subagentStart(data) {
   } catch {
   }
 }
+function pointOfActionHook(data) {
+  try {
+    process.stdout.write(pointOfAction(data, hookInput(), (lines2) => appendInjections(data, lines2.map((l) => `${JSON.stringify(l)}
+`))));
+  } catch {
+  }
+}
+function preCompactHook(data) {
+  try {
+    process.stdout.write(preCompact(data, hookInput()));
+  } catch {
+  }
+}
 var LOG_LOCK_PURGE_MS = 1e4;
 async function captureCommand(args, data) {
   const { values } = parseArgs({ args, options: { foreground: { type: "boolean" } } });
@@ -4450,7 +4706,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync9(file)) return;
+  if (!existsSync10(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -4464,7 +4720,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync10(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync11(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -4519,8 +4775,8 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join11(data, "tenants");
-  const every = existsSync9(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const tenantsDir = join12(data, "tenants");
+  const every = existsSync10(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -4564,7 +4820,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync10(file, "utf8"));
+    return parse(readFileSync11(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
@@ -4668,6 +4924,10 @@ async function main(argv) {
       return sessionStart(data);
     case "subagent-start":
       return subagentStart(data);
+    case "point-of-action":
+      return pointOfActionHook(data);
+    case "pre-compact":
+      return preCompactHook(data);
     case "capture":
       return captureCommand(rest, data);
     case "purge":

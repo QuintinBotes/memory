@@ -43,6 +43,7 @@ import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
+import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
 import { capture, captureWanted } from './capture/capture.ts';
 import { HOOK_BUSY_MS, openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
@@ -102,6 +103,11 @@ const USAGE = `usage: memory <command>
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
+  point-of-action
+      the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
+      agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
+  pre-compact
+      the PreCompact hook: at most 1,000 characters of the items shown at the point of action this session
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
       as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
@@ -599,7 +605,11 @@ function hookInput(): Record<string, unknown> {
 /** The slice for the hook's working directory: the subagent's own, for a subagent, so its tenant is resolved there. */
 function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number, withheld: Withheld[] = []) {
   const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
-  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld), budget);
+  const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld);
+  // With recall at the point of action on, anchored items wait for the code they are anchored to; the slice counts them.
+  if (config.pointOfAction !== true) return chooseSlice(items, budget);
+  const unanchored = items.filter((i) => i.anchors.length === 0);
+  return chooseSlice(unanchored, budget, items.length - unanchored.length);
 }
 
 /**
@@ -614,6 +624,13 @@ function sessionStart(data: string): void {
     if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
+    if (input['source'] === 'compact') {
+      try {
+        afterCompaction(data, input);
+      } catch {
+        // A busy store keeps the ledger; the agent just sees fewer items again.
+      }
+    }
     const withheld: Withheld[] = [];
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, withheld).text);
     logWithheld(data, config, 'session-start', typeof input['session_id'] === 'string' ? input['session_id'] : 'unknown', withheld);
@@ -666,7 +683,26 @@ function subagentStart(data: string): void {
   }
 }
 
-/** How long a purge waits for the injection log's lock. */
+/** The PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit; see `pointOfAction`. Silent on any failure. */
+function pointOfActionHook(data: string): void {
+  try {
+    process.stdout.write(pointOfAction(data, hookInput(), (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+  } catch {
+    // Silent by design: advisory memory never costs a tool call.
+  }
+}
+
+/** The PreCompact hook: the items shown at the point of action this session, so the summary can keep them. */
+function preCompactHook(data: string): void {
+  try {
+    process.stdout.write(preCompact(data, hookInput()));
+  } catch {
+    // Silent by design.
+  }
+}
+
+/** How long a hook waits for the injection log's lock, and how long a purge does. */
+const LOG_LOCK_HOOK_MS = 2000;
 const LOG_LOCK_PURGE_MS = 10_000;
 
 /** The Stop and SessionEnd hook. Never fails the session: it hands the work to a detached process and returns. */
@@ -923,6 +959,10 @@ async function main(argv: string[]): Promise<void> {
       return sessionStart(data);
     case 'subagent-start':
       return subagentStart(data);
+    case 'point-of-action':
+      return pointOfActionHook(data);
+    case 'pre-compact':
+      return preCompactHook(data);
     case 'capture':
       return captureCommand(rest, data);
     case 'purge':
