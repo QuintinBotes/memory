@@ -78,7 +78,7 @@ const USAGE = `usage: memory <command>
       make a proposal active
   reject <id> [--reason <text>]
       keep a proposal as a tombstone, so the same statement is never proposed again
-  conflicts [apply <id> [--confirm] | reject <id>]
+  conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]
       the edits memory proposes to instruction files (CLAUDE.md, AGENTS.md): a loaded line an item contradicts (the file
       wins and the item is not recalled) and an item proven enough to be promoted into the file. Nothing is written until
       apply --confirm, which writes exactly the diff shown; reject resolves it. review lists the open ones
@@ -415,16 +415,17 @@ function review(data: string, cwd: string): void {
 }
 
 /**
- * `memory conflicts [apply <id> [--confirm] | reject <id>]`: the edits memory proposes to instruction files, for the owner.
- * Apply without --confirm shows the diff and writes nothing; with it, writes exactly that edit. Agents have no tool for this.
+ * `memory conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]`: the edits memory proposes to instruction files, for the owner.
+ * Apply without --confirm shows the diff and writes nothing; with it, writes exactly that edit, from a terminal (stdin
+ * a TTY) or with --yes-non-interactive. No MCP tool does this, but an agent with a shell can run it: put an ask rule on it.
  */
 function conflictsCommand(args: string[], data: string, cwd: string): void {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { confirm: { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { confirm: { type: 'boolean' }, 'yes-non-interactive': { type: 'boolean' } } });
   const [verb, id, ...extra] = positionals;
   if (verb !== undefined && ((verb !== 'apply' && verb !== 'reject') || id === undefined || extra.length > 0)) {
-    throw new Refusal('usage: memory conflicts [apply <id> [--confirm] | reject <id>]', 2);
+    throw new Refusal('usage: memory conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]', 2);
   }
-  if (values.confirm === true && verb !== 'apply') throw new Refusal('--confirm goes with apply', 2);
+  if ((values.confirm === true || values['yes-non-interactive'] === true) && verb !== 'apply') throw new Refusal('--confirm and --yes-non-interactive go with apply', 2);
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   const ins = loadInstructions(cwd, currentConfigDir());
   let listed = 0;
@@ -450,6 +451,9 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
       }
       process.stdout.write(renderEdit(ins, e));
       if (values.confirm !== true) return void console.error('Nothing was written. Run the same command with --confirm to write this edit.');
+      if (!process.stdin.isTTY && values['yes-non-interactive'] !== true) {
+        throw new Refusal('nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command', 2);
+      }
       try {
         return void console.log(applyEdit(db, ins, e));
       } catch (error) {

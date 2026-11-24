@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync9, readFileSync as readFileSync10, readdirSync as readdirSync3, renameSync as renameSync3, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync9, readFileSync as readFileSync10, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join11, normalize as normalize2 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -1427,9 +1427,9 @@ function sweepIfDue(db, now = Date.now()) {
 
 // src/instructions.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
-import { existsSync as existsSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync, existsSync as existsSync3, lstatSync, readFileSync as readFileSync5, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname4, isAbsolute, join as join3, relative, resolve as resolve3, sep as sep2 } from "node:path";
+import { basename, dirname as dirname4, isAbsolute, join as join3, relative, resolve as resolve3, sep as sep2 } from "node:path";
 var ROOT_FILES = ["AGENTS.md", "GEMINI.md", ".github/copilot-instructions.md"];
 var DIR_FILES = ["CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md"];
 var MAX_BYTES = 256 * 1024;
@@ -1467,8 +1467,9 @@ function sameSubject(a, b) {
   const [x, y] = [subject(a), subject(b)];
   let shared = 0;
   for (const w of x) if (y.has(w)) shared++;
-  return shared >= 2 && shared / Math.min(x.size, y.size) >= 0.6;
+  return shared >= 2 && shared / Math.min(x.size, y.size) >= 0.8;
 }
+var scoped = (text2) => /\b(when|whenever|only|unless|except|if)\b|\bfor\s+\S/i.test(text2);
 function statementOf(raw) {
   const text2 = visibleText(raw).replace(/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])?\s*(?:\[[ xX]\]\s*)?/, "").replace(/^#+\s*/, "").replace(/[*_`]/g, "").trim();
   return text2.split(/\s+/).length >= 3 ? text2 : null;
@@ -1525,9 +1526,10 @@ var displayPath = (ins, file) => {
 };
 function judge(ins, statement) {
   const polarity = negative(statement);
+  const flat = !scoped(statement);
   const same = ins.lines.find((l) => negative(l.text) === polarity && repeats(statement, l.text));
   if (same !== void 0) return { kind: "repeats", line: same };
-  const against = ins.lines.find((l) => negative(l.text) !== polarity && sameSubject(statement, l.text));
+  const against = ins.lines.find((l) => flat && negative(l.text) !== polarity && !scoped(l.text) && sameSubject(statement, l.text));
   return against === void 0 ? null : { kind: "contradicts", line: against };
 }
 var marker = (raw) => /^\s*(?:[-*+]|\d+[.)])?\s*/.exec(raw)[0];
@@ -1586,18 +1588,55 @@ function applyRefusal(ins, e, text2) {
   const at2 = text2?.split("\n")[e.line - 1]?.replace(/\r$/, "");
   return at2 === e.old_line ? null : `${displayPath(ins, e.file)} changed since this edit was proposed (line ${e.line} is not what it was); nothing was written`;
 }
+function writableTarget(ins, file) {
+  const name = displayPath(ins, file);
+  if (file === resolve3(ins.userTarget)) {
+    if (existsSync3(file) && lstatSync(file).isSymbolicLink()) throw new Error(`${name} is a symbolic link; nothing was written. Edit the real file it points to`);
+    return file;
+  }
+  if (ins.top === null) throw new Error(`${name} is not inside a repository; nothing was written`);
+  const real = existsSync3(file) ? realpathSync2(file) : join3(realpathSync2(dirname4(file)), basename(file));
+  if (!inside2(realpathSync2(ins.top), real)) throw new Error(`${name} resolves outside the repository; nothing was written`);
+  return real;
+}
+function readWhole(path, name) {
+  const bytes = readFileSync5(path);
+  if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(`${name} is not valid UTF-8; nothing was written`);
+  }
+}
+function writeAtomic(path, content) {
+  if (Buffer.byteLength(content) > MAX_BYTES) throw new Error(`${basename(path)} would exceed ${MAX_BYTES / 1024} KB; nothing was written`);
+  const tmp = join3(dirname4(path), `.${basename(path)}.${randomBytes3(4).toString("hex")}.tmp`);
+  try {
+    writeFileSync2(tmp, content, { flag: "wx" });
+    if (existsSync3(path)) chmodSync(tmp, statSync2(path).mode & 4095);
+    renameSync2(tmp, path);
+  } catch (error) {
+    try {
+      unlinkSync2(tmp);
+    } catch {
+    }
+    throw error;
+  }
+}
 function applyEdit(db, ins, e) {
   const file = resolve3(e.file);
-  const text2 = existsSync3(file) ? readFileSync5(file, "utf8") : null;
+  if (!ins.allowed.has(file)) throw new Error(applyRefusal(ins, e, null));
+  const target = writableTarget(ins, file);
+  const text2 = existsSync3(target) ? readWhole(target, displayPath(ins, file)) : null;
   const why = applyRefusal(ins, e, text2);
   if (why !== null) throw new Error(why);
   if (e.kind === "conflict") {
     const lines2 = text2.split("\n");
     lines2[e.line - 1] = e.new_line + (lines2[e.line - 1].endsWith("\r") ? "\r" : "");
-    writeFileSync2(file, lines2.join("\n"));
+    writeAtomic(target, lines2.join("\n"));
   } else {
     const base2 = text2 ?? "";
-    writeFileSync2(file, `${base2}${base2 === "" || base2.endsWith("\n") ? "" : "\n"}${e.new_line}
+    writeAtomic(target, `${base2}${base2 === "" || base2.endsWith("\n") ? "" : "\n"}${e.new_line}
 `);
   }
   const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -1718,12 +1757,12 @@ function logWithheld(data, config, via, session, withheld) {
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
-import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync2, statSync as statSync3, unlinkSync as unlinkSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { basename, dirname as dirname7, join as join5 } from "node:path";
+import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { basename as basename2, dirname as dirname7, join as join5 } from "node:path";
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync as existsSync4, mkdirSync as mkdirSync4 } from "node:fs";
+import { chmodSync as chmodSync2, existsSync as existsSync4, mkdirSync as mkdirSync4 } from "node:fs";
 import { dirname as dirname6 } from "node:path";
 var MIGRATIONS = [
   `
@@ -1870,7 +1909,7 @@ function openStore(path, create, busyMs = WRITE_BUSY_MS) {
     mkdirSync4(dirname6(path), { recursive: true, mode: 448 });
   }
   const db = new DatabaseSync(path);
-  chmodSync(path, 384);
+  chmodSync2(path, 384);
   db.exec(`PRAGMA busy_timeout = ${Math.trunc(busyMs)}; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL;`);
   if (db.prepare("PRAGMA journal_mode").get().journal_mode !== "wal") db.exec("PRAGMA journal_mode = WAL");
   const version = () => db.prepare("PRAGMA user_version").get().user_version;
@@ -2019,7 +2058,7 @@ function tryLock(file) {
     if (error.code !== "EEXIST") throw error;
     try {
       if (Date.now() - statSync3(file).mtimeMs <= LOCK_STALE_MS) return false;
-      unlinkSync2(file);
+      unlinkSync3(file);
     } catch {
       return false;
     }
@@ -2028,7 +2067,7 @@ function tryLock(file) {
 }
 var unlock = (file) => {
   try {
-    unlinkSync2(file);
+    unlinkSync3(file);
   } catch {
   }
 };
@@ -2044,7 +2083,7 @@ function commitWatermark(data, session, lines2) {
     state[session] = Math.max(state[session] ?? 0, lines2);
     const tmp = `${stateFile(data)}.${process.pid}.tmp`;
     writeFileSync3(tmp, JSON.stringify(state), { mode: 384 });
-    renameSync2(tmp, stateFile(data));
+    renameSync3(tmp, stateFile(data));
   } finally {
     unlock(lock);
   }
@@ -2112,7 +2151,7 @@ async function captureLocked(data, config, context, path, session, input2) {
   const db = openStore(tenantFile(data, context.tenant), true);
   let kept;
   try {
-    kept = keepCandidates(db, context, candidates, { session, source: `capture:claude-code:${session}:${basename(path)}`, taint });
+    kept = keepCandidates(db, context, candidates, { session, source: `capture:claude-code:${session}:${basename2(path)}`, taint });
   } finally {
     db.close();
   }
@@ -2721,7 +2760,7 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync6, lstatSync, readFileSync as readFileSync7, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync6, lstatSync as lstatSync2, readFileSync as readFileSync7, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join6, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
@@ -2899,7 +2938,7 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 function readInside2(path, root) {
   try {
     if (!existsSync6(path)) return { reason: "not there" };
-    const link2 = lstatSync(path).isSymbolicLink();
+    const link2 = lstatSync2(path).isSymbolicLink();
     const real = realpathSync3(path);
     const top = realpathSync3(root);
     if (!real.startsWith(top + sep3)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
@@ -3867,7 +3906,7 @@ var USAGE = `usage: memory <command>
       make a proposal active
   reject <id> [--reason <text>]
       keep a proposal as a tombstone, so the same statement is never proposed again
-  conflicts [apply <id> [--confirm] | reject <id>]
+  conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]
       the edits memory proposes to instruction files (CLAUDE.md, AGENTS.md): a loaded line an item contradicts (the file
       wins and the item is not recalled) and an item proven enough to be promoted into the file. Nothing is written until
       apply --confirm, which writes exactly the diff shown; reject resolves it. review lists the open ones
@@ -4176,12 +4215,12 @@ function review(data, cwd) {
   );
 }
 function conflictsCommand(args, data, cwd) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { confirm: { type: "boolean" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { confirm: { type: "boolean" }, "yes-non-interactive": { type: "boolean" } } });
   const [verb, id, ...extra] = positionals;
   if (verb !== void 0 && (verb !== "apply" && verb !== "reject" || id === void 0 || extra.length > 0)) {
-    throw new Refusal("usage: memory conflicts [apply <id> [--confirm] | reject <id>]", 2);
+    throw new Refusal("usage: memory conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]", 2);
   }
-  if (values.confirm === true && verb !== "apply") throw new Refusal("--confirm goes with apply", 2);
+  if ((values.confirm === true || values["yes-non-interactive"] === true) && verb !== "apply") throw new Refusal("--confirm and --yes-non-interactive go with apply", 2);
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   const ins = loadInstructions(cwd, currentConfigDir());
   let listed = 0;
@@ -4207,6 +4246,9 @@ function conflictsCommand(args, data, cwd) {
       }
       process.stdout.write(renderEdit(ins, e));
       if (values.confirm !== true) return void console.error("Nothing was written. Run the same command with --confirm to write this edit.");
+      if (!process.stdin.isTTY && values["yes-non-interactive"] !== true) {
+        throw new Refusal("nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command", 2);
+      }
       try {
         return void console.log(applyEdit(db, ins, e));
       } catch (error) {
@@ -4435,7 +4477,7 @@ function pruneLog(data, files, before) {
       const tmp = `${file}.${process.pid}.tmp`;
       writeFileSync5(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
-      renameSync3(tmp, file);
+      renameSync4(tmp, file);
       return true;
     },
     LOG_LOCK_PURGE_MS

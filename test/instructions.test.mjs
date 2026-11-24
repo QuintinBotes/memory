@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setup, remember, sessionStart, run, tools } from './helpers.mjs';
 
@@ -11,6 +11,7 @@ const KEPT = 'Releases are cut from the main branch only';
 const CONFLICTING = 'Tests are optional before a commit';
 // Assembled, so the identity guard does not read an import line as an email address.
 const IMPORT = ['@', 'AGENTS.md'].join('');
+const YES = '--yes-non-interactive';
 const LINE = 'Run the test suite before every commit';
 
 /** A repository whose CLAUDE.md imports AGENTS.md, as Claude Code loads it, with the items of every scenario remembered. */
@@ -108,7 +109,7 @@ test('40.3 approve with --confirm writes the exact proposed edit and the item is
   const s = fixture();
   slice(s);
   const id = idIn(review(s).stdout, 'conflict');
-  const r = conflicts(s, 'apply', id, '--confirm');
+  const r = conflicts(s, 'apply', id, '--confirm', YES);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(readFileSync(s.agents, 'utf8'), `# Agents\n\n- ${CONFLICTING}.\n- ${REPEATED}.\n`);
   const listed = conflicts(s).stdout;
@@ -135,7 +136,7 @@ test('40.5 an edit is refused when the line changed since it was proposed', () =
   slice(s);
   const id = idIn(review(s).stdout, 'conflict');
   writeFileSync(s.agents, `# Agents\n\n- ${LINE} and lint.\n- ${REPEATED}.\n`);
-  const r = conflicts(s, 'apply', id, '--confirm');
+  const r = conflicts(s, 'apply', id, '--confirm', YES);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /changed/);
 });
@@ -168,7 +169,7 @@ test('26.8 applying a promotion appends the exact line, and the item is promoted
   for (const source of ['review-1', 'review-2', 'review-3']) remember(s.repo, s.data, s.configA, text, '--type', 'convention', '--source', source);
   slice(s);
   const id = idIn(review(s).stdout, 'promotion');
-  const r = conflicts(s, 'apply', id, '--confirm');
+  const r = conflicts(s, 'apply', id, '--confirm', YES);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(readFileSync(s.claude, 'utf8'), `# Claude\n\n${IMPORT}\n- ${text}\n`);
   assert.doesNotMatch(slice(s), /Database migrations/);
@@ -208,5 +209,96 @@ test('26.11 the MCP server offers no tool that writes an instruction file', () =
   assert.equal(res.isError, false);
   const server = readFileSync(join(process.cwd(), 'src/mcp/server.ts'), 'utf8');
   assert.doesNotMatch(server, /writeFileSync|applyEdit/);
+  assert.equal(sha(s.agents), before);
+});
+
+/** A promotion proposal for the repository's CLAUDE.md, ready to apply. */
+function promotion(s, extra = []) {
+  const text = 'Database migrations ship in their own pull request';
+  for (const source of ['review-1', 'review-2', 'review-3']) remember(s.repo, s.data, s.configA, text, '--type', 'convention', '--source', source, ...extra);
+  slice(s);
+  return idIn(review(s).stdout, 'promotion');
+}
+
+test('26.12 a repository CLAUDE.md that is a link out of the repository is refused and the outside file is untouched', () => {
+  const s = fixture();
+  const id = promotion(s);
+  const outside = join(s.base, 'outside.md');
+  writeFileSync(outside, 'outside\n');
+  unlinkSync(s.claude);
+  symlinkSync(outside, s.claude);
+  const before = sha(outside);
+  const r = conflicts(s, 'apply', id, '--confirm', YES);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /outside|symbolic|link/i);
+  assert.equal(sha(outside), before);
+});
+
+test('26.13 a user CLAUDE.md that is a symbolic link is refused, naming the real file to edit', () => {
+  const s = fixture();
+  const id = promotion(s, ['--scope', 'person']);
+  assert.ok(id);
+  const real = join(s.base, 'dotfiles-claude.md');
+  writeFileSync(real, 'mine\n');
+  symlinkSync(real, join(s.configA, 'CLAUDE.md'));
+  const before = sha(real);
+  const r = conflicts(s, 'apply', id, '--confirm', YES);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /symbolic link.*Edit the real file/);
+  assert.equal(sha(real), before);
+});
+
+test('26.14 an applied edit leaves no temporary file, keeps the file mode, and a failed edit leaves the old content', () => {
+  const s = fixture();
+  chmodSync(s.agents, 0o600);
+  slice(s);
+  const id = idIn(review(s).stdout, 'conflict');
+  const old = readFileSync(s.agents, 'utf8');
+  writeFileSync(s.agents, Buffer.concat([Buffer.from(old), Buffer.from([0xff, 0xfe, 0x0a])]));
+  const bad = readFileSync(s.agents);
+  const refused = conflicts(s, 'apply', id, '--confirm', YES);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /UTF-8/);
+  assert.deepEqual(readFileSync(s.agents), bad);
+  writeFileSync(s.agents, old);
+  chmodSync(s.agents, 0o600);
+  assert.equal(conflicts(s, 'apply', id, '--confirm', YES).status, 0);
+  assert.equal(statSync(s.agents).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(s.repo).filter((f) => f.endsWith('.tmp')), []);
+  assert.match(readFileSync(s.agents, 'utf8'), /optional before a commit/);
+});
+
+test('26.15 a file over the size cap is refused, not truncated', () => {
+  const s = fixture();
+  slice(s);
+  const id = idIn(review(s).stdout, 'conflict');
+  const old = readFileSync(s.agents, 'utf8');
+  writeFileSync(s.agents, old + `${'x'.repeat(100)}\n`.repeat(3000));
+  const before = sha(s.agents);
+  const r = conflicts(s, 'apply', id, '--confirm', YES);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /too large/);
+  assert.equal(sha(s.agents), before);
+});
+
+test('40.7 a scoped exception is not a contradiction, so the item stays in recall; a true contradiction is still withheld', () => {
+  const s = fixture();
+  for (const text of ['Skip the slow integration test suite before a commit when only docs changed', 'Avoid the shared logger for diagnostics in hot paths']) {
+    assert.equal(remember(s.repo, s.data, s.configA, text, '--type', 'convention').status, 0);
+  }
+  const out = slice(s);
+  assert.match(out, /integration test suite before a commit when only docs changed/);
+  assert.match(out, /Avoid the shared logger for diagnostics in hot paths/);
+  assert.doesNotMatch(out, /Tests are optional/);
+});
+
+test('40.8 conflicts apply --confirm from a pipe is refused unless --yes-non-interactive is given', () => {
+  const s = fixture();
+  slice(s);
+  const id = idIn(review(s).stdout, 'conflict');
+  const before = sha(s.agents);
+  const r = conflicts(s, 'apply', id, '--confirm');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /terminal|--yes-non-interactive/);
   assert.equal(sha(s.agents), before);
 });

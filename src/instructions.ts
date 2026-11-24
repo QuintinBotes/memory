@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { repeats } from './consolidate.ts';
 import { visibleText } from './codefree.ts';
 import { git } from './context.ts';
@@ -84,7 +84,7 @@ const negative = (text: string): boolean => tokens(text).filter((w) => NEGATORS.
 const subject = (text: string): Set<string> => new Set(tokens(text).filter((w) => !STOP.has(w) && !NEGATORS.has(w)));
 
 /**
- * Two statements share a subject when at least two content words are common and they cover 60% of the shorter.
+ * Two statements share a subject when at least two content words are common and they cover 80% of the shorter.
  * shortcut: words, not meaning; a paraphrase with other words is missed, and a shared-word pair can read as one subject.
  * Upgrade to a model only if the owner's replay shows misses.
  */
@@ -92,8 +92,11 @@ function sameSubject(a: string, b: string): boolean {
   const [x, y] = [subject(a), subject(b)];
   let shared = 0;
   for (const w of x) if (y.has(w)) shared++;
-  return shared >= 2 && shared / Math.min(x.size, y.size) >= 0.6;
+  return shared >= 2 && shared / Math.min(x.size, y.size) >= 0.8;
 }
+
+/** A scoped statement ("only when docs changed", "for hot paths") is an exception, not a flat opposite. */
+const scoped = (text: string): boolean => /\b(when|whenever|only|unless|except|if)\b|\bfor\s+\S/i.test(text);
 
 /** One line as a statement: no list marker, heading, quote or emphasis; null for a line too short to be one. */
 function statementOf(raw: string): string | null {
@@ -165,9 +168,10 @@ export type Verdict = { kind: 'repeats' | 'contradicts'; line: InstructionLine }
 /** What the loaded files say about one statement: it repeats a line, contradicts one, or neither. A repeat wins over a contradiction. */
 export function judge(ins: Instructions, statement: string): Verdict | null {
   const polarity = negative(statement);
+  const flat = !scoped(statement);
   const same = ins.lines.find((l) => negative(l.text) === polarity && repeats(statement, l.text));
   if (same !== undefined) return { kind: 'repeats', line: same };
-  const against = ins.lines.find((l) => negative(l.text) !== polarity && sameSubject(statement, l.text));
+  const against = ins.lines.find((l) => flat && negative(l.text) !== polarity && !scoped(l.text) && sameSubject(statement, l.text));
   return against === undefined ? null : { kind: 'contradicts', line: against };
 }
 
@@ -271,22 +275,66 @@ function applyRefusal(ins: Instructions, e: Edit, text: string | null): string |
   return at === e.old_line ? null : `${displayPath(ins, e.file)} changed since this edit was proposed (line ${e.line} is not what it was); nothing was written`;
 }
 
+/** The path to write for `file`, or throws: the user's own file must not be a link; a repository file must stay inside the repository. */
+function writableTarget(ins: Instructions, file: string): string {
+  const name = displayPath(ins, file);
+  if (file === resolve(ins.userTarget)) {
+    if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Error(`${name} is a symbolic link; nothing was written. Edit the real file it points to`);
+    return file;
+  }
+  if (ins.top === null) throw new Error(`${name} is not inside a repository; nothing was written`);
+  const real = existsSync(file) ? realpathSync(file) : join(realpathSync(dirname(file)), basename(file));
+  if (!inside(realpathSync(ins.top), real)) throw new Error(`${name} resolves outside the repository; nothing was written`);
+  return real;
+}
+
+/** The whole file as text, or throws when it is over the cap or not valid UTF-8: a lossy rewrite would damage it. */
+function readWhole(path: string, name: string): string {
+  const bytes = readFileSync(path);
+  if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(`${name} is not valid UTF-8; nothing was written`);
+  }
+}
+
+/** Temp file in the same directory, then rename: the file is whole either way. Keeps the mode of an existing file. */
+function writeAtomic(path: string, content: string): void {
+  if (Buffer.byteLength(content) > MAX_BYTES) throw new Error(`${basename(path)} would exceed ${MAX_BYTES / 1024} KB; nothing was written`);
+  const tmp = join(dirname(path), `.${basename(path)}.${randomBytes(4).toString('hex')}.tmp`);
+  try {
+    writeFileSync(tmp, content, { flag: 'wx' });
+    if (existsSync(path)) chmodSync(tmp, statSync(path).mode & 0o7777);
+    renameSync(tmp, path);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Never created.
+    }
+    throw error;
+  }
+}
+
 /**
  * The owner's yes: writes the stored edit to its file, exactly, and marks the item superseded by the file (a
  * conflict) or promoted into it. The one place memory writes an instruction file. Throws a message when it cannot.
  */
 export function applyEdit(db: DatabaseSync, ins: Instructions, e: Edit): string {
   const file = resolve(e.file);
-  const text = existsSync(file) ? readFileSync(file, 'utf8') : null;
+  if (!ins.allowed.has(file)) throw new Error(applyRefusal(ins, e, null)!);
+  const target = writableTarget(ins, file);
+  const text = existsSync(target) ? readWhole(target, displayPath(ins, file)) : null;
   const why = applyRefusal(ins, e, text);
   if (why !== null) throw new Error(why);
   if (e.kind === 'conflict') {
     const lines = text!.split('\n');
     lines[e.line - 1] = e.new_line + (lines[e.line - 1]!.endsWith('\r') ? '\r' : '');
-    writeFileSync(file, lines.join('\n'));
+    writeAtomic(target, lines.join('\n'));
   } else {
     const base = text ?? '';
-    writeFileSync(file, `${base}${base === '' || base.endsWith('\n') ? '' : '\n'}${e.new_line}\n`);
+    writeAtomic(target, `${base}${base === '' || base.endsWith('\n') ? '' : '\n'}${e.new_line}\n`);
   }
   const now = new Date().toISOString();
   const name = displayPath(ins, file);

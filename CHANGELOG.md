@@ -17,7 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contradiction stores a proposed edit shown as a diff in `memory review`; an
   owner-approved item with support of 3 or more is proposed for promotion into
   the file. `memory conflicts [apply <id> --confirm | reject <id>]` is the only
-  writer of an instruction file; reject resolves without writing.
+  writer of an instruction file; reject resolves without writing. Apply
+  writes atomically and only inside the repository (never through a symbolic
+  link), refuses non-UTF-8 or over-256 KB files, needs a terminal or
+  `--yes-non-interactive`, and a scoped exception ("only when", "unless",
+  "for ...") is never read as a contradiction.
 - Review precedents reach every reviewer (#9): `memory import` reads Review
   Voice's store read-only (`decisions` under `imports`) and proposes a
   `precedent` for each owner `keep`, `dismiss`, `never_flag` and `rewrite`,

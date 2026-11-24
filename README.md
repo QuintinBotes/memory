@@ -297,12 +297,16 @@ not read. Their text is matched, never stored as an item or evidence.
   line brings the item back at the next session. `memory_propose` of a
   statement a loaded line already says is refused, naming the file and line.
 - **A contradiction** (a line and an item that share a subject, two content
-  words covering 60% of the shorter, and differ in polarity, "must" against
-  "must not", "run" against "optional") is also left out: the file wins. Memory
+  words covering 80% of the shorter, and differ in polarity, "must" against
+  "must not", "run" against "optional", with no scoping word such as when,
+  only, unless, except, if or "for ..." in either) is also left out: the file wins. Memory
   stores a proposed edit that replaces the line with the item's statement.
   `memory review` shows it as a diff, `memory conflicts` lists every edit, and
-  only you can write it, from a terminal:
-  `memory conflicts apply <id> --confirm` writes exactly the diff shown and
+  no MCP tool or hook writes it, and `memory conflicts apply <id> --confirm`
+  does only from a terminal (stdin a TTY); from a pipe or script it is refused
+  unless `--yes-non-interactive` is added. An agent with a shell can still run
+  it, so add an ask rule for it, as for `approve` (for Claude Code,
+  `Bash(*memory.mjs*conflicts apply*)`). It writes exactly the diff shown and
   marks the item superseded by the file; `memory conflicts reject <id>` marks
   it resolved. Without `--confirm`, apply writes nothing. The edit is refused if the
   line changed since it was proposed. After a reject the item stays out of
