@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Review precedents reach every reviewer (#9): `memory import` reads Review
+  Voice's store read-only (`decisions` under `imports`) and proposes a
+  `precedent` for each owner `keep`, `dismiss`, `never_flag` and `rewrite`,
+  anchored to the finding's directory with the pull request link as source; a
+  teammate's strong dismissal arrives with team trust. `memory recall --diff
+  <base>..<head>` prints the precedents and hazards for the changed paths in
+  600 estimated tokens. Review Voice's agents still never receive the slice.
+
 - Standing red-team suite (#22): `test/poison.test.mjs` replays one test per
   published poisoning attack class against every capture path (owner
   `remember`, `memory_propose`, automatic capture, auto memory and silo

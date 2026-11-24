@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { isAbsolute, join, sep } from 'node:path';
 import { SILOS, organisationTerms, type Config } from '../config.ts';
 import { matchingTenants, resolveContext } from '../context.ts';
 import { namesOrganisation, refusal } from '../gate.ts';
@@ -9,6 +9,7 @@ import { insertItem, knownItem, quarantineOf, reduceTombstones, type Anchor, typ
 import { openStore } from '../store/db.ts';
 import { recordAudit } from '../store/audit.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
+import { reviewVoiceDecisions } from './review-voice.ts';
 import { inside, markdown, notes, policy, rejections, symbolPath, type Parsed } from './silos.ts';
 
 export interface ImportReport {
@@ -140,13 +141,33 @@ export function importSilos(config: Config, data: string, configDir: string, dry
     for (const silo of SILOS) {
       const rel = silos[silo];
       if (rel === undefined) continue;
-      const path = join(checkout, rel);
-      if (!inside(rel)) {
+      const path = silo === 'decisions' && isAbsolute(rel) ? rel : join(checkout, rel);
+      // Review Voice's store lives in its own data directory, so only the text silos must stay inside the checkout.
+      if (silo !== 'decisions' && !inside(rel)) {
         report.skippedFiles.push({ path, reason: 'not a path inside the repository' });
         continue;
       }
       if (context.tenant === null || context.repository === null) {
         report.skippedFiles.push({ path, reason: context.reason });
+        continue;
+      }
+      if (silo === 'decisions') {
+        const found = reviewVoiceDecisions(path);
+        if ('reason' in found) {
+          report.skippedFiles.push({ path, reason: found.reason });
+          continue;
+        }
+        // The store holds every repository's runs; this checkout's repository gets its own.
+        const mine = found.decisions.filter((d) => d.repository === context.repository);
+        report.files.push({ path, statements: mine.length });
+        for (const reason of found.unreadable) report.refused.push({ source: path, reason });
+        for (const d of mine) {
+          if (refused(d.source, refusal(d.statement))) continue;
+          candidates.push({
+            tenant: context.tenant, scope: 'repository', scopeKey: context.repository, type: 'precedent', statement: d.statement,
+            rationale: null, anchors: [{ path: d.anchorPath }], source: d.source, trust: d.trust, status: 'proposed',
+          });
+        }
         continue;
       }
       const parsed = read(path, checkout, parsers[silo]);

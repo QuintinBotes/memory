@@ -37,6 +37,7 @@ import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
 import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
+import { diffRecall } from './recall/diff.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { capture, captureWanted } from './capture/capture.ts';
@@ -82,6 +83,9 @@ const USAGE = `usage: memory <command>
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
+  recall --diff <base>..<head>
+      the precedents and hazards for the paths that range changes, within 600 estimated tokens, for any reviewer to
+      read before it reports findings. Exits 2 when the range does not resolve
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_propose, memory_feedback
   session-start
@@ -445,6 +449,15 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
   }
 }
 
+/** `memory recall --diff <range>`: what an owner decided about findings under the paths a change touches. */
+function recallCommand(args: string[], data: string, cwd: string): void {
+  const { values } = parseArgs({ args, options: { diff: { type: 'string' } } });
+  if (values.diff === undefined) throw new Refusal('recall needs --diff <base>..<head>', 2);
+  const found = diffRecall(data, resolveContext(cwd, setUp(data), currentConfigDir()), cwd, values.diff);
+  if ('reason' in found) throw new Refusal(found.reason, 2);
+  process.stdout.write(found.text);
+}
+
 /** `memory sweep`, or with `due` the session start's: each store this repository may see, once a day. */
 function sweepCommand(data: string, cwd: string, due: boolean): void {
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
@@ -791,6 +804,8 @@ async function main(argv: string[]): Promise<void> {
       return sweepCommand(data, process.cwd(), false);
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
+    case 'recall':
+      return recallCommand(rest, data, process.cwd());
     case 'mcp':
       return serve(data, process.cwd(), pluginVersion());
     case 'session-start':
