@@ -169,7 +169,7 @@ test('the harness refuses inputs it cannot read, with exit 2 and the reason', ()
     [['false-recall', '--log', badSignal], /line 1/],
     [['--since', '2026-03-01', '--log', log], /--pulls/],
     [['false-recall'], /--log/],
-    [['poison'], /unknown measure/],
+    [['bogus'], /unknown measure/],
   ]) {
     const r = run(['eval', ...args], { cwd: base });
     assert.equal(r.status, 2, `${args.join(' ')}: ${r.stdout}`);

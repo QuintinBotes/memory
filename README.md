@@ -258,6 +258,14 @@ repository that matches no tenant is skipped: no model call, nothing written.
   proposes it on, but a consent given before it stays off for it until you run
   `memory init` and confirm.
 - **Off:** `"capture": { "enabled": false }` in `config.json`.
+- **Tainted sessions:** when the transcript shows the session read a web page
+  or search (`WebFetch`, `WebSearch`) or called a tool of any MCP server but
+  memory's own, what capture keeps is not saved active: it waits in `memory
+  review` as a proposal, labelled `tainted by web:<host>` or `mcp:<server>`.
+- **Automation sessions:** a session started by automation (`claude -p`, the
+  SDK, a CI job) neither captures nor proposes unless the consent plan names
+  them: `memory init --automation on --confirm`. See SECURITY.md for how a
+  session is told apart and what that cannot see.
 
 ```json
 { "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }
@@ -292,9 +300,14 @@ reject, purge or change the configuration, and nothing they write is active.
   (the default), `team`, `external` or `bot`; only your own `remember` gives
   owner trust. A proposal that Orbit's authority rules read as an instruction
   ("always skip tests") is quarantined: never searched, shown in review with
-  the rule that flagged it, and active only if you approve it.
-  `test/poison.test.mjs` is the standing red-team suite for these gates (see
-  SECURITY.md); it runs in CI on every pull request.
+  the rule that flagged it, and active only if you approve it. `evidence` may
+  also carry `tainted_by`, the external content the session read (such as
+  `web:example.com`); a source from `external` or `bot` is named as the taint
+  automatically. The label shows in `memory review`, `memory_get`, search rows
+  and the session slice, and it survives merges and supersession.
+  `test/poison.test.mjs` and `memory eval poison` are the standing red-team
+  suite for these gates (see SECURITY.md); `npm test` runs it in CI on every
+  pull request.
 - `memory_feedback(id, helped|wrong|stale)` changes only the counts behind an
   item's confidence. `stale` re-checks the item's citation at HEAD at once: if
   it fails, the item goes stale as the re-check would make it, and comes back
@@ -366,7 +379,17 @@ Every row carries the plugin version, the capabilities on in its arm
 posts nothing, never opens the memory store, and prints the same rows for the
 same inputs.
 
+`memory eval poison` is the red-team report, offline, in a throwaway store of
+its own: one JSON line per attack family (external comments, query-only
+injection, delayed triggers over 100 sessions, compositional attacks, command
+output, fence escape, trust laundering, role spoofing) with `attempted`,
+`active` (reached active without the owner's trust), `outside_fence` and
+`raised_support`, then the owner's 50 benign items accepted and recalled, then
+a summary. It exits 1 when any attack got through; it is not part of the
+no-measure run.
+
 ```bash
+memory eval poison
 memory eval replay --since 2026-03-01 --pulls pulls.json
 memory eval false-recall --log injections.jsonl
 memory eval orbit

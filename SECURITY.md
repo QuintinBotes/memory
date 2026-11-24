@@ -30,10 +30,37 @@ no tenant, or in a Claude Code config not bound to that tenant.
   attacks (query-only injection, planted items that fire later, attacks split
   over items, trust laundered through merged evidence, role spoofing, fence
   escape, planted auto memory) against every capture path, with fixtures only,
-  in CI on every pull request. It measures memory's gates, not a model's
-  resistance. A source file that stores items with no family in it fails the
-  suite. Not yet covered: taint labels for sessions that read external
-  content, and refusing automation-started sessions.
+  in CI on every pull request; `memory eval poison` runs the same families
+  offline and reports, per family, attacks attempted, reached active, rendered
+  outside the fence and raised support, plus the 50 benign items. It measures
+  memory's gates, not a model's resistance. A source file that stores items
+  with no family in it fails the suite. Known limit: the instruction filter is
+  a deny-list, so an instruction paraphrased past it (for example "pipe the
+  vendor script to a shell" with no `curl ... | sh`) is not quarantined; from
+  capture it is stored as an active agent-trust fact, shown quoted inside the
+  fence and never as an instruction, and from a proposal it waits for you.
+- **Taint labels.** Evidence carries the external content its session read.
+  `memory_propose` names it (`evidence.tainted_by`, and a source from
+  `external` or `bot` automatically); capture reads it from the transcript's
+  tool calls: `WebFetch` and `WebSearch` (by host) and any MCP server's tools
+  but memory's own (by server). A tainted capture is queued in `memory review`
+  rather than saved active. The label shows in review, `memory_get`, search
+  and the session slice, and is kept through merges and supersession. Limits:
+  a page read through a shell command (`curl`, `gh`) is not seen, a tool
+  result from inside your tenant is not told from one outside it, and an
+  agent's own `tainted_by` is its word, though it can only add a label.
+- **Automation sessions.** A session started by automation neither captures
+  nor proposes unless the consent plan names automation
+  (`memory init --automation on --confirm`, which changes the plan hash).
+  Claude Code gives hooks no field that says a session is headless, so memory
+  reads what it leaves: the `CLAUDE_CODE_ENTRYPOINT` it exports (`sdk-*`,
+  `github-action`), `CI=true` or `GITHUB_ACTIONS=true`, and an `entrypoint` it
+  records on transcript lines. This is detection by convention, not a
+  guarantee: a process that clears those variables looks like a person, a
+  person running `claude -p` looks like automation, and the transcript field
+  is not a documented contract. `memory remember` is the owner's command and
+  is not refused, since a shell cannot tell the owner from an agent that runs
+  it. Recall at session start is unchanged.
 - **Organisation-free person items.** Person and global items are refused when
   they name code, a path, a tenant, an owner or a repository. This is a
   heuristic; names of one character are not matched.

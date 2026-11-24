@@ -44,14 +44,16 @@ import { dataDirectory, injectionLog, personFile, tenantFile } from './store/pat
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
 import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
+import { poison } from './eval/poison.ts';
 import { LAB, lab, labTasks, parseRows, verdict } from './eval/lab.ts';
 
 suppressSqliteExperimentalWarning();
 
 const USAGE = `usage: memory <command>
 
-  init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--confirm]
-      show the consent plan; with --confirm, save it. --bind binds this Claude Code config.
+  init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off] [--confirm]
+      show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
+      sessions started by automation (headless runs, CI jobs) capture and propose; off is the default
   remember [--scope repository|organisation|person|global] [--type <type>]
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
@@ -99,6 +101,11 @@ const USAGE = `usage: memory <command>
       has a memory switch. lab: the session lab's fixture tasks, three runs per arm, each run by the agent
       command you name in a temporary copy and graded by hidden tests. Calls no model itself, posts nothing and
       never opens the memory store
+  eval poison
+      the red-team suite (#22), offline: each published memory-poisoning attack replayed against memory's gates in a
+      throwaway store, one JSON line per family with attacks attempted, reached active, rendered outside the fence and
+      raised support, then the owner's 50 benign items accepted and recalled, then a summary. Exit 1 when any attack got
+      through. Not part of the no-measure run
   eval verdict --scorecard <file> --lab <file>
       whether auto memory may be switched off: only when both files of rows show memory no worse
   --version`;
@@ -125,7 +132,7 @@ function setUp(data: string): Config {
 function init(args: string[], data: string): void {
   const { values } = parseArgs({
     args,
-    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, confirm: { type: 'boolean' } },
+    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, confirm: { type: 'boolean' } },
   });
   const config = loadConfig(data) ?? emptyConfig();
   for (const spec of values.tenant ?? []) {
@@ -143,6 +150,11 @@ function init(args: string[], data: string): void {
     const unknown = tenants.find((t) => !(t in config.tenants));
     if (unknown !== undefined) throw new Refusal(`no tenant named "${unknown}"; add it with --tenant first`, 2);
     config.configs[currentConfigDir()] = tenants;
+  }
+  if (values.automation !== undefined) {
+    if (values.automation !== 'on' && values.automation !== 'off') throw new Refusal('--automation is on or off', 2);
+    if (values.automation === 'on') config.automation = true;
+    else delete config.automation;
   }
   const plan = buildConsentPlan(config, data);
   console.log(JSON.stringify(plan, null, 2));
@@ -672,6 +684,13 @@ function evalCommand(args: string[]): void {
   if (only === 'verdict' && positionals.length === 1) {
     if (values.scorecard === undefined || values.lab === undefined) throw new Refusal('verdict needs --scorecard <file> and --lab <file>', 2);
     return void console.log(verdict(input(values.scorecard, parseRows), input(values.lab, parseRows), currentConfigDir()));
+  }
+  if (only === 'poison' && positionals.length === 1) {
+    if (Object.values(values).some((v) => v !== undefined)) throw new Refusal('poison takes no flags', 2);
+    const { rows, meetsBar } = poison(pluginVersion());
+    process.stdout.write(rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+    if (!meetsBar) process.exitCode = 1;
+    return;
   }
   if (positionals.length > 1 || (only !== undefined && !(MEASURES as readonly string[]).includes(only))) {
     throw new Refusal(`unknown measure ${positionals.join(' ')}; give one of ${MEASURES.join(', ')}, or none for all`, 2);

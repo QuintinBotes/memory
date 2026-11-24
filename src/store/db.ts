@@ -128,6 +128,14 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     created_at TEXT NOT NULL
   );
   `,
+
+  // v8 - taint (#22, FR-006): the external content a session had read when it made the evidence, named by its source.
+  // It lives on the evidence, so a merge adds to it, an undo takes it away and a supersession leaves the older item's own.
+  // Skipped when the column is there, so a store a test or an older install rolled back by version alone still opens.
+  (db) => {
+    const has = (db.prepare('PRAGMA table_info(evidence)').all() as { name: string }[]).some((c) => c.name === 'taint');
+    if (!has) db.exec('ALTER TABLE evidence ADD COLUMN taint TEXT;');
+  },
 ];
 const SECURE_DELETE = 6;
 

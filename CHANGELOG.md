@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emails, cross-tenant reads and writes, and secrets or quarantined text
   reaching an embedding provider. A registry test fails when a new source file
   stores items without a family. The 50 benign owner items are all recalled.
+- `memory eval poison` (#22, FR-001 to FR-004): the red-team families offline
+  in a throwaway store, one JSON line per family with attacks attempted,
+  reached active, rendered outside the fence and raised support, then the 50
+  benign owner items and a summary; exit 1 when any attack got through.
+- Taint labels (#22, FR-006): evidence records the external content its session
+  read (migration 8). `memory_propose` takes `evidence.tainted_by` and names an
+  `external` or `bot` source itself; capture reads web fetches, searches and
+  MCP tool calls from the transcript and queues what it keeps for review
+  instead of saving it active. The label shows in review, `memory_get`, search
+  and the session slice, and survives merges and supersession.
+- Automation sessions (#22, FR-008): a session started by automation (headless
+  entrypoint, CI) neither captures nor proposes unless the consent plan names
+  it (`memory init --automation on`); the plan shows `automationSessions`.
+  Consent given before this stays valid.
 
 ### Fixed
 
