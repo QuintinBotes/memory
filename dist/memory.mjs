@@ -1140,7 +1140,7 @@ var NETWORK_TYPES = /^(nfs\d*|cifs|smb\w*|smbfs|afpfs|afs|ncpfs|webdav|davfs\w*|
 function parseMounts(table) {
   const mounts = [];
   for (const line of table.split("\n")) {
-    const mac = /^.+ on (.+) \(([^,)]+)/.exec(line);
+    const mac = /^.+? on (\/.*) \(([^,)]+)[^)]*\)\s*$/.exec(line);
     if (mac !== null) {
       mounts.push({ point: mac[1], type: mac[2].trim() });
       continue;
@@ -1175,23 +1175,26 @@ function networkFilesystem(dir) {
 import { closeSync, mkdirSync as mkdirSync2, openSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname as dirname3 } from "node:path";
 var STALE_MS = 3e4;
-function withRefreshLock(storeFile, work) {
-  const lock = `${storeFile}.refresh.lock`;
+function withFileLock(lock, work, waitMs = 0) {
   mkdirSync2(dirname3(lock), { recursive: true, mode: 448 });
+  const deadline = Date.now() + waitMs;
   let fd;
-  for (let attempt = 0; attempt < 2 && fd === void 0; attempt++) {
+  while (fd === void 0) {
     try {
       fd = openSync(lock, "wx", 384);
     } catch {
       try {
-        if (Date.now() - statSync(lock).mtimeMs <= STALE_MS) return void 0;
-        unlinkSync(lock);
+        if (Date.now() - statSync(lock).mtimeMs > STALE_MS) {
+          unlinkSync(lock);
+          continue;
+        }
       } catch {
-        return void 0;
+        continue;
       }
+      if (Date.now() >= deadline) return void 0;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
   }
-  if (fd === void 0) return void 0;
   try {
     writeSync(fd, String(process.pid));
     return work();
@@ -1203,6 +1206,7 @@ function withRefreshLock(storeFile, work) {
     }
   }
 }
+var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lock`, work);
 
 // src/mcp/server.ts
 import { isAbsolute, relative } from "node:path";
@@ -1249,6 +1253,8 @@ var sameNumbers = (a, b) => numberKey(a) === numberKey(b);
 var anchorsOverlap = (a, b) => a.length === 0 || b.length === 0 || a.some((x) => b.some((y) => x.path === y.path));
 function place(db, c, key, write) {
   return inTransaction(db, () => {
+    const blocked = priorDecision(db, c);
+    if (blocked !== void 0) return blocked;
     const same = db.prepare(
       `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
            AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?)) ORDER BY created_at, id`
@@ -1257,10 +1263,15 @@ function place(db, c, key, write) {
     return repeat === void 0 ? write() : mergeEvidence(db, repeat.id, c);
   });
 }
-function addItem(db, c) {
+function priorDecision(db, c) {
   const was = knownItem(db, c);
   if (c.status !== "active" && was !== void 0 && (was.status === "rejected" || was.status === "expired")) return { kind: "rejected", id: was.id };
   if (was !== void 0 && !["active", "proposed", "rejected", "expired"].includes(was.status)) return { kind: "known", id: was.id };
+  return void 0;
+}
+function addItem(db, c) {
+  const blocked = priorDecision(db, c);
+  if (blocked !== void 0) return blocked;
   const key = statementKey(c.statement);
   const mine = words(c.statement);
   const rows = db.prepare(
@@ -1379,14 +1390,13 @@ function narrowerWins(items) {
 }
 var DAY = 864e5;
 function sweep(db) {
-  const rows = db.prepare(
-    `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
-         WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
-  ).all().map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) }));
-  const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
-  let proposed = 0;
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return inTransaction(db, () => {
+    const rows = db.prepare(
+      `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
+           WHERE status = 'active' AND statement != '' ORDER BY created_at, id`
+    ).all().map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) }));
+    const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
+    let proposed = 0;
     for (const [j, newer] of rows.entries()) {
       if (newer.supersedes !== null) continue;
       const older = rows.slice(0, j).find((r) => {
@@ -1401,12 +1411,8 @@ function sweep(db) {
       proposed++;
     }
     recordAudit(db, "sweep", null, { proposed });
-    db.exec("COMMIT");
     return proposed;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 var START_SWEEP_MAX = 1e3;
 function sweepIfDue(db, now = Date.now()) {
@@ -2433,8 +2439,24 @@ function executePurge(db, scope) {
     db.exec("ROLLBACK");
     throw error;
   }
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  truncateLog(db);
   return preview;
+}
+var PurgeResidueError = class extends Error {
+};
+var CHECKPOINT_WAIT_MS = 5e3;
+function truncateLog(db) {
+  const deadline = Date.now() + CHECKPOINT_WAIT_MS;
+  db.exec("PRAGMA busy_timeout = 250");
+  for (; ; ) {
+    const { busy } = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    if (busy === 0) return;
+    if (Date.now() >= deadline) {
+      throw new PurgeResidueError(
+        "the purge was applied, but another process is still reading the store, so the deleted text remains in its write-ahead log; close other memory sessions and run the same purge again"
+      );
+    }
+  }
 }
 
 // src/import/import.ts
@@ -2665,16 +2687,18 @@ function importSilos(config, data, configDir, dryRun) {
       const reject = db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'");
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list2) {
-        const was = knownItem(db, c);
         if (c.status === "rejected") {
-          if (was !== void 0 && was.status === "proposed") {
-            reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
-            added.tombstones++;
-          } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
-          else {
-            insertItem(db, c);
-            added.tombstones++;
-          }
+          inTransaction(db, () => {
+            const was = knownItem(db, c);
+            if (was !== void 0 && was.status === "proposed") {
+              reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
+              added.tombstones++;
+            } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
+            else {
+              insertItem(db, c);
+              added.tombstones++;
+            }
+          });
           continue;
         }
         const stored = addItem(db, c);
@@ -3729,20 +3753,36 @@ function subagentStart(data) {
     const type = input2["agent_type"];
     const config = loadConfig(data);
     if (!consented(config) || typeof type !== "string" || !subagentAllowed(config, type)) return;
-    const { text: text2, shown } = hookSlice(data, config, input2, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    const id = (v) => typeof v === "string" && v !== "" ? v : "unknown";
+    let slice;
+    try {
+      slice = hookSlice(data, config, input2, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+    } catch {
+      if (covers(config, "injections")) {
+        appendInjections(data, [`${JSON.stringify({ event: "skipped", session: id(input2["session_id"]), agent: id(input2["agent_id"]), via: "subagent-start", at: (/* @__PURE__ */ new Date()).toISOString() })}
+`]);
+      }
+      return;
+    }
+    const { text: text2, shown } = slice;
     if (text2 === "") return;
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text2 } }));
     if (!covers(config, "injections")) return;
-    const id = (v) => typeof v === "string" && v !== "" ? v : "unknown";
     const lines2 = shown.map(
       (item) => `${JSON.stringify({ event: "injected", session: id(input2["session_id"]), agent: id(input2["agent_id"]), item: item.id, via: "subagent-start", anchors: item.anchors.map((a) => a.path), tokens: estimate(row(item)), at: (/* @__PURE__ */ new Date()).toISOString() })}
 `
     );
-    const file = injectionLog(data);
-    mkdirSync6(dirname7(file), { recursive: true, mode: 448 });
-    appendFileSync2(file, lines2.join(""), { mode: 384 });
+    appendInjections(data, lines2);
   } catch {
   }
+}
+var LOG_LOCK_HOOK_MS = 2e3;
+var LOG_LOCK_PURGE_MS = 1e4;
+var injectionLock = (data) => `${injectionLog(data)}.lock`;
+function appendInjections(data, lines2) {
+  const file = injectionLog(data);
+  mkdirSync6(dirname7(file), { recursive: true, mode: 448 });
+  withFileLock(injectionLock(data), () => appendFileSync2(file, lines2.join(""), { mode: 384 }), LOG_LOCK_HOOK_MS);
 }
 async function captureCommand(args, data) {
   const { values } = parseArgs({ args, options: { foreground: { type: "boolean" } } });
@@ -3778,20 +3818,28 @@ function pruneLog(data, files, before) {
       db.close();
     }
   }
-  const kept = readFileSync8(file, "utf8").split("\n").filter((line) => {
-    if (line.trim() === "") return false;
-    try {
-      const e = JSON.parse(line);
-      if (typeof e.item === "string" && !held2.has(e.item)) return false;
-      return before === void 0 || typeof e.at === "string" && e.at >= before;
-    } catch {
-      return false;
-    }
-  });
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync3(tmp, kept.map((l) => `${l}
+  const done = withFileLock(
+    injectionLock(data),
+    () => {
+      const kept = readFileSync8(file, "utf8").split("\n").filter((line) => {
+        if (line.trim() === "") return false;
+        try {
+          const e = JSON.parse(line);
+          if (typeof e.item === "string" && !held2.has(e.item)) return false;
+          return before === void 0 || typeof e.at === "string" && e.at >= before;
+        } catch {
+          return false;
+        }
+      });
+      const tmp = `${file}.${process.pid}.tmp`;
+      writeFileSync3(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
-  renameSync3(tmp, file);
+      renameSync3(tmp, file);
+      return true;
+    },
+    LOG_LOCK_PURGE_MS
+  );
+  if (done === void 0) throw new Refusal("the injection log is busy; run the same purge again to remove its lines");
 }
 function purge(args, data, cwd) {
   const { values } = parseArgs({
@@ -3841,6 +3889,7 @@ function purge(args, data, cwd) {
   if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0) files.push(personFile(data));
   const report = {};
   const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [] };
+  const residue = [];
   for (const file of files) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -3852,6 +3901,9 @@ function purge(args, data, cwd) {
       total.returnedToProposed += r.returnedToProposed;
       total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
+    } catch (error) {
+      if (!(error instanceof PurgeResidueError)) throw error;
+      residue.push(`${file}: ${error.message}`);
     } finally {
       db.close();
     }
@@ -3861,6 +3913,8 @@ function purge(args, data, cwd) {
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));
+  if (residue.length > 0) throw new Refusal(`purge incomplete
+${residue.join("\n")}`);
   if (values.confirm !== true) console.error("Nothing was deleted. Run the same command with --confirm to delete.");
   else if (total.checks.length > 0) console.error('Review the promoted checks listed under "checks"; memory does not edit them.');
 }

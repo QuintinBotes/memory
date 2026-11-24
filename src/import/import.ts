@@ -4,6 +4,7 @@ import { SILOS, organisationTerms, type Config } from '../config.ts';
 import { matchingTenants, resolveContext } from '../context.ts';
 import { namesOrganisation, refusal } from '../gate.ts';
 import { addItem } from '../consolidate.ts';
+import { inTransaction } from '../store/transaction.ts';
 import { insertItem, knownItem, quarantineOf, reduceTombstones, type Anchor, type NewItem } from '../items.ts';
 import { openStore } from '../store/db.ts';
 import { recordAudit } from '../store/audit.ts';
@@ -180,17 +181,20 @@ export function importSilos(config: Config, data: string, configDir: string, dry
       const reject = db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = 'proposed'");
       const added = { proposed: 0, tombstones: 0 };
       for (const c of list) {
-        const was = knownItem(db, c);
         if (c.status === 'rejected') {
-          if (was !== undefined && was.status === 'proposed') {
-            // Rejected in the retro after it was proposed here: the owner's no stands.
-            reject.run(c.validTo ?? new Date().toISOString(), c.statusReason ?? null, was.id);
-            added.tombstones++;
-          } else if (was !== undefined) counts[was.status === 'rejected' ? 'rejectedBefore' : 'alreadyKnown']++;
-          else {
-            insertItem(db, c);
-            added.tombstones++;
-          }
+          // Looked up and written under one lock, so what another writer proposed meanwhile is rejected, not duplicated.
+          inTransaction(db, () => {
+            const was = knownItem(db, c);
+            if (was !== undefined && was.status === 'proposed') {
+              // Rejected in the retro after it was proposed here: the owner's no stands.
+              reject.run(c.validTo ?? new Date().toISOString(), c.statusReason ?? null, was.id);
+              added.tombstones++;
+            } else if (was !== undefined) counts[was.status === 'rejected' ? 'rejectedBefore' : 'alreadyKnown']++;
+            else {
+              insertItem(db, c);
+              added.tombstones++;
+            }
+          });
           continue;
         }
         const stored = addItem(db, c);

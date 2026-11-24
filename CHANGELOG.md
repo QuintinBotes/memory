@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `</s>`) or a leading `System:` or `Assistant:` was stored by every capture
   path; the refusal check now refuses it. Code spans are ignored, and your own
   `memory remember` is refused only a full chat-template sequence.
+- Review fixes on #24. `memory purge` checks the write-ahead log checkpoint: while another process holds a read snapshot it retries for 5 s, then
+  fails with a clear message instead of reporting success with the purged text still in the `-wal` file, and the other store files are still purged.
+  The injection log is rewritten and appended under one lock, so a purge no longer drops a line a subagent writes meanwhile. A subagent hook that cannot
+  read the store prints nothing and logs a `skipped` line. `memory sweep` reads its rows under the write lock, and the tombstone checks of an import and of
+  a proposal run under it too, so two writers cannot propose one pair twice or write a statement the owner just rejected. A macOS mount point containing
+  " on " is read whole, so an smbfs share there is refused at `memory init`.
 
 ### Changed
 

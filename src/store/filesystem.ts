@@ -11,7 +11,8 @@ type Mount = { point: string; type: string };
 export function parseMounts(table: string): Mount[] {
   const mounts: Mount[] = [];
   for (const line of table.split('\n')) {
-    const mac = /^.+ on (.+) \(([^,)]+)/.exec(line);
+    // The type is the first word of the trailing "(type, options)"; the device ends at the first " on /", so a mount point may contain " on ".
+    const mac = /^.+? on (\/.*) \(([^,)]+)[^)]*\)\s*$/.exec(line);
     if (mac !== null) {
       mounts.push({ point: mac[1]!, type: mac[2]!.trim() });
       continue;

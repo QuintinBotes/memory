@@ -44,3 +44,16 @@ test('init without --confirm also refuses, so the plan is never agreed to for an
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /network file system/i);
 });
+
+test('a macOS mount point containing " on " is read whole, so an smbfs share there is refused', () => {
+  const s = sandbox();
+  const point = join(realpathSync(s.base), 'Backup on NAS');
+  mkdirSync(point);
+  const file = join(mkdtempSync(join(tmpdir(), 'memory-mounts-')), 'mounts');
+  writeFileSync(file, `/dev/disk3s1 on / (apfs, local)\n//me@nas/share on ${point} (smbfs, nodev, nosuid, mounted by me)\n`);
+  const data = join(point, 'data');
+  const r = run(INIT, { cwd: s.base, data, config: s.configA, env: { MEMORY_MOUNT_TABLE_FILE: file } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /smbfs/);
+  assert.equal(existsSync(data), false);
+});

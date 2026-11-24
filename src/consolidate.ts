@@ -58,6 +58,9 @@ export type Stored =
  */
 function place(db: DatabaseSync, c: NewItem, key: string, write: () => Stored): Stored {
   return inTransaction(db, () => {
+    // A tombstone another writer left while this one queued blocks it too.
+    const blocked = priorDecision(db, c);
+    if (blocked !== undefined) return blocked;
     const same = db
       .prepare(
         `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
@@ -69,12 +72,19 @@ function place(db: DatabaseSync, c: NewItem, key: string, write: () => Stored): 
   });
 }
 
-/** Adds `c`, consolidating it with what the store holds. `c.status` of `active` is the owner's own "remember this". */
-export function addItem(db: DatabaseSync, c: NewItem): Stored {
+/** A tombstone, or a stale or superseded item, already settles this statement: it is not proposed again. */
+function priorDecision(db: DatabaseSync, c: NewItem): Stored | undefined {
   const was = knownItem(db, c);
   if (c.status !== 'active' && was !== undefined && (was.status === 'rejected' || was.status === 'expired')) return { kind: 'rejected', id: was.id };
   // Stale and superseded items keep their statement: it is not proposed again either.
   if (was !== undefined && !['active', 'proposed', 'rejected', 'expired'].includes(was.status)) return { kind: 'known', id: was.id };
+  return undefined;
+}
+
+/** Adds `c`, consolidating it with what the store holds. `c.status` of `active` is the owner's own "remember this". */
+export function addItem(db: DatabaseSync, c: NewItem): Stored {
+  const blocked = priorDecision(db, c);
+  if (blocked !== undefined) return blocked;
 
   const key = statementKey(c.statement);
   const mine = words(c.statement);
@@ -238,18 +248,18 @@ const DAY = 86_400_000;
  * shortcut: compares every pair of the store's active items, quadratic; index by type if a store passes ~5,000 items.
  */
 export function sweep(db: DatabaseSync): number {
-  const rows = (
-    db
-      .prepare(
-        `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
-         WHERE status = 'active' AND statement != '' ORDER BY created_at, id`,
-      )
-      .all() as unknown as (Related & { supersedes: string | null })[]
-  ).map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) as Anchor[] }));
-  const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
-  let proposed = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  // Read under the write lock: two sweeps queue, and the second sees what the first proposed and any row purged since.
+  return inTransaction(db, () => {
+    const rows = (
+      db
+        .prepare(
+          `SELECT id, status, scope, scope_key, statement, statement_key, type, anchors_json, supersedes FROM items
+           WHERE status = 'active' AND statement != '' ORDER BY created_at, id`,
+        )
+        .all() as unknown as (Related & { supersedes: string | null })[]
+    ).map((r) => ({ ...r, w: words(r.statement), anchors: JSON.parse(r.anchors_json) as Anchor[] }));
+    const taken = new Set(rows.map((r) => r.supersedes).filter((id) => id !== null));
+    let proposed = 0;
     for (const [j, newer] of rows.entries()) {
       if (newer.supersedes !== null) continue;
       const older = rows.slice(0, j).find((r) => {
@@ -264,12 +274,8 @@ export function sweep(db: DatabaseSync): number {
       proposed++;
     }
     recordAudit(db, 'sweep', null, { proposed });
-    db.exec('COMMIT');
     return proposed;
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 /** Above this many active items the session start leaves the sweep to `memory sweep`: about half a million pairs, well under a second. */
