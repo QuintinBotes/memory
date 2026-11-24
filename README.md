@@ -170,20 +170,35 @@ Bash bypass the hook; diff recall still sees them at review.
 ### Recall at a failing command
 
 No switch and no extra consent: it stores no error text. A `PostToolUseFailure`
-hook on Bash fingerprints the error with a copy of Orbit's failure
-fingerprint (failure-relevant lines, normalised, sorted and deduplicated, at
-most the last 2,000 lines) and shows the active `failure-pattern` and
-`repair-recipe` items whose signature the error carries, beside the error,
-within 120 tokens. An item's signature is its statement up to ` => `, or all of
-it without one, so write a recipe as `ERR_MODULE_NOT_FOUND esbuild => run npm ci in the
-repository root`. It matches when all its words (at least two) are in one
-normalised line of the error. A recipe whose evidence has a source containing
-the word `passed` (the command passed after it) is labelled `(verified)`.
-Each fingerprint is shown once per agent per session; the same fingerprint
-failing again prints nothing and counts once as a contradiction of what was
-shown. An interrupted command prints nothing. The ledger holds the
-fingerprint's hash and item ids, never the error, and goes with an item on a
-purge. Shown items are logged by id as for point-of-action recall.
+hook on Bash shows the active `failure-pattern` and `repair-recipe` items whose
+signature the error carries, beside the error, within 120 tokens. An item's
+signature is its statement up to ` => `, or all of it without one, so write a
+recipe as `ERR_MODULE_NOT_FOUND esbuild => run npm ci in the repository root`.
+It matches when all its words are in one normalised line of the error's last
+2,000 lines, whether or not the line reads as an error (`ENOSPC: no space left
+on device`, `command not found`, `npm ERR! code`). Words are compared after
+Unicode normalisation; placeholders of normalised lines (paths, numbers,
+times, hashes) and the words error, failed, fail, warning, exit and code do not
+count, and a signature with fewer than two other words matches nothing
+(`memory remember` says so for these types).
+
+The error is also fingerprinted with a copy of Orbit's failure fingerprint
+(line selection, normalisation and silent-failure fallback as Orbit's at
+6407296). One difference: Orbit hashes its check's id into the fingerprint, and
+a Bash command has none, so the id is fixed to `bash`; a fingerprint here
+never equals one Orbit stored for another check. The fingerprint and the item
+id make the ledger key: each item is shown once per agent per fingerprint, so a
+newly added item can still show. A recipe whose evidence has a source with the
+token `passed-after:<ref>` (the command passed after the fix at that ref) is
+labelled `(verified)`; no other text, such as "not passed", sets it.
+
+An item shown for a fingerprint that fails again, in the same session by the
+same agent, counts once as a contradiction of that item for the session. A
+repeat in a later session adds nothing. An interrupted command prints
+nothing. The hook reads first and takes the write lock only to show an item or
+count a contradiction. The ledger holds the fingerprint's hash and item ids,
+never the error, and goes with an item on a purge. Shown items are logged by
+id as for point-of-action recall.
 
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your

@@ -45,7 +45,7 @@ import { diffRecall } from './recall/diff.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
-import { failureRecall } from './hooks/failure.ts';
+import { failureRecall, weakSignature } from './hooks/failure.ts';
 import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
 import { capture, captureWanted } from './capture/capture.ts';
 import { HOOK_BUSY_MS, openStore } from './store/db.ts';
@@ -310,6 +310,9 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
     if (why !== null) throw new Refusal(`not remembered: ${what} is refused because ${why}`);
   }
 
+  if ((values.type === 'failure-pattern' || values.type === 'repair-recipe') && weakSignature(statement)) {
+    console.error("memory: this will never be recalled at a failing command: its signature (the statement up to ' => ') has fewer than two words other than error, failed, fail, warning, exit, code and placeholders such as paths and numbers");
+  }
   const anchors = values.anchor === undefined ? [] : [anchorAt(cwd, values.anchor)];
   const tenant = personal ? '' : context.tenant!;
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';

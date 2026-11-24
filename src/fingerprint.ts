@@ -1,6 +1,8 @@
-// Copied from Orbit, src/evidence/fingerprint.ts at 6407296 on branch next (https://github.com/QuintinBotes/orbit, MIT),
-// without the excerpt and the options Orbit's runner uses. Orbit's rules decide which lines count and how they are
-// normalised, so a failure fingerprints here as it does there.
+// Copied from Orbit, src/evidence/fingerprint.ts at 6407296 on branch next (https://github.com/QuintinBotes/orbit, MIT).
+// Line selection, normalisation, the silent-failure fallback and the hash are Orbit's, minus the excerpt and the
+// redaction it feeds, and the run's `roots` option. One difference: Orbit hashes its check's id into the fingerprint,
+// and a Bash command has none, so the id is fixed to `bash`: a fingerprint here equals Orbit's for a check with that
+// id, and cannot equal one Orbit stored for another check. test/failure.test.mjs pins the copy against Orbit's output.
 import { createHash } from 'node:crypto';
 
 export interface FailureFingerprint {
@@ -12,10 +14,10 @@ export interface FailureFingerprint {
 
 // A line this long is a minified bundle or a data dump, not a message.
 const MAX_LINE = 400;
-// Cap on lines scanned, taken from the end of the output where the error is, so a runaway log cannot make this slow.
-export const MAX_SCANNED_LINES = 2000;
-// Cap on characters looked at before the lines are split.
-const MAX_CHARS = 1_000_000;
+// Cap on lines scanned, so a runaway log cannot make this quadratic or slow.
+const MAX_SCANNED_LINES = 200_000;
+// Cap on the lines of an error that `errorLines` returns, taken from the end where the error is.
+const MAX_MATCH_LINES = 2000;
 
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001B\[[0-9;?]*[ -/]*[@-~]|\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u001B[@-Z\\-_]/g;
@@ -61,16 +63,18 @@ export function normalizeLine(line: string): string {
   return s.length > MAX_LINE ? s.slice(0, MAX_LINE) : s;
 }
 
-/** The fingerprint of one Bash command's error output; the command is the check, so its id is fixed. */
-export function fingerprintFailure(output: string): FailureFingerprint {
-  const lines = stripAnsi(output.slice(-MAX_CHARS)).split('\n').slice(-MAX_SCANNED_LINES);
+/** The fingerprint of one Bash command's error output; `exitCode` is the process's, null when it is not known. */
+export function fingerprintFailure(output: string, exitCode: number | null = null): FailureFingerprint {
+  const lines = stripAnsi(output).split('\n', MAX_SCANNED_LINES);
   const picked: string[] = [];
   let expectFrame = false;
   for (const raw of lines) {
     const line = raw.replace(/\r$/, '');
     if (!line.trim()) {
       expectFrame = false;
-    } else if (RELEVANT.test(line) && !SUMMARY.test(line)) {
+      continue;
+    }
+    if (RELEVANT.test(line) && !SUMMARY.test(line)) {
       picked.push(normalizeLine(line));
       expectFrame = true;
     } else if (expectFrame && STACK_FRAME.test(line)) {
@@ -84,8 +88,15 @@ export function fingerprintFailure(output: string): FailureFingerprint {
   // Sorted and deduplicated: parallel runners interleave and repeat lines in a different order every run.
   let signature = [...new Set(picked.filter(Boolean))].sort();
   if (signature.length === 0) {
-    // Silent failures still need a stable identity: the tail of the output.
-    signature = lines.map(normalizeLine).filter(Boolean).slice(-3).sort();
+    // Silent failures still need a stable identity: the tail of the output, then how the process ended.
+    const tail = lines.map(normalizeLine).filter(Boolean).slice(-3);
+    signature = [...tail, `exit:${exitCode ?? 'signal'}`].sort();
   }
   return { fingerprint: `fp:${createHash('sha256').update(JSON.stringify(['bash', signature])).digest('hex').slice(0, 16)}`, signature };
+}
+
+/** Every normalised line of the last 2,000 lines of the output, relevant or not, deduplicated: what a recipe's signature is looked for in. */
+export function errorLines(output: string): string[] {
+  const lines = stripAnsi(output).split('\n').slice(-MAX_MATCH_LINES);
+  return [...new Set(lines.map(normalizeLine).filter(Boolean))];
 }

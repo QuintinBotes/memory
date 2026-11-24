@@ -3466,8 +3466,8 @@ function declineSupersession(db, p) {
 // src/fingerprint.ts
 import { createHash as createHash5 } from "node:crypto";
 var MAX_LINE = 400;
-var MAX_SCANNED_LINES = 2e3;
-var MAX_CHARS = 1e6;
+var MAX_SCANNED_LINES = 2e5;
+var MAX_MATCH_LINES = 2e3;
 var ANSI = /\u001B\[[0-9;?]*[ -/]*[@-~]|\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u001B[@-Z\\-_]/g;
 var RELEVANT = /\b(error|errors|fail|failed|failure|failing|exception|assert|assertion|assertionerror|panic|fatal|expected|received|not ok|typeerror|referenceerror|syntaxerror|rangeerror|cannot find|enoent|eacces|traceback|unhandled|timeout|timed out|refused|denied|undefined is not|is not a function|is not defined)\b|[✗✖×]|^\s*FAIL\b|^\s*●|^\s*not ok\b/i;
 var SUMMARY = /\b\d+\s+(?:passed|failed|skipped|total|todo|pending|passing|failing)\b|\b(?:tests?|test files|suites?|duration|time|snapshots?)\s*:/i;
@@ -3477,15 +3477,17 @@ function normalizeLine(line) {
   const s = stripAnsi(line).replace(/\r/g, "").replace(/(?:\/private)?\/var\/folders\/[^\s'"():]+/g, "<tmp>").replace(/(?:\/private)?\/tmp\/[^\s'"():]+/g, "<tmp>").replace(/\b(?:orbit|tmp|temp)[-_.][A-Za-z0-9]{6,}\b/g, "<tmp>").replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, "<time>").replace(/\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b/g, "<time>").replace(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}(?:,?\s+\d{4})?\b/g, "<time>").replace(/\b1[5-9]\d{11}\b/g, "<time>").replace(/\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?|µs|us|ns|seconds?|secs?|s|minutes?|mins?)\b/gi, "<dur>").replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<uuid>").replace(/\b0x[0-9a-f]+\b/gi, "<hex>").replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b/gi, "<hex>").replace(/\b\d{7,}\b/g, "<n>").replace(/\b(pid|process|port)\s*[:=]?\s*\d+\b/gi, "$1 <n>").replace(/\b(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d{2,5}\b/g, "$1:<port>").replace(/(?<![\w:/.~<>-])\/(?:[^\s:'"()<>[\]]+\/)+[^\s:'"()<>[\]]+/g, (m) => `<path>/${m.split("/").filter(Boolean).slice(-2).join("/")}`).replace(/(\.[A-Za-z0-9]{1,6}):\d+(?::\d+)?/g, "$1:<n>").replace(/\b(line|col|column|ln)\s+\d+\b/gi, "$1 <n>").replace(/\((\d+):(\d+)\)/g, "(<n>:<n>)").replace(/\s+/g, " ").trim();
   return s.length > MAX_LINE ? s.slice(0, MAX_LINE) : s;
 }
-function fingerprintFailure(output) {
-  const lines2 = stripAnsi(output.slice(-MAX_CHARS)).split("\n").slice(-MAX_SCANNED_LINES);
+function fingerprintFailure(output, exitCode = null) {
+  const lines2 = stripAnsi(output).split("\n", MAX_SCANNED_LINES);
   const picked = [];
   let expectFrame = false;
   for (const raw of lines2) {
     const line = raw.replace(/\r$/, "");
     if (!line.trim()) {
       expectFrame = false;
-    } else if (RELEVANT.test(line) && !SUMMARY.test(line)) {
+      continue;
+    }
+    if (RELEVANT.test(line) && !SUMMARY.test(line)) {
       picked.push(normalizeLine(line));
       expectFrame = true;
     } else if (expectFrame && STACK_FRAME.test(line)) {
@@ -3497,9 +3499,14 @@ function fingerprintFailure(output) {
   }
   let signature = [...new Set(picked.filter(Boolean))].sort();
   if (signature.length === 0) {
-    signature = lines2.map(normalizeLine).filter(Boolean).slice(-3).sort();
+    const tail = lines2.map(normalizeLine).filter(Boolean).slice(-3);
+    signature = [...tail, `exit:${exitCode ?? "signal"}`].sort();
   }
   return { fingerprint: `fp:${createHash5("sha256").update(JSON.stringify(["bash", signature])).digest("hex").slice(0, 16)}`, signature };
+}
+function errorLines(output) {
+  const lines2 = stripAnsi(output).split("\n").slice(-MAX_MATCH_LINES);
+  return [...new Set(lines2.map(normalizeLine).filter(Boolean))];
 }
 
 // src/store/ledger.ts
@@ -3551,13 +3558,29 @@ var CREATE2 = `CREATE TABLE IF NOT EXISTS failure_ledger (
 )`;
 var KEEP_DAYS2 = 14;
 var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
-var words2 = (line) => line.toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter((w) => w !== "");
+var PLACEHOLDER = /<(?:path|tmp|time|dur|hex|uuid|n|repo|port)>/g;
+var COMMON = /* @__PURE__ */ new Set(["error", "failed", "fail", "warning", "exit", "code"]);
+var MIN_SIGNATURE_WORDS = 2;
+var words2 = (line) => [...new Set(line.normalize("NFC").replace(PLACEHOLDER, " ").toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter((w) => w !== ""))];
 var SIGNATURE_END = " => ";
-function matches(statement, signature) {
-  const mine = new Set(words2(normalizeLine(statement.split(SIGNATURE_END)[0])));
-  return mine.size >= 2 && signature.some((line) => [...mine].every((w) => line.has(w)));
+var signatureWords = (statement) => words2(normalizeLine(statement.split(SIGNATURE_END)[0]));
+var weakSignature = (statement) => signatureWords(statement).filter((w) => !COMMON.has(w)).length < MIN_SIGNATURE_WORDS;
+var matches = (statement, lines2, all) => {
+  const mine = signatureWords(statement);
+  if (mine.filter((w) => !COMMON.has(w)).length < MIN_SIGNATURE_WORDS || mine.some((w) => !all.has(w))) return false;
+  return lines2.some((line) => mine.every((w) => line.has(w)));
+};
+var VERIFIED = /(^|\s)passed-after:\S+/;
+function plan(db, matching, session, agent, fingerprint) {
+  let shown = [];
+  let charged = /* @__PURE__ */ new Set();
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'failure_ledger'").get() !== void 0) {
+    shown = db.prepare("SELECT item_id FROM failure_ledger WHERE session = ? AND agent = ? AND fingerprint = ?").all(session, agent, fingerprint);
+    charged = new Set(db.prepare("SELECT DISTINCT item_id FROM failure_ledger WHERE session = ? AND contradicted = 1").all(session).map((r) => r.item_id));
+  }
+  const seen = new Set(shown.map((r) => r.item_id));
+  return { show: matching.filter((id) => !seen.has(id)), charge: matching.filter((id) => seen.has(id) && !charged.has(id)) };
 }
-var verified = (db, id) => db.prepare("SELECT source_ref FROM evidence WHERE item_id = ?").all(id).some((e) => /(^|\s)passed(\s|$)/.test(e.source_ref));
 function failureRecall(data, input2, log) {
   const config = loadConfig(data);
   const agentType = str(input2["agent_type"]);
@@ -3566,8 +3589,10 @@ function failureRecall(data, input2, log) {
   if (agentType !== void 0 && !subagentAllowed(config, agentType)) return "";
   const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null || context.repository === null || context.owner === null) return "";
-  const { fingerprint, signature } = fingerprintFailure(error);
-  const lines2 = signature.map((l) => new Set(words2(l)));
+  const code = /^Exit code (\d+)/.exec(error)?.[1];
+  const { fingerprint } = fingerprintFailure(error, code === void 0 ? null : Number(code));
+  const lines2 = errorLines(error).map((l) => new Set(words2(l)));
+  const all = new Set(lines2.flatMap((l) => [...l]));
   const session = str(input2["session_id"]) ?? "unknown";
   const agent = str(input2["agent_id"]) ?? MAIN_AGENT;
   const base2 = { session, agent, via: "failure-recall", at: (/* @__PURE__ */ new Date()).toISOString() };
@@ -3575,17 +3600,18 @@ function failureRecall(data, input2, log) {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
     if (db === null) return "";
     try {
+      const matching = failureStatements(db, context.tenant, context.repository, context.owner).filter((i) => matches(i.statement, lines2, all)).map((i) => i.id);
+      if (matching.length === 0) return "";
+      const first2 = plan(db, matching, session, agent, fingerprint);
+      if (first2.show.length === 0 && first2.charge.length === 0) return "";
       const result = inTransaction(db, () => {
         db.exec(CREATE2);
-        const shown = db.prepare("SELECT item_id FROM failure_ledger WHERE session = ? AND agent = ? AND fingerprint = ? AND contradicted = 0").all(session, agent, fingerprint);
-        const seen = db.prepare("SELECT 1 FROM failure_ledger WHERE session = ? AND agent = ? AND fingerprint = ? LIMIT 1").get(session, agent, fingerprint);
-        if (seen !== void 0) {
-          for (const { item_id } of shown) db.prepare("UPDATE items SET contradictions = contradictions + 1 WHERE id = ?").run(item_id);
-          db.prepare("UPDATE failure_ledger SET contradicted = 1 WHERE session = ? AND agent = ? AND fingerprint = ?").run(session, agent, fingerprint);
-          return { text: "", shown: [] };
+        const { show, charge } = plan(db, matching, session, agent, fingerprint);
+        for (const id of charge) {
+          db.prepare("UPDATE items SET contradictions = contradictions + 1 WHERE id = ?").run(id);
+          db.prepare("UPDATE failure_ledger SET contradicted = 1 WHERE session = ? AND agent = ? AND fingerprint = ? AND item_id = ?").run(session, agent, fingerprint, id);
         }
-        const found = failureStatements(db, context.tenant, context.repository, context.owner).filter((i) => matches(i.statement, lines2));
-        const items = itemsById(db, found.map((i) => i.id)).map((i) => verified(db, i.id) ? { ...i, type: `${i.type} (verified)` } : i);
+        const items = itemsById(db, show).map((i) => db.prepare("SELECT source_ref FROM evidence WHERE item_id = ?").all(i.id).some((e) => VERIFIED.test(e.source_ref)) ? { ...i, type: `${i.type} (verified)` } : i);
         const slice = chooseSlice(items, FAILURE_BUDGET);
         const at2 = (/* @__PURE__ */ new Date()).toISOString();
         for (const i of slice.shown) db.prepare("INSERT INTO failure_ledger (session, agent, fingerprint, item_id, at) VALUES (?, ?, ?, ?, ?)").run(session, agent, fingerprint, i.id, at2);
@@ -4437,8 +4463,8 @@ function init(args, data) {
     if (values.automation === "on") config.automation = true;
     else delete config.automation;
   }
-  const plan = buildConsentPlan(config, data);
-  console.log(JSON.stringify(plan, null, 2));
+  const plan2 = buildConsentPlan(config, data);
+  console.log(JSON.stringify(plan2, null, 2));
   const added = config.consent === void 0 ? [] : uncovered(config);
   const when = values.confirm === true ? "are on from now" : "stay off until you confirm";
   if (added.length > 0) console.error(`These kinds of data are new since you agreed, and ${when}:
@@ -4538,6 +4564,9 @@ async function remember(args, data, cwd) {
     if (text2 === void 0) continue;
     const why = refusal(text2, terms, true);
     if (why !== null) throw new Refusal(`not remembered: ${what} is refused because ${why}`);
+  }
+  if ((values.type === "failure-pattern" || values.type === "repair-recipe") && weakSignature(statement)) {
+    console.error("memory: this will never be recalled at a failing command: its signature (the statement up to ' => ') has fewer than two words other than error, failed, fail, warning, exit, code and placeholders such as paths and numbers");
   }
   const anchors = values.anchor === void 0 ? [] : [anchorAt(cwd, values.anchor)];
   const tenant = personal ? "" : context.tenant;
