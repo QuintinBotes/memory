@@ -4,6 +4,9 @@ import { codeFreeViolations, visibleText } from './codefree.ts';
 export const MAX_STATEMENT = 300;
 export const EMAIL = /[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/;
 export const HANDLE = /(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/;
+/** A model's special tokens and chat role markers: text that carries one may be read as a turn boundary. */
+export const CONTROL_TOKEN =
+  /<\|[^|>\n]{1,40}\|>|\[\/?INST\]|<<\/?SYS>>|<\/?(?:s|system|assistant|human|im_start|im_end)>|<(?:start|end)_of_turn>|^\s*(?:system|assistant|human)\s*:/i;
 export const WEBHOOK = /hooks\.slack\.com\/(?:services|workflows|triggers)\/\S*|discord(?:app)?\.com\/api\/webhooks\/\S*/i;
 
 /** Whether `text` names one of `terms` of two or more characters, as a whole word. */
@@ -26,6 +29,7 @@ export function refusal(text: string, organisationTerms?: readonly string[]): st
   if (text.trim().length === 0) return 'it is empty';
   // One item is one line: a newline could forge another item in the slice.
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(text)) return 'it has a line break or a control character; one item is one line';
+  if (CONTROL_TOKEN.test(visibleText(text))) return 'it carries a model control token or a chat role marker';
   if (text.length > MAX_STATEMENT) return `it is ${text.length} characters; at most ${MAX_STATEMENT}`;
 
   // Review Voice's patterns replace nothing for a key header with no footer,

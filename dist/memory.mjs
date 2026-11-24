@@ -503,6 +503,7 @@ function mentionsRepoTerm(text2, repoTerms) {
 var MAX_STATEMENT = 300;
 var EMAIL = /[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/;
 var HANDLE = /(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/;
+var CONTROL_TOKEN = /<\|[^|>\n]{1,40}\|>|\[\/?INST\]|<<\/?SYS>>|<\/?(?:s|system|assistant|human|im_start|im_end)>|<(?:start|end)_of_turn>|^\s*(?:system|assistant|human)\s*:/i;
 var WEBHOOK = /hooks\.slack\.com\/(?:services|workflows|triggers)\/\S*|discord(?:app)?\.com\/api\/webhooks\/\S*/i;
 function namesOrganisation(text2, terms) {
   const visible2 = visibleText(text2);
@@ -513,6 +514,7 @@ function namesOrganisation(text2, terms) {
 function refusal(text2, organisationTerms2) {
   if (text2.trim().length === 0) return "it is empty";
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(text2)) return "it has a line break or a control character; one item is one line";
+  if (CONTROL_TOKEN.test(visibleText(text2))) return "it carries a model control token or a chat role marker";
   if (text2.length > MAX_STATEMENT) return `it is ${text2.length} characters; at most ${MAX_STATEMENT}`;
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text2)) return "it carries a private key";
   const labels = Object.keys(redact(text2).counts);

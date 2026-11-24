@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Standing red-team suite (#22): `test/poison.test.mjs` replays one test per
+  published poisoning attack class against every capture path (owner
+  `remember`, `memory_propose`, automatic capture, auto memory and silo
+  import) and runs in CI with `npm test`: imperative text from non-owner
+  sources, query-only injection, a delayed trigger over 100 sessions, attacks
+  split over several items, instructions in captured text, fence escape with
+  homoglyphs and invisible or bidirectional characters, trust laundering
+  through merged evidence, role spoofing, planted auto memory, credentials and
+  emails, cross-tenant reads and writes, and secrets or quarantined text
+  reaching an embedding provider. A registry test fails when a new source file
+  stores items without a family. The 50 benign owner items are all recalled.
+
+### Fixed
+
+- Text carrying a model control token or chat role marker (`<|im_start|>`,
+  `[INST]`, `<<SYS>>`, `</s>`, a leading `System:` or `Assistant:`) was
+  stored by every capture path; the refusal check now refuses it.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added

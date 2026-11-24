@@ -23,6 +23,17 @@ no tenant, or in a Claude Code config not bound to that tenant.
   addresses, handles and webhook URLs. Pattern matching cannot recognise a
   credential that does not look like one, such as a plain password written
   in prose. Do not ask memory to remember secrets.
+- **Model control tokens.** Text carrying a special token or chat role marker
+  (`<|im_start|>`, `[INST]`, `<<SYS>>`, `</s>`, a leading `System:`) is refused
+  at every path that stores an item.
+- **Red-team suite.** `test/poison.test.mjs` replays the published poisoning
+  attacks (query-only injection, planted items that fire later, attacks split
+  over items, trust laundered through merged evidence, role spoofing, fence
+  escape, planted auto memory) against every capture path, with fixtures only,
+  in CI on every pull request. It measures memory's gates, not a model's
+  resistance. A source file that stores items with no family in it fails the
+  suite. Not yet covered: taint labels for sessions that read external
+  content, and refusing automation-started sessions.
 - **Organisation-free person items.** Person and global items are refused when
   they name code, a path, a tenant, an owner or a repository. This is a
   heuristic; names of one character are not matched.

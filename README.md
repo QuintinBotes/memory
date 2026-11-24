@@ -293,6 +293,8 @@ reject, purge or change the configuration, and nothing they write is active.
   owner trust. A proposal that Orbit's authority rules read as an instruction
   ("always skip tests") is quarantined: never searched, shown in review with
   the rule that flagged it, and active only if you approve it.
+  `test/poison.test.mjs` is the standing red-team suite for these gates (see
+  SECURITY.md); it runs in CI on every pull request.
 - `memory_feedback(id, helped|wrong|stale)` changes only the counts behind an
   item's confidence. `stale` re-checks the item's citation at HEAD at once: if
   it fails, the item goes stale as the re-check would make it, and comes back
