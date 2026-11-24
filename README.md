@@ -151,6 +151,19 @@ Data lives in `~/Library/Application Support/claude-code-memory` on macOS,
 on Linux, or wherever `MEMORY_DATA_DIR` points: `config.json`, one
 `tenants/<name>.sqlite` per tenant, and `person.sqlite`.
 
+## Reading memory as files
+
+`memory export --markdown <dir>` writes this repository's tenant and the person
+file as Markdown: `index.md` lists every item by status, and `items/<id>.md`
+holds one item with its type, scope, status and why, trust, validity dates,
+anchors, evidence with its trust, and supersession links. The same store gives
+the same bytes, so two exports diff to exactly what changed. Every string is a
+code span, so a viewer never turns it into a link or HTML. The text of a
+quarantined item is withheld, a tombstone shows its hash and type, and vectors
+are not exported. The folder is read only: nothing reads it back, and editing
+it changes nothing in memory. Export needs confirmed consent, and refuses a
+folder inside a git repository that belongs to another tenant.
+
 ## Importing what you already have
 
 `memory import --dry-run` lists every file it would read with the number of
