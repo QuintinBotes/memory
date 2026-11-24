@@ -31,6 +31,8 @@ export interface Config {
   capture?: CaptureConfig;
   /** Whether sessions started by automation may capture and propose (FR-008 of #22); off unless true, and part of the consent plan. */
   automation?: boolean;
+  /** Recall at the point of action (#14): items anchored where an agent reads or edits; off unless true. */
+  pointOfAction?: boolean;
 }
 
 export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
@@ -146,6 +148,7 @@ export function loadConfig(data: string): Config | null {
     }
   }
   if (c.automation !== undefined && typeof c.automation !== 'boolean') throw new ConfigError('automation must be true or false');
+  if (c.pointOfAction !== undefined && typeof c.pointOfAction !== 'boolean') throw new ConfigError('pointOfAction must be true or false');
   return {
     tenants: c.tenants,
     configs: c.configs,
@@ -157,6 +160,7 @@ export function loadConfig(data: string): Config | null {
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
     ...(capture !== undefined ? { capture } : {}),
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
+    ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
   };
 }
 
