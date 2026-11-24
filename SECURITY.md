@@ -23,6 +23,21 @@ no tenant, or in a Claude Code config not bound to that tenant.
   addresses, handles and webhook URLs. Pattern matching cannot recognise a
   credential that does not look like one, such as a plain password written
   in prose. Do not ask memory to remember secrets.
+- **Instruction files.** Memory reads `CLAUDE.md`, `AGENTS.md` and the other
+  files an agent loads, read-only, to leave out what they repeat and what they
+  contradict. A file or import that resolves outside the repository (or, for
+  the user's own file, the home directory) through a link or a path is not
+  read, and what they say is never an item or evidence, so planted text in
+  them cannot gain owner trust. Memory writes an instruction file only when
+  the owner runs `memory conflicts apply <id> --confirm`: it refuses unless
+  stdin is a terminal or `--yes-non-interactive` is passed, so an agent with a
+  shell can run it; add an ask rule such as `Bash(*memory.mjs*conflicts apply*)`,
+  as for `approve`. It writes the exact stored edit, atomically, only to a file
+  it loaded or the repository's or user's `CLAUDE.md`, only if the line is
+  unchanged, the file is valid UTF-8 under 256 KB, and it resolves inside the
+  repository (the user's file must not be a symbolic link), and never commits
+  or pushes. No MCP tool, hook or other command writes one. A stored edit holds the
+  instruction line and the item's statement, and is deleted with the item.
 - **Review Voice store.** `decisions` under `imports` opens another tool's
   SQLite store, which holds findings for every repository it reviewed; memory
   filters to one repository only after reading. It is its own consent category

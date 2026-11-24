@@ -8,6 +8,8 @@ import { ConfigError, consented, currentConfigDir, loadConfig, organisationTerms
 import { git, resolveContext, type Context } from '../context.ts';
 import { refusal } from '../gate.ts';
 import { addItem } from '../consolidate.ts';
+import { displayPath, judge, loadInstructions, type Withheld } from '../instructions.ts';
+import { logWithheld } from '../store/injections.ts';
 import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, taintList, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
 import { READS_EXPIRED, band, confidence, rank, searchTerms } from '../recall/rank.ts';
 import { similarities } from '../recall/semantic.ts';
@@ -142,7 +144,9 @@ async function search(args: Args, data: string, config: Config, context: Context
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === 'string')) throw new ToolError('paths is a list of strings');
   const top = paths.some((p) => isAbsolute(p)) ? git(cwd, 'rev-parse', '--show-toplevel')?.trim() : undefined;
   const relativePaths = paths.map((p) => (isAbsolute(p) && top !== undefined ? relative(top, p) : p));
-  const items = visibleItems(data, context, cwd, searchTerms(query));
+  const withheld: Withheld[] = [];
+  const items = visibleItems(data, context, cwd, searchTerms(query), undefined, withheld);
+  logWithheld(data, config, 'memory_search', 'mcp', withheld);
   const semantic = await similarities(data, context, config, query, items);
   const hits = rank(items, relativePaths, Date.now(), 'similarity' in semantic ? semantic.similarity : undefined);
   // The note sits outside the fence: it is memory's own sentence, not an item.
@@ -215,7 +219,7 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
   ].map((l) => `${l}\n`).join(''));
 }
 
-function propose(args: Args, data: string, config: Config, context: Context): string {
+function propose(args: Args, data: string, config: Config, context: Context, cwd: string): string {
   const automated = automationRefusal(config);
   if (automated !== null) throw new ToolError(`not proposed: ${automated}`);
   const statement = text(args, 'statement');
@@ -238,6 +242,10 @@ function propose(args: Args, data: string, config: Config, context: Context): st
     const why = refusal(value, terms);
     if (why !== null) throw new ToolError(`not proposed: ${what} is refused because ${why}`);
   }
+  // A statement a loaded instruction file already says is closed here, naming the line: it never reaches the owner's queue.
+  const ins = loadInstructions(cwd, currentConfigDir());
+  const said = judge(ins, statement);
+  if (said?.kind === 'repeats') return `not proposed: duplicates ${displayPath(ins, said.line.file)}:${said.line.line}, which the agent already loads`;
   const tenant = personal ? '' : context.tenant!;
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';
   const candidate: NewItem = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: 'proposed', trust: origin };
@@ -306,7 +314,7 @@ async function call(name: unknown, args: Args, data: string, cwd: string): Promi
     case 'memory_get':
       return get(args, data, context, cwd);
     case 'memory_propose':
-      return propose(args, data, config, context);
+      return propose(args, data, config, context, cwd);
     case 'memory_feedback':
       return feedback(args, data, context, cwd);
     default:

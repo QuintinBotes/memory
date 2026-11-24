@@ -5,6 +5,8 @@ import type { Context } from '../context.ts';
 import { personItems, tenantItems, textMatches, type Visible } from '../items.ts';
 import { openStore, WRITE_BUSY_MS } from '../store/db.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
+import { currentConfigDir } from '../config.ts';
+import { loadInstructions, screen, type Withheld } from '../instructions.ts';
 
 /** `items` of one file, each that matched carrying its text ratio: bm25 depends on the file's own word counts, so a match is measured against the best in its file. */
 export function withTextRatio(items: Visible[], matches: Map<string, number>): Visible[] {
@@ -20,9 +22,12 @@ export function withTextRatio(items: Visible[], matches: Map<string, number>): V
  * file's. Anchored items are re-checked against HEAD first, so an item whose
  * citation is gone is never shown. With search `terms`, each item that matches
  * them carries its text ratio. A hook passes a short `busyMs`, so a busy store costs it a fraction of a second, never a tool call.
+ * Items the loaded instruction files repeat or contradict are left out and pushed to `withheld` (#26, #40); null reads no
+ * instruction file and withholds nothing, as `memory list` does.
  */
-export function visibleItems(data: string, context: Context, cwd: string, terms: readonly string[] = [], busyMs = WRITE_BUSY_MS): Visible[] {
+export function visibleItems(data: string, context: Context, cwd: string, terms: readonly string[] = [], busyMs = WRITE_BUSY_MS, withheld: Withheld[] | null = []): Visible[] {
   const out: Visible[] = [];
+  const instructions = withheld === null ? null : loadInstructions(cwd, currentConfigDir());
   const add = (items: Visible[], matches: Map<string, number>): void => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const file = tenantFile(data, context.tenant);
@@ -31,7 +36,8 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
       try {
         // A refresh already running elsewhere does the work; this hook goes on without waiting for it.
         withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd));
-        add(tenantItems(db, context.tenant, context.repository, context.owner), textMatches(db, terms));
+        const items = tenantItems(db, context.tenant, context.repository, context.owner);
+        add(instructions === null ? items : screen(db, items, instructions, false, withheld!), textMatches(db, terms));
       } finally {
         db.close();
       }
@@ -40,7 +46,8 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
   const person = openStore(personFile(data), false, busyMs);
   if (person !== null) {
     try {
-      add(personItems(person), textMatches(person, terms));
+      const items = personItems(person);
+      add(instructions === null ? items : screen(person, items, instructions, true, withheld!), textMatches(person, terms));
     } finally {
       person.close();
     }
