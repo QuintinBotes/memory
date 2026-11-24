@@ -24,23 +24,42 @@ export interface OrbitContext {
 
 /**
  * Whether `.orbit/config.yaml` in `root` turns lessons into prompts: `knowledge.lessons_in_prompts: true`, with
- * `knowledge.enabled` not false. Orbit's own reading of its file, as far as these two keys go: a key of another
- * section, a comment or a quoted value is not the switch.
+ * `knowledge.enabled` not false. No YAML library: only keys one indent level directly under a top-level `knowledge:`
+ * line are read, booleans case-insensitively, and anything unclear (a duplicate key or section, a quoted or unknown
+ * value, flow style, a tab, an odd indent) reads as off, as Orbit refuses a file it cannot read.
  */
 export function lessonsInPrompts(root: string): boolean {
   const file = join(root, '.orbit', 'config.yaml');
   if (!existsSync(file)) return false;
+  let sections = 0;
   let inKnowledge = false;
-  const seen: Record<string, string> = {};
+  let indent = 0;
+  const seen: Record<string, boolean> = {};
   for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
-    if (/^\S/.test(line)) inKnowledge = /^knowledge:\s*(#.*)?$/.test(line);
-    else if (inKnowledge) {
-      const m = /^\s+(enabled|lessons_in_prompts):\s*(true|false)\s*(#.*)?$/.exec(line);
-      if (m) seen[m[1]!] = m[2]!;
+    if (line.includes('\t')) return false;
+    const spaces = /^ */.exec(line)![0].length;
+    if (spaces === 0) {
+      if (/^knowledge\s*:/.test(line)) {
+        if (!/^knowledge:\s*(#.*)?$/.test(line) || ++sections > 1) return false;
+        inKnowledge = true;
+      } else inKnowledge = false;
+      continue;
     }
+    if (!inKnowledge) continue;
+    indent ||= spaces;
+    if (spaces < indent) return false;
+    if (spaces > indent) continue;
+    const m = /^ +(enabled|lessons_in_prompts):\s*(\S+?)\s*(?:\s#.*)?$/.exec(line);
+    if (m === null) {
+      if (/^ +(?:"?enabled"?|"?lessons_in_prompts"?)\s*:/.test(line)) return false;
+      continue;
+    }
+    const value = m[2]!.toLowerCase();
+    if ((value !== 'true' && value !== 'false') || m[1]! in seen) return false;
+    seen[m[1]!] = value === 'true';
   }
-  return seen['lessons_in_prompts'] === 'true' && seen['enabled'] !== 'false';
+  return seen['lessons_in_prompts'] === true && seen['enabled'] !== false;
 }
 
 /**
@@ -52,6 +71,8 @@ export function lessonsInPrompts(root: string): boolean {
 export function orbitRecall(data: string, context: Context, cwd: string, ask: OrbitContext): string {
   const root = git(cwd, 'rev-parse', '--show-toplevel')?.trim() ?? cwd;
   if (!lessonsInPrompts(root) || context.tenant === null || context.repository === null) return '';
+  // One day start for the 28-day cutoff and the ranking, so the clock inside a day changes no row.
+  const today = Date.parse(new Date().toISOString().slice(0, 10));
   const visible = visibleItems(data, context, cwd);
   const db = openStore(tenantFile(data, context.tenant), false);
   if (db === null) return '';
@@ -59,7 +80,7 @@ export function orbitRecall(data: string, context: Context, cwd: string, ask: Or
   const stale = new Set<string>();
   try {
     const at = (id: string): { kind: string; key: string }[] => db.prepare('SELECT kind, key FROM item_keys WHERE item_id = ?').all(id) as { kind: string; key: string }[];
-    const cutoff = new Date(Date.now() - ORBIT_EXPIRY_DAYS * 86_400_000).toISOString();
+    const cutoff = new Date(today - ORBIT_EXPIRY_DAYS * 86_400_000).toISOString();
     for (const item of visible) {
       if (at(item.id).some((k) => (k.kind === 'fingerprint' ? ask.fingerprints : ask.checks).includes(k.key))) keyed.add(item.id);
       const last = db.prepare('SELECT max(captured_at) AS at FROM evidence WHERE item_id = ?').get(item.id) as { at: string | null };
@@ -68,7 +89,6 @@ export function orbitRecall(data: string, context: Context, cwd: string, ask: Or
   } finally {
     db.close();
   }
-  const today = Date.parse(new Date().toISOString().slice(0, 10));
   const rows: string[] = [];
   for (const h of rank(visible.filter((i) => !stale.has(i.id)), ask.paths, today, undefined, keyed)) {
     if (rows.length === ORBIT_ITEMS) break;

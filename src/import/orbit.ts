@@ -1,3 +1,6 @@
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { inside } from './silos.ts';
 
@@ -27,10 +30,18 @@ const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is
 
 /** The findings in the store at `path`, or why it cannot be read. */
 export function orbitFindings(path: string): { findings: OrbitFinding[]; unreadable: string[] } | { reason: string } {
+  // Opening a WAL store, even read-only, creates -shm and -wal files beside it, and ignoring the WAL misses lessons
+  // not yet checkpointed. So a copy of the file and its WAL is opened in a temporary directory, and removed after.
+  let dir: string | undefined;
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(path, { readOnly: true });
+    dir = mkdtempSync(join(tmpdir(), 'memory-orbit-'));
+    const copy = join(dir, 'knowledge.sqlite');
+    copyFileSync(path, copy);
+    if (existsSync(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
+    db = new DatabaseSync(copy);
   } catch (error) {
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
     return { reason: `cannot be opened (${(error as NodeJS.ErrnoException).code ?? 'error'})` };
   }
   try {
@@ -99,5 +110,6 @@ export function orbitFindings(path: string): { findings: OrbitFinding[]; unreada
     return { reason: `is not an Orbit knowledge store this version reads (${(error as Error).message})` };
   } finally {
     db.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 }

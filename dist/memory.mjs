@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync11, readFileSync as readFileSync12, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join13, normalize as normalize3 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync12, readdirSync as readdirSync3, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync5 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join14, normalize as normalize3 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -2869,8 +2869,8 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync6, lstatSync as lstatSync2, readFileSync as readFileSync7, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join6, sep as sep3 } from "node:path";
+import { existsSync as existsSync7, lstatSync as lstatSync2, readFileSync as readFileSync7, readdirSync, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
+import { isAbsolute as isAbsolute5, join as join7, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
 import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
@@ -3044,14 +3044,23 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 }
 
 // src/import/orbit.ts
+import { copyFileSync, existsSync as existsSync6, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join6 } from "node:path";
 import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
 var TYPES2 = { practice: "convention", convention: "convention", hazard: "hazard", "failure-pattern": "failure-pattern", "repair-recipe": "repair-recipe" };
 var strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && x !== "") : [];
 function orbitFindings(path) {
+  let dir;
   let db;
   try {
-    db = new DatabaseSync3(path, { readOnly: true });
+    dir = mkdtempSync(join6(tmpdir(), "memory-orbit-"));
+    const copy = join6(dir, "knowledge.sqlite");
+    copyFileSync(path, copy);
+    if (existsSync6(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
+    db = new DatabaseSync3(copy);
   } catch (error) {
+    if (dir !== void 0) rmSync(dir, { recursive: true, force: true });
     return { reason: `cannot be opened (${error.code ?? "error"})` };
   }
   try {
@@ -3113,6 +3122,7 @@ function orbitFindings(path) {
     return { reason: `is not an Orbit knowledge store this version reads (${error.message})` };
   } finally {
     db.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -3120,7 +3130,7 @@ function orbitFindings(path) {
 var ORBIT_STORE = ".orbit/knowledge.sqlite";
 function readInside2(path, root) {
   try {
-    if (!existsSync6(path)) return { reason: "not there" };
+    if (!existsSync7(path)) return { reason: "not there" };
     const link2 = lstatSync2(path).isSymbolicLink();
     const real = realpathSync3(path);
     const top = realpathSync3(root);
@@ -3162,16 +3172,16 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     return why !== null;
   };
   for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
-    const projects = join6(dir, "projects");
-    if (!existsSync6(projects)) continue;
+    const projects = join7(dir, "projects");
+    if (!existsSync7(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
-      const folder = join6(projects, project, "memory");
-      if (!existsSync6(folder) || !statSync4(folder).isDirectory()) continue;
+      const folder = join7(projects, project, "memory");
+      if (!existsSync7(folder) || !statSync4(folder).isDirectory()) continue;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
-        const path = join6(folder, name);
+        const path = join7(folder, name);
         const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link2 of parsed2.links) if (!existsSync6(join6(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
+        for (const link2 of parsed2.links) if (!existsSync7(join7(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line, text: text2 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -3197,7 +3207,11 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     }
   }
   const readOrbit = (checkout, rel, context) => {
-    const path = isAbsolute5(rel) ? rel : join6(checkout, rel);
+    const path = join7(checkout, rel);
+    if (!inside3(rel)) {
+      report.skippedFiles.push({ path: rel, reason: "not a path inside the repository" });
+      return;
+    }
     if (context.tenant === null || context.repository === null) {
       report.skippedFiles.push({ path, reason: context.reason });
       return;
@@ -3206,7 +3220,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
       report.skippedFiles.push({ path, reason: "your consent does not cover reading an Orbit knowledge store yet; run memory init and confirm" });
       return;
     }
-    if (!existsSync6(path)) {
+    if (!existsSync7(path)) {
       report.skippedFiles.push({ path, reason: "not there" });
       return;
     }
@@ -3246,7 +3260,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     for (const silo of SILOS) {
       const rel = silos[silo];
       if (rel === void 0 || silo === "orbit") continue;
-      const path = silo === "decisions" && isAbsolute5(rel) ? rel : join6(checkout, rel);
+      const path = silo === "decisions" && isAbsolute5(rel) ? rel : join7(checkout, rel);
       if (silo !== "decisions" && !inside3(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
@@ -3391,8 +3405,8 @@ ${list2.length === 0 ? "(none)\n" : list2.map(row2).join("")}`;
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync6, readFileSync as readFileSync8, rmSync, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname8, join as join7, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync8, mkdirSync as mkdirSync6, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname8, join as join8, resolve as resolve4 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
   anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
@@ -3465,17 +3479,17 @@ function exportMarkdown(stores2, dir) {
   const all = stores2.flatMap(({ db, tenant }) => read(db, tenant)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
   const successors = /* @__PURE__ */ new Map();
   for (const { row: row4 } of all) if (row4.supersedes !== null) successors.set(row4.supersedes, [...successors.get(row4.supersedes) ?? [], row4.id]);
-  const items = join7(dir, "items");
+  const items = join8(dir, "items");
   mkdirSync6(items, { recursive: true });
   const current = new Set(all.map((a) => a.row.id));
   let previous = "";
   try {
-    previous = readFileSync8(join7(dir, "index.md"), "utf8");
+    previous = readFileSync8(join8(dir, "index.md"), "utf8");
   } catch {
   }
   const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
-  for (const id of listed) if (!current.has(id)) rmSync(join7(items, `${id}.md`), { force: true });
-  for (const { row: row4, evidence } of all) writeIfChanged(join7(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
+  for (const id of listed) if (!current.has(id)) rmSync2(join8(items, `${id}.md`), { force: true });
+  for (const { row: row4, evidence } of all) writeIfChanged(join8(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
   const index = ["# Memory export", "", "Read only: editing these files changes nothing in memory.", ""];
   const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
   for (const status of statuses) {
@@ -3484,13 +3498,13 @@ function exportMarkdown(stores2, dir) {
     for (const { row: row4 } of group) index.push(`- [${row4.id}](items/${row4.id}.md) ${span(row4.type)} ${span(where(row4))}`);
     index.push("");
   }
-  writeIfChanged(join7(dir, "index.md"), `${index.join("\n")}
+  writeIfChanged(join8(dir, "index.md"), `${index.join("\n")}
 `, previous !== "");
   return all.length;
 }
 function foreignRepository(dir, config, tenant) {
   let at2 = resolve4(dir);
-  while (!existsSync7(at2)) at2 = dirname8(at2);
+  while (!existsSync8(at2)) at2 = dirname8(at2);
   const top = git(at2, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0) return null;
   const url = git(top, "config", "--get", "remote.origin.url");
@@ -3522,28 +3536,47 @@ function diffRecall(data, context, cwd, range) {
 }
 
 // src/recall/orbit.ts
-import { existsSync as existsSync8, readFileSync as readFileSync9 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
+import { join as join9 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
 function lessonsInPrompts(root) {
-  const file = join8(root, ".orbit", "config.yaml");
-  if (!existsSync8(file)) return false;
+  const file = join9(root, ".orbit", "config.yaml");
+  if (!existsSync9(file)) return false;
+  let sections = 0;
   let inKnowledge = false;
+  let indent = 0;
   const seen = {};
   for (const line of readFileSync9(file, "utf8").split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
-    if (/^\S/.test(line)) inKnowledge = /^knowledge:\s*(#.*)?$/.test(line);
-    else if (inKnowledge) {
-      const m = /^\s+(enabled|lessons_in_prompts):\s*(true|false)\s*(#.*)?$/.exec(line);
-      if (m) seen[m[1]] = m[2];
+    if (line.includes("	")) return false;
+    const spaces = /^ */.exec(line)[0].length;
+    if (spaces === 0) {
+      if (/^knowledge\s*:/.test(line)) {
+        if (!/^knowledge:\s*(#.*)?$/.test(line) || ++sections > 1) return false;
+        inKnowledge = true;
+      } else inKnowledge = false;
+      continue;
     }
+    if (!inKnowledge) continue;
+    indent ||= spaces;
+    if (spaces < indent) return false;
+    if (spaces > indent) continue;
+    const m = /^ +(enabled|lessons_in_prompts):\s*(\S+?)\s*(?:\s#.*)?$/.exec(line);
+    if (m === null) {
+      if (/^ +(?:"?enabled"?|"?lessons_in_prompts"?)\s*:/.test(line)) return false;
+      continue;
+    }
+    const value = m[2].toLowerCase();
+    if (value !== "true" && value !== "false" || m[1] in seen) return false;
+    seen[m[1]] = value === "true";
   }
-  return seen["lessons_in_prompts"] === "true" && seen["enabled"] !== "false";
+  return seen["lessons_in_prompts"] === true && seen["enabled"] !== false;
 }
 function orbitRecall(data, context, cwd, ask) {
   const root = git(cwd, "rev-parse", "--show-toplevel")?.trim() ?? cwd;
   if (!lessonsInPrompts(root) || context.tenant === null || context.repository === null) return "";
+  const today = Date.parse((/* @__PURE__ */ new Date()).toISOString().slice(0, 10));
   const visible2 = visibleItems(data, context, cwd);
   const db = openStore(tenantFile(data, context.tenant), false);
   if (db === null) return "";
@@ -3551,7 +3584,7 @@ function orbitRecall(data, context, cwd, ask) {
   const stale = /* @__PURE__ */ new Set();
   try {
     const at2 = (id) => db.prepare("SELECT kind, key FROM item_keys WHERE item_id = ?").all(id);
-    const cutoff = new Date(Date.now() - ORBIT_EXPIRY_DAYS * 864e5).toISOString();
+    const cutoff = new Date(today - ORBIT_EXPIRY_DAYS * 864e5).toISOString();
     for (const item of visible2) {
       if (at2(item.id).some((k) => (k.kind === "fingerprint" ? ask.fingerprints : ask.checks).includes(k.key))) keyed.add(item.id);
       const last = db.prepare("SELECT max(captured_at) AS at FROM evidence WHERE item_id = ?").get(item.id);
@@ -3560,7 +3593,6 @@ function orbitRecall(data, context, cwd, ask) {
   } finally {
     db.close();
   }
-  const today = Date.parse((/* @__PURE__ */ new Date()).toISOString().slice(0, 10));
   const rows = [];
   for (const h of rank(visible2.filter((i) => !stale.has(i.id)), ask.paths, today, void 0, keyed)) {
     if (rows.length === ORBIT_ITEMS) break;
@@ -3651,8 +3683,8 @@ function declineSupersession(db, p) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync9, readFileSync as readFileSync10, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute6, join as join9, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
+import { existsSync as existsSync10, readFileSync as readFileSync10, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute6, join as join10, relative as relative4, resolve as resolve5, sep as sep4 } from "node:path";
 
 // src/store/ledger.ts
 var AGENT_SESSION_BUDGET = 600;
@@ -3701,11 +3733,11 @@ function enabled(data) {
 }
 function locate(abs) {
   let dir = dirname9(abs);
-  while (!existsSync9(dir) && dirname9(dir) !== dir) dir = dirname9(dir);
+  while (!existsSync10(dir) && dirname9(dir) !== dir) dir = dirname9(dir);
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root = realpathSync4(top);
-  const path = relative4(root, join9(realpathSync4(dir), relative4(dir, abs)));
+  const path = relative4(root, join10(realpathSync4(dir), relative4(dir, abs)));
   return path.startsWith("..") || isAbsolute6(path) ? null : { root, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
@@ -3932,9 +3964,9 @@ function falseRecall(version, events) {
 }
 
 // src/eval/replay.ts
-import { mkdtempSync, rmSync as rmSync2 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join as join10 } from "node:path";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join11 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text2) {
   const doc = JSON.parse(text2);
@@ -3961,9 +3993,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync(join10(tmpdir(), "memory-replay-"));
+  const dir = mkdtempSync2(join11(tmpdir2(), "memory-replay-"));
   try {
-    const db = openStore(join10(dir, "replay.sqlite"), true);
+    const db = openStore(join11(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -3988,7 +4020,7 @@ function held(learned, repeats2) {
       db.close();
     }
   } finally {
-    rmSync2(dir, { recursive: true, force: true });
+    rmSync3(dir, { recursive: true, force: true });
   }
 }
 function replay(version, pulls, since) {
@@ -4015,9 +4047,9 @@ function replay(version, pulls, since) {
 }
 
 // src/eval/poison.ts
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
-import { join as join11 } from "node:path";
+import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join12 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -4143,13 +4175,13 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync2(join11(tmpdir2(), "memory-poison-"));
-  const db = openStore(join11(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync3(join12(tmpdir3(), "memory-poison-"));
+  const db = openStore(join12(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
     db.close();
-    rmSync3(dir, { recursive: true, force: true });
+    rmSync4(dir, { recursive: true, force: true });
   }
 }
 function measure(f) {
@@ -4221,19 +4253,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync10, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readFileSync as readFileSync11, readdirSync as readdirSync2, rmSync as rmSync4 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname10, join as join12 } from "node:path";
+import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync4, readFileSync as readFileSync11, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { tmpdir as tmpdir4 } from "node:os";
+import { dirname as dirname10, join as join13 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
 var ROOT = dirname10(dirname10(fileURLToPath2(import.meta.url)));
-var TASKS = join12(ROOT, "lab", "tasks");
-var BUNDLE = join12(ROOT, "dist", "memory.mjs");
+var TASKS = join13(ROOT, "lab", "tasks");
+var BUNDLE = join13(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync10(join12(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync11(join13(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -4243,7 +4275,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join12(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join13(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -4262,7 +4294,7 @@ var jsonLines2 = (text2) => text2.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync10(file) ? jsonLines2(readFileSync11(file, "utf8")) : [];
+var readLines = (file) => existsSync11(file) ? jsonLines2(readFileSync11(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -4276,10 +4308,10 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync3(join12(base2, "run-"));
-  const repo = join12(dir, "repo");
-  const data = join12(dir, "data");
-  const out = join12(dir, "out");
+  const dir = mkdtempSync4(join13(base2, "run-"));
+  const repo = join13(dir, "repo");
+  const data = join13(dir, "data");
+  const out = join13(dir, "out");
   mkdirSync7(data);
   mkdirSync7(out);
   fixtureRepository(task, repo);
@@ -4304,8 +4336,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join12(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join12(hidden, f));
+  const hidden = join13(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join13(hidden, f));
   const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -4313,7 +4345,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join12(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join13(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
@@ -4342,12 +4374,12 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync3(join12(tmpdir3(), "memory-lab-"));
+  const base2 = mkdtempSync4(join13(tmpdir4(), "memory-lab-"));
   try {
-    const plugin = join12(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync10(join12(ROOT, part))) cpSync(join12(ROOT, part), join12(plugin, part), { recursive: true });
+    const plugin = join13(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync11(join13(ROOT, part))) cpSync(join13(ROOT, part), join13(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync11(join12(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync11(join13(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -4358,7 +4390,7 @@ function lab(version, agent, model, only) {
       ];
     });
   } finally {
-    rmSync4(base2, { recursive: true, force: true });
+    rmSync5(base2, { recursive: true, force: true });
   }
 }
 function parseRows(text2) {
@@ -5050,7 +5082,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync11(file)) return;
+  if (!existsSync12(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -5119,8 +5151,8 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join13(data, "tenants");
-  const every = existsSync11(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const tenantsDir = join14(data, "tenants");
+  const every = existsSync12(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -5152,7 +5184,7 @@ function purge(args, data, cwd) {
     }
   }
   if (values.confirm === true) {
-    if (values.all === true) rmSync5(injectionLog(data), { force: true });
+    if (values.all === true) rmSync6(injectionLog(data), { force: true });
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
   console.log(JSON.stringify({ ...total, files: report }, null, 2));

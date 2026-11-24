@@ -142,7 +142,11 @@ export function importSilos(config: Config, data: string, configDir: string, dry
 
   /** Orbit's validated lessons, contradictions and run-end observations for this checkout's repository, as proposals. */
   const readOrbit = (checkout: string, rel: string, context: ReturnType<typeof resolveContext>): void => {
-    const path = isAbsolute(rel) ? rel : join(checkout, rel);
+    const path = join(checkout, rel);
+    if (!inside(rel)) {
+      report.skippedFiles.push({ path: rel, reason: 'not a path inside the repository' });
+      return;
+    }
     if (context.tenant === null || context.repository === null) {
       report.skippedFiles.push({ path, reason: context.reason });
       return;
