@@ -214,6 +214,34 @@ test('S6b capture stays off until the owner confirms the plan that lists it', ()
   assert.equal(items(s).length, 1);
 });
 
+test('S6c a version 3 consent covers capture but not embeddings; confirming the plan again adds them', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'fake' }, embeddings: { provider: 'fake' } });
+  const path = join(s.data, 'config.json');
+  const c = JSON.parse(readFileSync(path, 'utf8'));
+  c.consent.version = 3;
+  writeFileSync(path, JSON.stringify(c));
+  const vectors = () => {
+    const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+    try {
+      return db.prepare('SELECT COUNT(*) AS n FROM item_vectors').get().n;
+    } finally {
+      db.close();
+    }
+  };
+  assert.equal(capture(s, s.acmeApi, transcript(s, [`LESSON: ${LESSON}`])).status, 0);
+  assert.equal(items(s).length, 1, 'capture ran under version 3');
+  assert.equal(vectors(), 0, 'embeddings did not');
+
+  const init = run(['init'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.match(init.stderr, /Embeddings, with the provider/);
+  assert.doesNotMatch(init.stderr, /sent to Anthropic's API/);
+  assert.equal(run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 4);
+  assert.equal(run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.equal(vectors(), 1);
+});
+
 test('S7 the hook returns at once with the work detached, and the capture lands after', async () => {
   const s = setup();
   fakeModel(s);

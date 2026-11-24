@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Hybrid recall (#44, implementing #43). Embeddings sit behind a provider
+  interface (`name`, `model`, `dims`, `embed`); `voyage` (default, `voyage-4`,
+  a plain `fetch` with `VOYAGE_API_KEY`, no SDK) and an offline `fake` for
+  tests, chosen by `embeddings` in `config.json`. Vectors live in the item's
+  own SQLite file (migration 7) and a purge deletes them. `remember` and
+  `approve` embed the item they activate, never quarantined text, and
+  `memory embed --backfill` fills the rest. `memory_search` adds a `semantic`
+  and a `graph` part to the fixed sum, with their points in `why`; with no
+  key, no network or no vectors it ranks as before and says so once, and its
+  one network call times out after 1.5 s. Embeddings are consent plan
+  version 4 (capture is 3): they stay off until `memory init` is confirmed again. The tests
+  call no host but this machine, and a guard fails a test that does.
 - Automatic capture (#45, decision #43). A Stop and SessionEnd hook runs
   `memory capture`, which detaches and returns at once. A filter model, Claude
   Haiku over the Messages API by plain `fetch` (`ANTHROPIC_API_KEY`) or a

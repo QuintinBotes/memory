@@ -8,6 +8,7 @@ import { refusal } from '../gate.ts';
 import { addItem } from '../consolidate.ts';
 import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
 import { READS_EXPIRED, band, confidence, rank, searchTerms } from '../recall/rank.ts';
+import { similarities } from '../recall/semantic.ts';
 import { visibleItems } from '../recall/visible.ts';
 import { ITEMS_LABEL, fence, leanRow, safe, safeJson } from '../render/rows.ts';
 import { recordAudit } from '../store/audit.ts';
@@ -133,15 +134,19 @@ function first<T>(data: string, context: Context, use: (db: DatabaseSync, store:
   return undefined;
 }
 
-function search(args: Args, data: string, context: Context, cwd: string): string {
+async function search(args: Args, data: string, config: Config, context: Context, cwd: string): Promise<string> {
   const query = text(args, 'query');
   const paths = args['paths'] ?? [];
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === 'string')) throw new ToolError('paths is a list of strings');
   const top = paths.some((p) => isAbsolute(p)) ? git(cwd, 'rev-parse', '--show-toplevel')?.trim() : undefined;
   const relativePaths = paths.map((p) => (isAbsolute(p) && top !== undefined ? relative(top, p) : p));
-  const hits = rank(visibleItems(data, context, cwd, searchTerms(query)), relativePaths);
-  if (hits.length === 0) return 'No memory item matches.';
-  return fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
+  const items = visibleItems(data, context, cwd, searchTerms(query));
+  const semantic = await similarities(data, context, config, query, items);
+  const hits = rank(items, relativePaths, Date.now(), 'similarity' in semantic ? semantic.similarity : undefined);
+  // The note sits outside the fence: it is memory's own sentence, not an item.
+  const note = 'note' in semantic ? `${semantic.note}\n` : '';
+  if (hits.length === 0) return `${note}No memory item matches.`;
+  return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
 }
 
 interface ItemRow {
@@ -280,13 +285,13 @@ function feedback(args: Args, data: string, context: Context, cwd: string): stri
   return done;
 }
 
-function call(name: unknown, args: Args, data: string, cwd: string): string {
+async function call(name: unknown, args: Args, data: string, cwd: string): Promise<string> {
   const config = loadConfig(data);
   if (!consented(config)) throw new ToolError('memory is not set up, or its configuration changed since the owner agreed to it');
   const context = resolveContext(cwd, config, currentConfigDir());
   switch (name) {
     case 'memory_search':
-      return search(args, data, context, cwd);
+      return search(args, data, config, context, cwd);
     case 'memory_get':
       return get(args, data, context, cwd);
     case 'memory_propose':
@@ -300,7 +305,7 @@ function call(name: unknown, args: Args, data: string, cwd: string): string {
 
 type Reply = { jsonrpc: '2.0'; id: unknown; result?: unknown; error?: { code: number; message: string } };
 
-function handle(line: string, data: string, cwd: string, version: string): Reply | null {
+async function handle(line: string, data: string, cwd: string, version: string): Promise<Reply | null> {
   let message: unknown;
   try {
     message = JSON.parse(line);
@@ -328,7 +333,7 @@ function handle(line: string, data: string, cwd: string, version: string): Reply
       const args = params?.['arguments'] ?? {};
       try {
         if (typeof args !== 'object' || args === null || Array.isArray(args)) throw new ToolError('arguments is an object');
-        return ok({ content: [{ type: 'text', text: call(params?.['name'], args as Args, data, cwd) }] });
+        return ok({ content: [{ type: 'text', text: await call(params?.['name'], args as Args, data, cwd) }] });
       } catch (error) {
         const known = error instanceof ToolError || error instanceof ConfigError;
         if (!known) console.error(`memory: ${(error as Error).message}`);
@@ -342,9 +347,24 @@ function handle(line: string, data: string, cwd: string, version: string): Reply
 
 /** Serves until stdin closes. The process exits when the last answer is written. */
 export function serve(data: string, cwd: string, version: string): void {
+  // One call at a time, in the order they arrived: a search may wait on the network, and a later call must not overtake it.
+  let queue: Promise<void> = Promise.resolve();
   createInterface({ input: process.stdin, terminal: false }).on('line', (line) => {
     if (line.trim() === '') return;
-    const reply = handle(line, data, cwd, version);
-    if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}\n`);
+    queue = queue
+      .then(async () => {
+        const reply = await handle(line, data, cwd, version);
+        if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}\n`);
+      })
+      // A throw outside handle's own catches answers this request and leaves the queue alive for the next.
+      .catch((error: unknown) => {
+        console.error(`memory: ${error instanceof Error ? error.message : 'unexpected failure'}`);
+        try {
+          const id = (JSON.parse(line) as { id?: unknown }).id;
+          if (id !== undefined && id !== null) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: 'internal error' } })}\n`);
+        } catch {
+          // an unparsable line was already answered by handle
+        }
+      });
   });
 }

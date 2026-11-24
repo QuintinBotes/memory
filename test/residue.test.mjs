@@ -94,7 +94,7 @@ test('a store written before secure deletion is rewritten once on its next open,
     VALUES ('m-canary', 'acme', 'repository', 'acme/api', 'hazard', ?, 'active', 'owner', '2026-01-01', '2026-01-01')`).run(`The ${canary} module`));
   fill(acme(s), 200);
   // Schema version 5, as every store written before this change is.
-  withDb(acme(s), (db) => db.exec("PRAGMA secure_delete = OFF; DELETE FROM items WHERE id = 'm-canary'; PRAGMA user_version = 5"));
+  withDb(acme(s), (db) => db.exec("PRAGMA secure_delete = OFF; DELETE FROM items WHERE id = 'm-canary'; DROP TABLE item_vectors; PRAGMA user_version = 5"));
   assert.ok(storeBytes(s.data).includes(canary));
   assert.equal(run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   assert.equal(storeBytes(s.data).includes(canary), false);

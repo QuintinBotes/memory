@@ -28,6 +28,23 @@ no tenant, or in a Claude Code config not bound to that tenant.
   heuristic; names of one character are not matched.
 - **Advisory only.** Items are printed as cited facts. Memory never blocks a
   tool call or grants a permission.
+- **Local store.** Nothing else is uploaded. Files are created with mode 0600 in a 0700
+  directory.
+- **Embeddings send text out.** With the default
+  provider (Voyage AI, `voyage-4`) and `VOYAGE_API_KEY` set, memory sends to
+  `api.voyageai.com` over HTTPS: the statement of each active item when you
+  `remember` or `approve` it or run `memory embed --backfill`, and the words of
+  each `memory_search` query. It sends no paths, evidence, source references or
+  proposals, and never the text of an item flagged as reading like an
+  instruction. The statements have passed the same refusal check as every
+  stored item, which cannot recognise a credential that does not look like one.
+  The key is read from the environment, never written to disk, never printed
+  and never logged; the Voyage address can be moved with `VOYAGE_BASE_URL`
+  (for a proxy), which receives the key too. Vectors come back and are kept in
+  the item's own file, deleted with it. Without a key nothing is sent. Sending
+  needs your consent to the plan's embeddings category, and the owner picks the
+  provider in `config.json`. Voyage's own retention terms apply to what it
+  receives.
 - **Capture sends text out.** Automatic capture (on by default once you confirm
   the consent plan that lists it, off with `capture.enabled: false`) sends the
   session transcript's user and assistant text, at most 48,000 characters per
@@ -40,5 +57,3 @@ no tenant, or in a Claude Code config not bound to that tenant.
   items with agent trust; text that reads as an instruction is quarantined.
   A model's output is data, never a command: it is refused if it carries a
   credential, an email or a handle, and it is shown as a cited fact in the fence.
-- **Local store.** Nothing else is uploaded. Files are created with mode 0600 in a 0700
-  directory.

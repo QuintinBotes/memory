@@ -23,12 +23,15 @@ export interface Config {
   /** Subagent types, beyond general-purpose, that get the slice at their start. */
   subagentTypes?: string[];
   imports?: Record<string, RepositorySilos>;
+  /** Which embedding provider and model recall uses; absent means voyage-4. */
+  embeddings?: { provider: (typeof EMBEDDING_PROVIDERS)[number]; model?: string };
   /** `version` is the consent plan's version agreed to; absent in a consent saved before plans had one. */
   consent?: { planHash: string; grantedAt: string; version?: number };
   /** Automatic capture at the end of a session; on unless `enabled` is false, and only once the owner has confirmed the plan that lists it. */
   capture?: CaptureConfig;
 }
 
+export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
 /** `model` names the filter ('haiku' or 'fake'); `apiModel` is the Anthropic model alias the haiku filter calls. */
 export interface CaptureConfig {
   enabled?: boolean;
@@ -114,6 +117,17 @@ export function loadConfig(data: string): Config | null {
   ) {
     throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(', ')}`);
   }
+  const emb = c.embeddings;
+  if (
+    emb !== undefined &&
+    !(
+      typeof emb === 'object' && emb !== null && !Array.isArray(emb) &&
+      (EMBEDDING_PROVIDERS as readonly string[]).includes(emb.provider) &&
+      (emb.model === undefined || (typeof emb.model === 'string' && emb.model !== ''))
+    )
+  ) {
+    throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(' or ')}, "model"?: a name}`);
+  }
   const capture = c.capture;
   if (capture !== undefined) {
     const ok = typeof capture === 'object' && capture !== null && !Array.isArray(capture);
@@ -135,6 +149,7 @@ export function loadConfig(data: string): Config | null {
     ...(budget !== undefined ? { sessionBudget: budget } : {}),
     ...(types !== undefined ? { subagentTypes: types } : {}),
     ...(imports !== undefined ? { imports } : {}),
+    ...(emb !== undefined ? { embeddings: emb } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
     ...(capture !== undefined ? { capture } : {}),
   };

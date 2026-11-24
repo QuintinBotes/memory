@@ -23,10 +23,13 @@ import {
 } from './config.ts';
 import { git, resolveContext, type Context } from './context.ts';
 import { refusal } from './gate.ts';
+import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
 import { fileLines, rangeHash, recheck } from './anchors.ts';
 import { serve } from './mcp/server.ts';
+import { EmbedError, WRITE_TIMEOUT_MS, providerFor } from './embed/provider.ts';
+import { embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
 import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
@@ -69,6 +72,9 @@ const USAGE = `usage: memory <command>
   sweep
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
+  embed --backfill
+      embed every active item here that has no vector from the configured provider (voyage-4 unless config.json says
+      otherwise; needs VOYAGE_API_KEY). Remember and approve embed the item they make active
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -155,6 +161,43 @@ function init(args: string[], data: string): void {
   console.error('Consent recorded. Memory is on for the tenants this config is bound to.');
 }
 
+/**
+ * After a write: embeds what is now active here and has no vector. A failure never undoes the write; it is said, and
+ * `memory embed --backfill` fills the gap. No key is the normal state of a machine that does not use embeddings, so it is not said.
+ */
+async function embedAfterWrite(db: DatabaseSync, config: Config): Promise<void> {
+  if (!covers(config, 'embeddings')) return;
+  try {
+    await embedPending(db, providerFor(config, WRITE_TIMEOUT_MS));
+  } catch (error) {
+    if (!(error instanceof EmbedError)) throw error;
+    if (!error.noKey) console.error(`memory: not embedded (${error.message}); memory embed --backfill fills it later`);
+  }
+}
+
+/** `memory embed --backfill`: the stores this repository's tenant and the person file hold. */
+async function embedCommand(args: string[], data: string, cwd: string): Promise<void> {
+  const { values } = parseArgs({ args, options: { backfill: { type: 'boolean' } } });
+  if (values.backfill !== true) throw new Refusal('memory embed needs --backfill', 2);
+  const config = setUp(data);
+  if (!covers(config, 'embeddings')) throw new Refusal('your consent does not cover embeddings yet; run memory init and confirm');
+  const provider = providerFor(config, WRITE_TIMEOUT_MS);
+  let total = 0;
+  for (const { file } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      total += await embedPending(db, provider);
+    } catch (error) {
+      if (error instanceof EmbedError) throw new Refusal(`not embedded: ${error.message}`);
+      throw error;
+    } finally {
+      db.close();
+    }
+  }
+  console.log(`embedded ${total} item${total === 1 ? '' : 's'} with ${provider.model}`);
+}
+
 /** `path[:start[-end]]`, relative to the repository root, read at HEAD. */
 function anchorAt(cwd: string, spec: string): Anchor {
   const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(spec);
@@ -175,7 +218,7 @@ function anchorAt(cwd: string, spec: string): Anchor {
   return { path: clean, start, end, commit, citedHash: rangeHash(lines, start, end) };
 }
 
-function remember(args: string[], data: string, cwd: string): void {
+async function remember(args: string[], data: string, cwd: string): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -235,6 +278,7 @@ function remember(args: string[], data: string, cwd: string): void {
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, 'item_remembered', { type: 'item', id: done.id }, { scope });
       console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      await embedAfterWrite(db, config);
       return;
     }
     const stored = addItem(db, { ...candidate, status: 'active' });
@@ -248,6 +292,7 @@ function remember(args: string[], data: string, cwd: string): void {
     } else {
       throw new Refusal('this statement was already placed as superseded');
     }
+    await embedAfterWrite(db, config);
   } finally {
     db.close();
   }
@@ -292,7 +337,7 @@ function review(data: string, cwd: string): void {
 }
 
 /** `memory approve <id> [--scope]` and `memory reject <id> [--reason]`: the owner's decision on one proposal. */
-function decideCommand(args: string[], data: string, cwd: string, decision: 'approve' | 'reject'): void {
+async function decideCommand(args: string[], data: string, cwd: string, decision: 'approve' | 'reject'): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -335,6 +380,7 @@ function decideCommand(args: string[], data: string, cwd: string, decision: 'app
       const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
       const replaced = superseded === null ? '' : `; it supersedes ${p.older!.id}, which stays on record; undo with memory undo ${superseded}`;
       console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}${replaced}`);
+      await embedAfterWrite(db, config);
       return;
     } finally {
       db.close();
@@ -667,6 +713,8 @@ async function main(argv: string[]): Promise<void> {
       return;
     case 'init':
       return init(rest, data);
+    case 'embed':
+      return embedCommand(rest, data, process.cwd());
     case 'remember':
       return remember(rest, data, process.cwd());
     case 'list':
