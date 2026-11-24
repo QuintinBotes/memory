@@ -136,6 +136,25 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     const has = (db.prepare('PRAGMA table_info(evidence)').all() as { name: string }[]).some((c) => c.name === 'taint');
     if (!has) db.exec('ALTER TABLE evidence ADD COLUMN taint TEXT;');
   },
+
+  // v9 - edits to an instruction file (#26, #40): a conflict with a loaded line, or a promotion into the file. A row
+  // is only ever a proposal; `memory conflicts apply --confirm` is the one writer of the file. Deleted with its item.
+  // IF NOT EXISTS, so a store a test or an older install rolled back by version alone still opens.
+  `
+  CREATE TABLE IF NOT EXISTS instruction_edits (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('conflict', 'promotion')),
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    file TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    old_line TEXT NOT NULL,
+    new_line TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'applied', 'resolved')),
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    UNIQUE (item_id, kind, file, old_line)
+  );
+  `,
 ];
 const SECURE_DELETE = 6;
 

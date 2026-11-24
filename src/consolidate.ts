@@ -30,6 +30,10 @@ function similarity(a: Set<string>, b: Set<string>): number {
 const numberKey = (s: Set<string>): string => [...s].filter((w) => /\d/.test(w)).sort().join(' ');
 const sameNumbers = (a: Set<string>, b: Set<string>): boolean => numberKey(a) === numberKey(b);
 
+/** Whether two statements say the same thing, by the matcher a new statement meets: the same normalised key, or a close word overlap with the same numbers. */
+export const repeats = (a: string, b: string): boolean =>
+  statementKey(a) === statementKey(b) || (similarity(words(a), words(b)) >= REPEAT && sameNumbers(words(a), words(b)));
+
 /** Two items can only be about the same subject if neither is anchored, or they cite a common file. */
 const anchorsOverlap = (a: Anchor[], b: Anchor[]): boolean => a.length === 0 || b.length === 0 || a.some((x) => b.some((y) => x.path === y.path));
 

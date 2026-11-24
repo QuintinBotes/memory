@@ -277,6 +277,48 @@ normalised text, word overlap and cited files:
 - Each merge and supersession prints an audit id; `memory undo <audit-id>`
   reverses it.
 
+## Instruction files
+
+`CLAUDE.md`, `AGENTS.md` and the like are loaded whole by the agent, so they
+are the source of truth and memory never repeats them. At every recall (the
+session slice, a subagent's slice, `memory_search`, `memory recall --diff`)
+memory reads, read-only, the files an agent in this directory loads: the
+`CLAUDE.md`, `CLAUDE.local.md` and `.claude/CLAUDE.md` from here up to the
+repository root, the root's `AGENTS.md`, `GEMINI.md` and
+`.github/copilot-instructions.md`, your `CLAUDE.md` in the Claude Code config
+directory, and every `@path` import of those (five deep). A file, link or
+import that leaves the repository (for your own file, your home directory) is
+not read. Their text is matched, never stored as an item or evidence.
+
+- **A repeat** (the same statement as a line, by the consolidation matcher: same
+  normalised text, or a word overlap of 80% with the same numbers) is left out
+  of recall. The drop is logged as `withheld` in the injection log, by item id
+  and the tokens saved. A partial overlap does not drop an item, and a deleted
+  line brings the item back at the next session. `memory_propose` of a
+  statement a loaded line already says is refused, naming the file and line.
+- **A contradiction** (a line and an item that share a subject, two content
+  words covering 60% of the shorter, and differ in polarity, "must" against
+  "must not", "run" against "optional") is also left out: the file wins. Memory
+  stores a proposed edit that replaces the line with the item's statement.
+  `memory review` shows it as a diff, `memory conflicts` lists every edit, and
+  only you can write it, from a terminal:
+  `memory conflicts apply <id> --confirm` writes exactly the diff shown and
+  marks the item superseded by the file; `memory conflicts reject <id>` marks
+  it resolved. Without `--confirm`, apply writes nothing. The edit is refused if the
+  line changed since it was proposed. After a reject the item stays out of
+  recall for as long as the file contradicts it.
+- **A promotion**: an active convention, preference or decision with no anchor,
+  and support of 3 or more (only your own evidence raises support), is
+  proposed for the file: appended to the repository's `CLAUDE.md` (or `AGENTS.md`
+  when there is no `CLAUDE.md`), or to your own `CLAUDE.md` for a person or
+  global item. Apply writes the line, and the item becomes `promoted` and
+  leaves recall.
+
+Matching is by words, with no model: a contradiction in other words is missed,
+and a shared-word pair can read as one subject. `memory list` shows every item,
+withheld ones included. No MCP tool writes an instruction file, and a
+file is never committed or pushed.
+
 ## Automatic capture
 
 At Stop and SessionEnd a hook runs `memory capture`. It hands the work to a

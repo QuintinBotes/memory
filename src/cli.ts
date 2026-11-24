@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { parseArgs } from 'node:util';
 import { suppressSqliteExperimentalWarning } from './warnings.ts';
@@ -33,6 +33,8 @@ import { serve } from './mcp/server.ts';
 import { EmbedError, WRITE_TIMEOUT_MS, providerFor } from './embed/provider.ts';
 import { embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
+import { applyEdit, edits, loadInstructions, rejectEdit, renderEdit, type Withheld } from './instructions.ts';
+import { appendInjections, injectionLock, logWithheld } from './store/injections.ts';
 import { PROPOSALS_LABEL, fence } from './render/rows.ts';
 import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/plan.ts';
 import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
@@ -76,6 +78,10 @@ const USAGE = `usage: memory <command>
       make a proposal active
   reject <id> [--reason <text>]
       keep a proposal as a tombstone, so the same statement is never proposed again
+  conflicts [apply <id> [--confirm] | reject <id>]
+      the edits memory proposes to instruction files (CLAUDE.md, AGENTS.md): a loaded line an item contradicts (the file
+      wins and the item is not recalled) and an item proven enough to be promoted into the file. Nothing is written until
+      apply --confirm, which writes exactly the diff shown; reject resolves it. review lists the open ones
   undo <audit-id>
       reverse one merge or supersession, by the audit id its command printed
   sweep
@@ -326,7 +332,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
 
 function list(data: string, cwd: string): void {
   const config = setUp(data);
-  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd)));
+  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], undefined, null)));
 }
 
 /** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
@@ -363,9 +369,25 @@ function proposalStores(data: string, context: Context): { file: string; tenant:
   return [...(context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }]), { file: personFile(data), tenant: '' }];
 }
 
+/** The edits to instruction files that wait for the owner, in the stores this repository may see. */
+function openEdits(data: string, context: Context): ReturnType<typeof edits> {
+  const out: ReturnType<typeof edits> = [];
+  for (const { file } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      out.push(...edits(db).filter((e) => e.status === 'open'));
+    } finally {
+      db.close();
+    }
+  }
+  return out;
+}
+
 function review(data: string, cwd: string): void {
   const all: Proposal[] = [];
-  for (const { file, tenant } of proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()))) {
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
@@ -374,7 +396,15 @@ function review(data: string, cwd: string): void {
       db.close();
     }
   }
-  if (all.length === 0) return void console.error('No proposals to review here.');
+  const waiting = openEdits(data, context);
+  if (waiting.length > 0) {
+    const ins = loadInstructions(cwd, currentConfigDir());
+    process.stdout.write(
+      `Edits to instruction files: ${waiting.length}. The file wins over memory, and memory never writes it: only you, with memory conflicts apply <id> --confirm in a terminal, or memory conflicts reject <id>.\n` +
+        fence(PROPOSALS_LABEL, waiting.map((e) => renderEdit(ins, e)).join('')),
+    );
+  }
+  if (all.length === 0) return waiting.length > 0 ? undefined : void console.error('No proposals to review here.');
   const quarantined = all.filter((p) => p.quarantine !== null).length;
   const stale = all.filter((p) => p.status !== 'proposed').length;
   process.stdout.write(
@@ -382,6 +412,58 @@ function review(data: string, cwd: string): void {
       'Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.\n' +
       fence(PROPOSALS_LABEL, renderProposals(all)),
   );
+}
+
+/**
+ * `memory conflicts [apply <id> [--confirm] | reject <id>]`: the edits memory proposes to instruction files, for the owner.
+ * Apply without --confirm shows the diff and writes nothing; with it, writes exactly that edit. Agents have no tool for this.
+ */
+function conflictsCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { confirm: { type: 'boolean' } } });
+  const [verb, id, ...extra] = positionals;
+  if (verb !== undefined && ((verb !== 'apply' && verb !== 'reject') || id === undefined || extra.length > 0)) {
+    throw new Refusal('usage: memory conflicts [apply <id> [--confirm] | reject <id>]', 2);
+  }
+  if (values.confirm === true && verb !== 'apply') throw new Refusal('--confirm goes with apply', 2);
+  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  const ins = loadInstructions(cwd, currentConfigDir());
+  let listed = 0;
+  for (const { file } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      const found = edits(db, id);
+      if (verb === undefined) {
+        listed += found.length;
+        if (found.length > 0) process.stdout.write(found.map((e) => renderEdit(ins, e)).join(''));
+        continue;
+      }
+      const [e] = found;
+      if (e === undefined) continue;
+      if (verb === 'reject') {
+        try {
+          rejectEdit(db, e);
+        } catch (error) {
+          throw new Refusal((error as Error).message);
+        }
+        return void console.log(`resolved ${e.id}; no file was written${e.kind === 'conflict' ? ', and the item stays out of recall because the file still wins' : ''}`);
+      }
+      process.stdout.write(renderEdit(ins, e));
+      if (values.confirm !== true) return void console.error('Nothing was written. Run the same command with --confirm to write this edit.');
+      try {
+        return void console.log(applyEdit(db, ins, e));
+      } catch (error) {
+        throw new Refusal((error as Error).message);
+      }
+    } finally {
+      db.close();
+    }
+  }
+  if (verb === undefined) {
+    if (listed === 0) console.error('No instruction-file edits here.');
+    return;
+  }
+  throw new Refusal(`no edit ${id} here; memory conflicts lists them`);
 }
 
 /** `memory approve <id> [--scope]` and `memory reject <id> [--reason]`: the owner's decision on one proposal. */
@@ -511,9 +593,9 @@ function hookInput(): Record<string, unknown> {
 }
 
 /** The slice for the hook's working directory: the subagent's own, for a subagent, so its tenant is resolved there. */
-function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number) {
+function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number, withheld: Withheld[] = []) {
   const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
-  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS), budget);
+  return chooseSlice(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld), budget);
 }
 
 /**
@@ -528,7 +610,9 @@ function sessionStart(data: string): void {
     if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
     if (!consented(config)) return;
-    process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text);
+    const withheld: Withheld[] = [];
+    process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, withheld).text);
+    logWithheld(data, config, 'session-start', typeof input['session_id'] === 'string' ? input['session_id'] : 'unknown', withheld);
     // After the slice, in its own try: a slow or failing sweep never costs the session its slice.
     try {
       sweepCommand(data, typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd(), true);
@@ -553,8 +637,9 @@ function subagentStart(data: string): void {
     if (!consented(config) || typeof type !== 'string' || !subagentAllowed(config, type)) return;
     const id = (v: unknown) => (typeof v === 'string' && v !== '' ? v : 'unknown');
     let slice: ReturnType<typeof hookSlice>;
+    const withheld: Withheld[] = [];
     try {
-      slice = hookSlice(data, config, input, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET));
+      slice = hookSlice(data, config, input, Math.min(config.sessionBudget ?? DEFAULT_SESSION_BUDGET, SUBAGENT_BUDGET), withheld);
     } catch {
       // The store was busy past the hook's limit or unreadable: print nothing, but count the skip.
       if (covers(config, 'injections')) {
@@ -563,6 +648,7 @@ function subagentStart(data: string): void {
       return;
     }
     const { text, shown } = slice;
+    logWithheld(data, config, 'subagent-start', id(input['session_id']), withheld);
     if (text === '') return;
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: text } }));
     if (!covers(config, 'injections')) return;
@@ -576,17 +662,8 @@ function subagentStart(data: string): void {
   }
 }
 
-/** How long a hook waits for the injection log's lock, and how long a purge does. */
-const LOG_LOCK_HOOK_MS = 2000;
+/** How long a purge waits for the injection log's lock. */
 const LOG_LOCK_PURGE_MS = 10_000;
-const injectionLock = (data: string): string => `${injectionLog(data)}.lock`;
-
-/** One write per slice, under the log's lock, so lines from parallel subagents do not interleave and a purge's rewrite never drops one. */
-function appendInjections(data: string, lines: string[]): void {
-  const file = injectionLog(data);
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  withFileLock(injectionLock(data), () => appendFileSync(file, lines.join(''), { mode: 0o600 }), LOG_LOCK_HOOK_MS);
-}
 
 /** The Stop and SessionEnd hook. Never fails the session: it hands the work to a detached process and returns. */
 async function captureCommand(args: string[], data: string): Promise<void> {
@@ -828,6 +905,8 @@ async function main(argv: string[]): Promise<void> {
     case 'approve':
     case 'reject':
       return decideCommand(rest, data, process.cwd(), command);
+    case 'conflicts':
+      return conflictsCommand(rest, data, process.cwd());
     case 'sweep':
       return sweepCommand(data, process.cwd(), false);
     case 'recheck':

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Instruction files are the source of truth (#26, #40): recall reads
+  `CLAUDE.md`, `AGENTS.md`, their `@`-imports and the user's `CLAUDE.md`
+  read-only, leaves out an item that repeats a loaded line (counted as
+  `withheld` in the injection log; `memory_propose` of a repeat is refused
+  naming file and line) and one that contradicts a line (the file wins). A
+  contradiction stores a proposed edit shown as a diff in `memory review`; an
+  owner-approved item with support of 3 or more is proposed for promotion into
+  the file. `memory conflicts [apply <id> --confirm | reject <id>]` is the only
+  writer of an instruction file; reject resolves without writing.
 - Review precedents reach every reviewer (#9): `memory import` reads Review
   Voice's store read-only (`decisions` under `imports`) and proposes a
   `precedent` for each owner `keep`, `dismiss`, `never_flag` and `rewrite`,

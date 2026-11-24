@@ -26,6 +26,9 @@ export type AuditAction =
   | 'merge_proposed'
   | 'sweep'
   | 'supersession_applied'
+  | 'instruction_edit_proposed'
+  | 'instruction_edit_applied'
+  | 'instruction_edit_rejected'
   | 'undone';
 
 export function recordAudit(
