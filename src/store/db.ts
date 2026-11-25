@@ -239,7 +239,7 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     symbol TEXT NOT NULL DEFAULT '',
     file TEXT,
     line TEXT,
-    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'applied', 'rejected')),
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'applied', 'rejected', 'resolved')),
     created_at TEXT NOT NULL,
     resolved_at TEXT,
     UNIQUE (item_id, target, symbol)

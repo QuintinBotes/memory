@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { isAbsolute as isAbsolute9, join as join16, normalize as normalize4 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -2130,9 +2130,14 @@ function writeAtomic(path, content) {
     throw error;
   }
 }
+function resolveOthers(db, item, except, now) {
+  db.prepare("UPDATE promotions SET status = 'resolved', resolved_at = ? WHERE item_id = ? AND status = 'open' AND id != ?").run(now, item, except);
+  db.prepare("UPDATE instruction_edits SET status = 'resolved', resolved_at = ? WHERE item_id = ? AND status = 'open' AND id != ?").run(now, item, except);
+}
 function applyEdit(db, ins, e) {
   const file = resolve3(e.file);
   if (!ins.allowed.has(file)) throw new Error(applyRefusal(ins, e, null));
+  if (db.prepare("SELECT 1 FROM items WHERE id = ? AND status = 'active'").get(e.item_id) === void 0) throw new Error(`item ${e.item_id} is no longer active; nothing was written`);
   const target = writableTarget(ins, file);
   const text4 = existsSync3(target) ? readWhole(target, displayPath(ins, file)) : null;
   const why = applyRefusal(ins, e, text4);
@@ -2158,6 +2163,7 @@ function applyEdit(db, ins, e) {
       e.kind === "promotion" ? name : null,
       e.item_id
     );
+    resolveOthers(db, e.item_id, e.id, now);
     recordAudit(db, "instruction_edit_applied", { type: "item", id: e.item_id }, { kind: e.kind, edit: e.id });
     db.exec("COMMIT");
   } catch (error) {
@@ -2451,7 +2457,7 @@ var MIGRATIONS = [
     symbol TEXT NOT NULL DEFAULT '',
     file TEXT,
     line TEXT,
-    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'applied', 'rejected')),
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'applied', 'rejected', 'resolved')),
     created_at TEXT NOT NULL,
     resolved_at TEXT,
     UNIQUE (item_id, target, symbol)
@@ -3275,13 +3281,22 @@ function serve(data, cwd, version) {
 
 // src/promote/promote.ts
 import { randomBytes as randomBytes4 } from "node:crypto";
-import { existsSync as existsSync6, lstatSync as lstatSync2, mkdirSync as mkdirSync7, realpathSync as realpathSync3 } from "node:fs";
+import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync8, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute5, join as join7, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
 var DEFAULT_STANDARDS = "docs/review-standards.md";
-var untested = (item) => item.anchors.find((a) => a.symbol !== void 0 && a.testsAt !== void 0 && a.test === void 0)?.symbol ?? null;
+var BAR = `tenant = ? AND scope = 'repository' AND scope_key = ? AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}
+  AND origin_trust = 'owner' AND quarantine IS NULL AND support >= ${PROMOTE_SUPPORT} AND contradictions = 0
+  AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id AND e.taint IS NOT NULL)`;
+var eligible = (db, tenant, repository, id) => db.prepare(`SELECT id, type, statement, anchors_json FROM items WHERE ${BAR}${id === void 0 ? "" : " AND id = ?"} ORDER BY id`).all(tenant, repository, ...id === void 0 ? [] : [id]);
+var untested = (item) => JSON.parse(item.anchors_json).find((a) => a.symbol !== void 0 && a.testsAt !== void 0 && a.test === void 0)?.symbol ?? null;
+var FORBIDDEN_FILES = /* @__PURE__ */ new Set(["claude.md", "claude.local.md", "agents.md", "gemini.md", "copilot-instructions.md"]);
 var insidePath = (rel) => {
   const clean = normalize2(rel);
-  return isAbsolute5(rel) || clean === ".." || clean.startsWith("../") || clean.startsWith("..\\") ? null : clean.replace(/\\/g, "/");
+  if (isAbsolute5(rel) || clean === ".." || clean.startsWith("../") || clean.startsWith("..\\")) return null;
+  const path = clean.replace(/\\/g, "/");
+  const parts2 = path.toLowerCase().split("/");
+  const forbidden = parts2[0] === ".git" || parts2[0] === ".claude" || parts2[0] === ".github" && parts2[1] === "workflows" || FORBIDDEN_FILES.has(parts2[parts2.length - 1]);
+  return forbidden ? null : path;
 };
 var committers = (top) => [...new Set((git(top, "log", "-n", "500", "--format=%an%n%cn") ?? "").split("\n").map((n) => n.trim()).filter((n) => n.length >= 3))];
 function lineRefusal(statement, top) {
@@ -3290,15 +3305,15 @@ function lineRefusal(statement, top) {
   const names = committers(top);
   return names.some((n) => new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u").test(statement)) ? "it names a committer" : null;
 }
-function propose3(db, tenant, repository, owner, top, file) {
+function propose3(db, tenant, repository, top, file) {
   let made = 0;
   const insert = db.prepare(
     `INSERT OR IGNORE INTO promotions (id, item_id, target, symbol, file, line, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)`
   );
   inTransaction(db, () => {
-    for (const item of tenantItems(db, tenant, repository, owner).filter((i) => i.scope === "repository")) {
+    for (const item of eligible(db, tenant, repository)) {
       const symbol = untested(item);
-      const row4 = symbol !== null ? ["test", symbol, null, null] : file !== null && item.support >= PROMOTE_SUPPORT && item.contradictions === 0 && PROMOTABLE.has(item.type) && lineRefusal(item.statement, top) === null ? ["review-standards", "", file, `- ${item.statement.trim()}`] : null;
+      const row4 = symbol !== null ? ["test", symbol, null, null] : file !== null && PROMOTABLE.has(item.type) && lineRefusal(item.statement, top) === null ? ["review-standards", "", file, `- ${item.statement.trim()}`] : null;
       if (row4 === null) continue;
       const id = `p-${randomBytes4(5).toString("hex")}`;
       if (Number(insert.run(id, item.id, row4[0], row4[1], row4[2], row4[3], (/* @__PURE__ */ new Date()).toISOString()).changes) === 1) {
@@ -3320,33 +3335,76 @@ function renderPromotion(p) {
   const head = p.target === "test" ? `[${p.id}] test, ${p.status}: item [${p.item_id}] sits on a symbol no test executes; write a test for ${safe(p.symbol)}` : `[${p.id}] review-standards, ${p.status}: item [${p.item_id}] has proved itself; proposed for ${safe(p.file)}`;
   return [head, ...p.target === "test" ? [] : [`@@ ${safe(p.file)} (end of file) @@`, `+${safe(p.line)}`], ...next].join("\n") + "\n";
 }
+var exists = (path) => {
+  try {
+    lstatSync2(path);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+};
 function writable(top, rel) {
   const clean = insidePath(rel);
-  if (clean === null) throw new Error(`${rel} is outside the repository; nothing was written`);
+  if (clean === null) throw new Error(`${rel} is outside the repository or not a place for a standards file; nothing was written`);
   const target = resolve4(top, clean);
-  if (existsSync6(target) && lstatSync2(target).isSymbolicLink()) throw new Error(`${clean} is a symbolic link; nothing was written. Edit the real file it points to`);
+  if (exists(target) && lstatSync2(target).isSymbolicLink()) throw new Error(`${clean} is a symbolic link; nothing was written. Edit the real file it points to`);
   let dir = dirname9(target);
-  while (!existsSync6(dir)) dir = dirname9(dir);
-  const real = join7(realpathSync3(dir), relative4(dir, target));
+  while (!exists(dir)) dir = dirname9(dir);
+  let real;
+  try {
+    real = join7(realpathSync3(dir), relative4(dir, target));
+  } catch {
+    throw new Error(`${clean} resolves outside the repository; nothing was written`);
+  }
   if (!inside2(realpathSync3(top), real)) throw new Error(`${clean} resolves outside the repository; nothing was written`);
   return real;
 }
-function applyPromotion(db, p, top) {
+function readPlain(path, name) {
+  let fd;
+  try {
+    fd = openSync2(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    const code = error.code;
+    if (code === "ENOENT") return null;
+    if (code === "ELOOP") throw new Error(`${name} is a symbolic link; nothing was written`);
+    throw error;
+  }
+  try {
+    const { dev, ino } = fstatSync(fd);
+    const bytes = readFileSync8(fd);
+    if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
+    try {
+      return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), dev, ino };
+    } catch {
+      throw new Error(`${name} is not valid UTF-8; nothing was written`);
+    }
+  } finally {
+    closeSync2(fd);
+  }
+}
+function applyPromotion(db, p, top, tenant, repository) {
   if (p.status !== "open") throw new Error(`${p.id} is already ${p.status}`);
   if (p.target === "test") throw new Error(`${p.id} asks for a test, which only you can write; reject it, or it stops being proposed once a test executes the symbol`);
-  const active = db.prepare("SELECT 1 FROM items WHERE id = ? AND status = 'active'").get(p.item_id);
-  if (active === void 0) throw new Error(`item ${p.item_id} is no longer active; nothing was written`);
-  const why = lineRefusal(p.statement, top);
-  if (why !== null || `- ${p.statement.trim()}` !== p.line) throw new Error(`the line is refused (${why ?? "the item changed since it was proposed"}); nothing was written`);
+  const [item] = eligible(db, tenant, repository, p.item_id);
+  if (item === void 0 || !PROMOTABLE.has(item.type)) throw new Error(`item ${p.item_id} no longer passes the bar for promotion; nothing was written`);
+  const why = lineRefusal(item.statement, top);
+  if (why !== null || `- ${item.statement.trim()}` !== p.line) throw new Error(`the line is refused (${why ?? "the item changed since it was proposed"}); nothing was written`);
   const target = writable(top, p.file);
-  const text4 = existsSync6(target) ? readWhole(target, p.file) : "";
+  const read2 = readPlain(target, p.file);
+  const text4 = read2?.text ?? "";
   if (text4.split("\n").some((l) => l.replace(/\r$/, "") === p.line)) throw new Error(`${p.file} already holds that line; nothing was written`);
   mkdirSync7(dirname9(target), { recursive: true });
+  if (read2 !== null) {
+    const now2 = lstatSync2(target);
+    if (now2.isSymbolicLink() || now2.dev !== read2.dev || now2.ino !== read2.ino) throw new Error(`${p.file} changed while it was being read; nothing was written`);
+  }
   writeAtomic(target, `${text4}${text4 === "" || text4.endsWith("\n") ? "" : "\n"}${p.line}
 `);
   const now = (/* @__PURE__ */ new Date()).toISOString();
   inTransaction(db, () => {
     db.prepare("UPDATE promotions SET status = 'applied', resolved_at = ? WHERE id = ?").run(now, p.id);
+    resolveOthers(db, p.item_id, p.id, now);
     db.prepare("UPDATE items SET status = 'promoted', valid_to = ?, status_reason = ?, promoted_to = ? WHERE id = ?").run(now, `promoted to ${p.file}`, p.file, p.item_id);
     recordAudit(db, "promotion_applied", { type: "item", id: p.item_id }, { promotion: p.id, target: p.target });
   });
@@ -3454,7 +3512,7 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync8, lstatSync as lstatSync3, readFileSync as readFileSync8, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync8, lstatSync as lstatSync3, readFileSync as readFileSync9, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join9, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
@@ -3743,7 +3801,7 @@ function readInside2(path, root) {
     const top = realpathSync4(root);
     if (!real.startsWith(top + sep3)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
     if (!statSync4(real).isFile()) return { reason: "not a file" };
-    return { text: readFileSync8(real, "utf8") };
+    return { text: readFileSync9(real, "utf8") };
   } catch (error) {
     return { reason: `cannot be read (${error.code ?? "error"})` };
   }
@@ -4013,7 +4071,7 @@ ${list2.length === 0 ? "(none)\n" : list2.map(row2).join("")}`;
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync9, mkdirSync as mkdirSync8, readFileSync as readFileSync9, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync9, mkdirSync as mkdirSync8, readFileSync as readFileSync10, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
@@ -4077,7 +4135,7 @@ function read(db, tenant) {
 function writeIfChanged(path, content, mayExist) {
   if (mayExist) {
     try {
-      if (readFileSync9(path, "utf8") === content) return;
+      if (readFileSync10(path, "utf8") === content) return;
     } catch {
     }
   }
@@ -4092,7 +4150,7 @@ function exportMarkdown(stores2, dir) {
   const current = new Set(all.map((a) => a.row.id));
   let previous = "";
   try {
-    previous = readFileSync9(join10(dir, "index.md"), "utf8");
+    previous = readFileSync10(join10(dir, "index.md"), "utf8");
   } catch {
   }
   const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
@@ -4195,7 +4253,7 @@ function diffRecall(data, config, context, cwd, range) {
 }
 
 // src/recall/orbit.ts
-import { existsSync as existsSync10, readFileSync as readFileSync10 } from "node:fs";
+import { existsSync as existsSync10, readFileSync as readFileSync11 } from "node:fs";
 import { join as join11 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
@@ -4206,7 +4264,7 @@ function lessonsInPrompts(root) {
   let inKnowledge = false;
   let indent = 0;
   const seen = {};
-  for (const line of readFileSync10(file, "utf8").split(/\r?\n/)) {
+  for (const line of readFileSync11(file, "utf8").split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
     if (line.includes("	")) return false;
     const spaces = /^ */.exec(line)[0].length;
@@ -4824,7 +4882,7 @@ function captureCi(data, config, cwd, limit = 100) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync11, readFileSync as readFileSync11, realpathSync as realpathSync5 } from "node:fs";
+import { existsSync as existsSync11, readFileSync as readFileSync12, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname11, isAbsolute as isAbsolute8, join as join12, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
@@ -4896,7 +4954,7 @@ function anchored(items, root, t) {
   const read2 = () => {
     if (text4 === void 0) {
       try {
-        text4 = readFileSync11(resolve6(root, t.path), "utf8");
+        text4 = readFileSync12(resolve6(root, t.path), "utf8");
       } catch {
         text4 = null;
       }
@@ -5356,7 +5414,7 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync4 } from "node:child_process";
-import { cpSync, existsSync as existsSync12, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync12, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { cpSync, existsSync as existsSync12, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync13, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname12, join as join15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -5397,7 +5455,7 @@ var jsonLines2 = (text4) => text4.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync12(file) ? jsonLines2(readFileSync12(file, "utf8")) : [];
+var readLines = (file) => existsSync12(file) ? jsonLines2(readFileSync13(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -5482,7 +5540,7 @@ function lab(version, agent, model, only) {
     const plugin = join15(base2, "plugin");
     for (const part of PLUGIN_PARTS) if (existsSync12(join15(ROOT, part))) cpSync(join15(ROOT, part), join15(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync12(join15(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync13(join15(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -6104,8 +6162,8 @@ function promoteCommand(args, data, cwd) {
     if (values.propose === true) {
       const configured = Object.entries(config.imports ?? {}).find(([checkout]) => realpathOrSelf(checkout) === realpathOrSelf(top))?.[1].standards;
       const rel = insidePath(configured ?? DEFAULT_STANDARDS);
-      if (rel === null) console.error(`The review-standards path ${configured} is not inside the repository; no line is proposed for it.`);
-      const made = propose3(db, context.tenant, context.repository, context.owner, top, rel);
+      if (rel === null) console.error(`The review-standards path ${configured} is not a path inside the repository for a standards file (not absolute, not under .git, .claude or .github/workflows, not an instruction file); no line is proposed for it.`);
+      const made = propose3(db, context.tenant, context.repository, top, rel);
       console.error(`${made} new promotion proposal${made === 1 ? "" : "s"}.`);
     }
     const id = values.apply ?? values.reject;
@@ -6127,7 +6185,7 @@ function promoteCommand(args, data, cwd) {
       if (!process.stdin.isTTY && values["yes-non-interactive"] !== true) {
         throw new Refusal("nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command", 2);
       }
-      console.log(applyPromotion(db, p, top));
+      console.log(applyPromotion(db, p, top, context.tenant, context.repository));
     } catch (error) {
       throw error instanceof Refusal ? error : new Refusal(error.message);
     }
@@ -6289,7 +6347,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync13(0, "utf8"));
+    const v = JSON.parse(readFileSync14(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -6449,7 +6507,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync13(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync14(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -6549,7 +6607,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync13(file, "utf8"));
+    return parse(readFileSync14(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }

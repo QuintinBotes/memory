@@ -697,8 +697,8 @@ function promoteCommand(args: string[], data: string, cwd: string): void {
     if (values.propose === true) {
       const configured = Object.entries(config.imports ?? {}).find(([checkout]) => realpathOrSelf(checkout) === realpathOrSelf(top))?.[1].standards;
       const rel = insidePath(configured ?? DEFAULT_STANDARDS);
-      if (rel === null) console.error(`The review-standards path ${configured} is not inside the repository; no line is proposed for it.`);
-      const made = proposePromotions(db, context.tenant, context.repository, context.owner, top, rel);
+      if (rel === null) console.error(`The review-standards path ${configured} is not a path inside the repository for a standards file (not absolute, not under .git, .claude or .github/workflows, not an instruction file); no line is proposed for it.`);
+      const made = proposePromotions(db, context.tenant, context.repository, top, rel);
       console.error(`${made} new promotion proposal${made === 1 ? '' : 's'}.`);
     }
     const id = values.apply ?? values.reject;
@@ -720,7 +720,7 @@ function promoteCommand(args: string[], data: string, cwd: string): void {
       if (!process.stdin.isTTY && values['yes-non-interactive'] !== true) {
         throw new Refusal('nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command', 2);
       }
-      console.log(applyPromotion(db, p, top));
+      console.log(applyPromotion(db, p, top, context.tenant, context.repository));
     } catch (error) {
       throw error instanceof Refusal ? error : new Refusal((error as Error).message);
     }
