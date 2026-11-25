@@ -498,6 +498,20 @@ not read. Their text is matched, never stored as an item or evidence.
   when there is no `CLAUDE.md`), or to your own `CLAUDE.md` for a person or
   global item. Apply writes the line, and the item becomes `promoted` and
   leaves recall.
+- **Promotion into checks**: `memory promote --propose` stores and lists
+  proposals. An active repository item with support of 3 or more, no
+  contradiction and a convention, preference or decision type is proposed as one
+  line of the review-standards file (the `standards` path under `imports` in
+  `config.json`, else `docs/review-standards.md`). An item anchored at a symbol
+  that no test executes (slice 15 looked it up and found none) is proposed as
+  "write a test for <symbol>" instead. `memory promote --apply <id>` runs from a
+  terminal (or with `--yes-non-interactive`, with an ask rule on it), appends
+  exactly the line shown, marks the item `promoted` with `promoted_to` set and
+  takes it out of recall. A line with a secret, an email, a handle or a
+  committer's name, and a target that is a symbolic link or resolves outside the
+  repository, are refused. Nothing is committed, pushed or opened as a pull
+  request. `memory promote --reject <id>` keeps the proposal as a tombstone.
+  A test proposal cannot be applied. No Review Voice policy or Orbit check target yet.
 
 Matching is by words, with no model: a contradiction in other words is missed,
 and a shared-word pair can read as one subject. `memory list` shows every item,

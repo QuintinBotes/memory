@@ -22,11 +22,11 @@ const ROOT_FILES = ['AGENTS.md', 'GEMINI.md', '.github/copilot-instructions.md']
 /** Files Claude Code loads from the working directory and each parent up to the repository root. */
 const DIR_FILES = ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'];
 /** An instruction file is matched only up to this many bytes. */
-const MAX_BYTES = 256 * 1024;
+export const MAX_BYTES = 256 * 1024;
 const MAX_IMPORT_DEPTH = 5;
 /** Owner-approved support from which an item that no tool can check is proposed for an instruction file. */
 export const PROMOTE_SUPPORT = 3;
-const PROMOTABLE = new Set(['convention', 'preference', 'decision']);
+export const PROMOTABLE = new Set(['convention', 'preference', 'decision']);
 
 export interface InstructionLine {
   file: string;
@@ -45,7 +45,7 @@ export interface Instructions {
   userTarget: string;
 }
 
-const inside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+export const inside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
 /** The file's text up to `MAX_BYTES`, or null when it is missing, not a file, or reaches outside `root` through a link. */
 function readInside(path: string, root: string): string | null {
@@ -289,7 +289,7 @@ function writableTarget(ins: Instructions, file: string): string {
 }
 
 /** The whole file as text, or throws when it is over the cap or not valid UTF-8: a lossy rewrite would damage it. */
-function readWhole(path: string, name: string): string {
+export function readWhole(path: string, name: string): string {
   const bytes = readFileSync(path);
   if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
   try {
@@ -300,7 +300,7 @@ function readWhole(path: string, name: string): string {
 }
 
 /** Temp file in the same directory, then rename: the file is whole either way. Keeps the mode of an existing file. */
-function writeAtomic(path: string, content: string): void {
+export function writeAtomic(path: string, content: string): void {
   if (Buffer.byteLength(content) > MAX_BYTES) throw new Error(`${basename(path)} would exceed ${MAX_BYTES / 1024} KB; nothing was written`);
   const tmp = join(dirname(path), `.${basename(path)}.${randomBytes(4).toString('hex')}.tmp`);
   try {
@@ -317,6 +317,12 @@ function writeAtomic(path: string, content: string): void {
   }
 }
 
+/** An item promoted by one path has no other open proposal, in either table. */
+export function resolveOthers(db: DatabaseSync, item: string, except: string, now: string): void {
+  db.prepare("UPDATE promotions SET status = 'resolved', resolved_at = ? WHERE item_id = ? AND status = 'open' AND id != ?").run(now, item, except);
+  db.prepare("UPDATE instruction_edits SET status = 'resolved', resolved_at = ? WHERE item_id = ? AND status = 'open' AND id != ?").run(now, item, except);
+}
+
 /**
  * The owner's yes: writes the stored edit to its file, exactly, and marks the item superseded by the file (a
  * conflict) or promoted into it. The one place memory writes an instruction file. Throws a message when it cannot.
@@ -324,6 +330,7 @@ function writeAtomic(path: string, content: string): void {
 export function applyEdit(db: DatabaseSync, ins: Instructions, e: Edit): string {
   const file = resolve(e.file);
   if (!ins.allowed.has(file)) throw new Error(applyRefusal(ins, e, null)!);
+  if (db.prepare("SELECT 1 FROM items WHERE id = ? AND status = 'active'").get(e.item_id) === undefined) throw new Error(`item ${e.item_id} is no longer active; nothing was written`);
   const target = writableTarget(ins, file);
   const text = existsSync(target) ? readWhole(target, displayPath(ins, file)) : null;
   const why = applyRefusal(ins, e, text);
@@ -344,6 +351,7 @@ export function applyEdit(db: DatabaseSync, ins: Instructions, e: Edit): string 
     db.prepare("UPDATE items SET status = ?, valid_to = ?, status_reason = ?, promoted_to = ? WHERE id = ?").run(
       e.kind === 'conflict' ? 'superseded' : 'promoted', now, e.kind === 'conflict' ? `superseded by ${name}` : `promoted to ${name}`, e.kind === 'promotion' ? name : null, e.item_id,
     );
+    resolveOthers(db, e.item_id, e.id, now);
     recordAudit(db, 'instruction_edit_applied', { type: 'item', id: e.item_id }, { kind: e.kind, edit: e.id });
     db.exec('COMMIT');
   } catch (error) {

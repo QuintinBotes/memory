@@ -228,6 +228,23 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     applied INTEGER NOT NULL
   );
   `,
+
+  // v13 - promotions (#19): a proposal to turn an item into a check, a line of the review-standards file or a test. A row is
+  // only a proposal; a rejected one stays, so it is never proposed again. Deleted with its item.
+  `
+  CREATE TABLE IF NOT EXISTS promotions (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    target TEXT NOT NULL CHECK (target IN ('review-standards', 'test')),
+    symbol TEXT NOT NULL DEFAULT '',
+    file TEXT,
+    line TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'applied', 'rejected', 'resolved')),
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    UNIQUE (item_id, target, symbol)
+  );
+  `,
 ];
 const SECURE_DELETE = 6;
 
