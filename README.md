@@ -262,8 +262,11 @@ with an open episode, and takes the write lock only to write.
 Every item records the repository it was learned in (`origin_repository`,
 `owner/repo`, empty when unknown). `remember`, `capture`, `memory_propose` and
 `memory import` fill it from the repository they ran in; a person or global
-item remembered outside a github.com checkout has none, and items stored before
-schema 14 keep none, except repository items, which take it from their scope.
+item remembered outside a github.com checkout has none, a person or global
+statement taken in by `memory import` from a silo has none (a silo names no
+repository), and items stored before schema 14 keep none, except repository
+items, which take it from their scope. An item with no origin is never reached
+by `--repo` or `purge --repo`; `--all-repos` lists it.
 
 `memory list` and `memory export --markdown` take `--repo <owner/repo>` for that
 repository's items, its owner's organisation items and the person and global

@@ -3027,7 +3027,7 @@ function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, wi
       person.close();
     }
   }
-  return narrowerWins(out);
+  return reach === "all" ? out : narrowerWins(out);
 }
 
 // src/mcp/server.ts

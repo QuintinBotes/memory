@@ -350,3 +350,17 @@ test('a person item learned in the current repository ranks with a bonus its why
   assert.doesNotMatch(whyOf(web.text, P_API), /this repository/);
   assert.match(whyOf(web.text, P_WEB), /this repository 0\.5/);
 });
+
+test('--all-repos keeps an organisation item that a repository item of one repository narrows', () => {
+  const s = setup();
+  const org = 'Acme releases are cut from the main branch every Tuesday morning';
+  const line = `${org}\n`;
+  const narrow = 'Acme releases are cut from the main branch every Tuesday morning sharp';
+  ok(remember(s.acmeApi, s.data, s.configA, narrow));
+  ok(remember(s.acmeWeb, s.data, s.configA, org, '--scope', 'organisation'));
+  // In acme/api the repository item wins, as before; acme/web still sees the organisation item.
+  assert.ok(hasNone(list(s, s.acmeApi).stdout, line));
+  assert.ok(has(list(s, s.acmeWeb).stdout, line));
+  // Across every repository, the organisation item still applies to acme/web, so it is listed.
+  assert.ok(has(list(s, s.acmeApi, '--all-repos').stdout, line, narrow));
+});

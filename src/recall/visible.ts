@@ -60,5 +60,6 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
       person.close();
     }
   }
-  return narrowerWins(out);
+  // Across repositories an organisation item still applies where no narrower item exists, so nothing is narrowed there.
+  return reach === 'all' ? out : narrowerWins(out);
 }

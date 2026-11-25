@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Filter memory by repository, and record where each item came from. Schema 14
   adds `origin_repository` (null = unknown) to every item; `remember`, `capture`,
-  `memory_propose` and `memory import` fill it from the repository they ran in,
-  and the migration backfills repository items from their scope key.
+  `memory_propose` and `memory import` fill it from the repository they ran in
+  (a silo's person and global statements stay unknown), and the migration backfills repository items from their scope key.
   `memory list` and `memory export --markdown` take `--repo <owner/repo>` (that
   repository's items, its owner's organisation items, and person or global items
   learned in it) or `--all-repos` (the tenant bound here and the person file);
