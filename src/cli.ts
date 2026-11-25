@@ -50,7 +50,7 @@ import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, reanchorCandidates, renderProposals, type Proposal } from './review/review.ts';
-import { processTranscripts, recordTranscript, transcriptsOn } from './capture/transcripts.ts';
+import { expireTranscripts, processTranscripts, recordTranscript, transcriptsOn } from './capture/transcripts.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { captureCi } from './capture/ci.ts';
 import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './capture/failures.ts';
@@ -931,7 +931,8 @@ function sweepCommand(data: string, cwd: string, due: boolean): void {
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
       expireEpisodes(db);
-      if (tenant !== '' && transcriptsOn(config)) processTranscripts(db, tenant);
+      expireTranscripts(db);
+      if (tenant !== '' && transcriptsOn(config)) processTranscripts(db, tenant, config);
     } finally {
       db.close();
     }

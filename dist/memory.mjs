@@ -3607,7 +3607,8 @@ function executePurge(db, scope) {
     }
     if (scope.all === true || scope.tenant !== void 0 || scope.repository !== void 0) db.prepare("DELETE FROM episodes").run();
     else if (scope.before !== void 0) db.prepare("DELETE FROM episodes WHERE at < ?").run(scope.before);
-    if (scope.all === true || scope.tenant !== void 0 || scope.repository !== void 0) db.prepare("DELETE FROM transcripts").run();
+    if (scope.all === true || scope.tenant !== void 0) db.prepare("DELETE FROM transcripts").run();
+    else if (scope.repository !== void 0) db.prepare("DELETE FROM transcripts WHERE repository = ?").run(scope.repository);
     else if (scope.before !== void 0) db.prepare("DELETE FROM transcripts WHERE at < ?").run(scope.before);
     db.prepare("DELETE FROM item_vectors WHERE item_id NOT IN (SELECT id FROM items WHERE status = 'active')").run();
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
@@ -4550,7 +4551,7 @@ function recordTranscript(data, input2) {
   const config = loadConfig(data);
   if (!transcriptsOn(config)) return;
   const path = str(input2["transcript_path"]);
-  if (automationRefusal(config, process.env, path) !== null) return;
+  if (automationRefusal(config, process.env) !== null) return;
   const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null || context.repository === null) return;
   const compaction = input2["hook_event_name"] === "PostCompact";
@@ -4571,10 +4572,22 @@ function recordTranscript(data, input2) {
   }
 }
 var NOT_TYPED = /^</;
+var HIDDEN = "\uE000";
+function hidePrivate(text4, state) {
+  let out = "";
+  let last = 0;
+  for (const m of text4.matchAll(/<(\/?)private>/g)) {
+    out += state.open ? HIDDEN : text4.slice(last, m.index);
+    state.open = m[1] === "";
+    last = m.index + m[0].length;
+  }
+  return out + (state.open ? HIDDEN : text4.slice(last));
+}
 function ownerTurns(file) {
   const raw = readFileSync12(file, "utf8");
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
   const turns = [];
+  const state = { open: false };
   raw.split("\n").forEach((row4, i) => {
     let o;
     try {
@@ -4582,11 +4595,13 @@ function ownerTurns(file) {
     } catch {
       return;
     }
-    if (o.type !== "user" || o.isSidechain === true || o.isMeta === true) return;
+    if (o.type !== "user" && o.type !== "assistant" || o.isSidechain === true || o.isMeta === true) return;
     const c = o.message?.content;
     const text4 = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b?.type === "text" ? b.text ?? "" : "").join(" ") : "";
-    const flat = scrub(text4.replace(/<private>[\s\S]*?<\/private>/g, " ")).replace(/\s+/g, " ").trim();
-    if (flat !== "" && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
+    const visible2 = hidePrivate(text4, state);
+    if (o.type !== "user") return;
+    const flat = scrub(visible2).replace(/\s+/g, " ").trim();
+    if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
   return turns;
 }
@@ -4595,21 +4610,26 @@ function findCorrections(turns) {
   const out = [];
   for (const t of turns.slice(1)) {
     for (const quote of t.text.split(/(?<=[.!?])\s+/)) {
-      if (CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
+      if (!quote.includes(HIDDEN) && CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
     }
   }
   return out;
 }
-var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
-function processTranscripts(db, tenant, extract = findCorrections) {
+var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
+function expireTranscripts(db) {
+  return Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
+}
+function processTranscripts(db, tenant, config, extract = findCorrections) {
   const done = { read: 0, proposed: 0, missing: 0, expired: 0 };
-  done.expired = Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
+  done.expired = expireTranscripts(db);
   const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all();
   for (const r of rows) {
     let outcome = "read";
     if (!existsSync11(r.path)) {
       outcome = "missing";
       done.missing++;
+    } else if (automationRefusal(config, process.env, r.path) !== null) {
+      outcome = "automation";
     } else {
       done.read++;
       const turns = ownerTurns(r.path);
@@ -6596,7 +6616,8 @@ function sweepCommand(data, cwd, due) {
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
       expireEpisodes(db);
-      if (tenant !== "" && transcriptsOn(config)) processTranscripts(db, tenant);
+      expireTranscripts(db);
+      if (tenant !== "" && transcriptsOn(config)) processTranscripts(db, tenant, config);
     } finally {
       db.close();
     }

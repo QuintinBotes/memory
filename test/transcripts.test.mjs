@@ -214,7 +214,7 @@ test('US1.5 an item whose quote is not verbatim in the transcript is dropped, an
   const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
   try {
     const paraphrase = () => [{ line: 7, quote: 'No, please prefer the other branch for the release.' }, { line: 3, quote: "Don't worry, it is small." }, { line: 7, quote: 'No, use the other branch for the release.' }];
-    const done = m.processTranscripts(db, 'acme', paraphrase);
+    const done = m.processTranscripts(db, 'acme', { optIns: {}, consent: {} }, paraphrase);
     assert.equal(done.proposed, 1, 'only the verbatim quote of the owner turn');
     assert.deepEqual(db.prepare("SELECT statement FROM items WHERE statement LIKE 'Owner correction:%'").all().map((r) => r.statement), ['Owner correction: "No, use the other branch for the release."']);
   } finally {
@@ -227,4 +227,86 @@ test('the deterministic pass finds correction sentences of the owner only', asyn
   const t = (line, text) => ({ line, text });
   const found = m.findCorrections([t(1, "Don't start with this task line."), t(2, 'Looks good. No, use the other branch. Then continue.'), t(3, 'No problem at all, thanks.'), t(4, 'Never commit to main directly, please.')]);
   assert.deepEqual(found.map((c) => c.quote), ['No, use the other branch.', 'Never commit to main directly, please.']);
+});
+
+// ---- Tier 3 review corrections ----------------------------------------------------------------------------------------
+
+const row = (text, extra = {}) => JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: text }, ...extra });
+const write = (s, name, ...lines) => {
+  const file = join(s.base, name);
+  writeFileSync(file, lines.join('\n') + '\n');
+  return file;
+};
+const storeOf = (s, name) => new DatabaseSync(join(s.data, 'tenants', `${name}.sqlite`));
+
+test('R1 purge --repo removes only that repository\'s transcript records, in every tenant file it reaches', () => {
+  const s = setup();
+  optIn(s);
+  remember(s.betaWeb, s.data, s.configA, 'Beta builds run from the root', '--scope', 'repository', '--type', 'convention');
+  end(s, fixture(s, 'correction', 'a1.jsonl'), 'api', s.acmeApi);
+  end(s, fixture(s, 'correction', 'a2.jsonl'), 'web', s.acmeWeb);
+  end(s, fixture(s, 'correction', 'b1.jsonl'), 'beta', s.betaWeb);
+  const count = (name) => {
+    const db = storeOf(s, name);
+    try {
+      return db.prepare('SELECT repository FROM transcripts ORDER BY repository').all().map((r) => r.repository);
+    } finally {
+      db.close();
+    }
+  };
+  assert.deepEqual(count('acme'), ['acme/api', 'acme/web']);
+  assert.equal(run(['purge', '--repo', 'acme/api', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.deepEqual(count('acme'), ['acme/web']);
+  assert.deepEqual(count('beta'), ['beta/web']);
+});
+
+test('R2 private spans: a span inside a sentence drops the correction, a span across records hides what is between, an unclosed one hides the rest', () => {
+  const s = setup();
+  optIn(s);
+  const spliced = write(s, 'spliced.jsonl', row('Deploy the service'), row('No, use <private>x</private> branch.'), row('No, use the other branch for the release.'));
+  const across = write(s, 'across.jsonl', row('Deploy the service'), row('<private>keep this out'), row('No, use the staging account for everything here.'), row('and this</private>. Never push to main directly, please.'));
+  const unclosed = write(s, 'unclosed.jsonl', row('Deploy the service'), row('No, use the other branch for the release. <private>from here'), row('Never push to main directly, please.'), row('No, use the staging account for everything here.'));
+  end(s, spliced, 'sp');
+  end(s, across, 'ac');
+  end(s, unclosed, 'un');
+  sessionStart(s.acmeApi, s.data, s.configA);
+  assert.deepEqual(proposals(s).map((p) => p.statement).sort(), [
+    'Owner correction: "No, use the other branch for the release."',
+    'Owner correction: "Never push to main directly, please."',
+  ].sort());
+  const sources = sql(s, "SELECT source_ref FROM evidence WHERE source_ref LIKE 'transcript:%' ORDER BY source_ref").map((r) => r.source_ref);
+  assert.deepEqual(sources.map((x) => x.split(':').slice(1, 3).join(':')), ['ac:L4', 'sp:L3', 'un:L2'].sort());
+});
+
+test('R3 SessionEnd never opens the transcript: a transcript that reads as automation is still only recorded, and refused at processing', () => {
+  const s = setup();
+  optIn(s);
+  const file = write(s, 'auto.jsonl', row('Deploy the service', { entrypoint: 'sdk-cli' }), row('No, use the other branch for the release.'));
+  assert.equal(end(s, file, 'auto').status, 0);
+  assert.deepEqual(records(s).map((x) => [x.path, x.processed_at]), [[file, null]], 'recorded without reading it');
+  sessionStart(s.acmeApi, s.data, s.configA);
+  assert.equal(proposals(s).length, 0, 'refused at processing');
+  assert.equal(records(s)[0].outcome, 'automation');
+});
+
+test('R4 expiry runs on every sweep and session start even with the opt-in off, for paths and summaries alike', () => {
+  const s = setup();
+  optIn(s);
+  end(s, fixture(s, 'correction'));
+  run(['transcript'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 's9', hook_event_name: 'PostCompact', cwd: s.acmeApi, compact_summary: 'A summary of the work so far' }) });
+  assert.equal(sql(s, 'SELECT count(*) AS n FROM transcripts')[0].n, 2);
+  optIn(s, 'off');
+  const db = storeOf(s, 'acme');
+  db.prepare("UPDATE transcripts SET at = '2020-01-01T00:00:00.000Z'").run();
+  db.close();
+  sessionStart(s.acmeApi, s.data, s.configA);
+  assert.equal(sql(s, 'SELECT count(*) AS n FROM transcripts')[0].n, 0, 'session start');
+  optIn(s, 'on');
+  end(s, fixture(s, 'correction'), 'later');
+  optIn(s, 'off');
+  const d2 = storeOf(s, 'acme');
+  d2.prepare("UPDATE transcripts SET at = '2020-01-01T00:00:00.000Z'").run();
+  d2.close();
+  run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(sql(s, 'SELECT count(*) AS n FROM transcripts')[0].n, 0, 'sweep');
 });

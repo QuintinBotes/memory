@@ -32,7 +32,8 @@ export function recordTranscript(data: string, input: Record<string, unknown>): 
   const config = loadConfig(data);
   if (!transcriptsOn(config)) return;
   const path = str(input['transcript_path']);
-  if (automationRefusal(config, process.env, path) !== null) return;
+  // The environment only: the transcript is never opened here. Its own entrypoint is read at processing.
+  if (automationRefusal(config, process.env) !== null) return;
   const context = resolveContext(str(input['cwd']) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null || context.repository === null) return;
   const compaction = input['hook_event_name'] === 'PostCompact';
@@ -68,15 +69,31 @@ export interface Candidate {
 /** Text Claude Code writes into a user record that the owner did not type: command wrappers, reminders, hook output. */
 const NOT_TYPED = /^</;
 
+/** Stands in for text inside a private span; a sentence holding it is never a correction. */
+const HIDDEN = '\uE000';
+
+/** Replaces what is inside `<private>...</private>` by HIDDEN, tracking an open span across records; an unclosed span hides to the end. */
+function hidePrivate(text: string, state: { open: boolean }): string {
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(/<(\/?)private>/g)) {
+    out += state.open ? HIDDEN : text.slice(last, m.index);
+    state.open = m[1] === '';
+    last = m.index! + m[0].length;
+  }
+  return out + (state.open ? HIDDEN : text.slice(last));
+}
+
 /**
  * The owner's own turns of a Claude Code JSONL transcript, redacted (FR-005). Agent output, subagent (sidechain)
- * records, meta records and tool results are never returned, and text inside `<private>...</private>` is dropped
- * before redaction. A transcript holding the DO NOT INDEX THIS CHAT marker yields no turns at all.
+ * records, meta records and tool results are never returned, and text inside `<private>...</private>` is hidden
+ * before redaction (the span state runs across the whole transcript, and a sentence touching a span is never quoted). A transcript holding the DO NOT INDEX THIS CHAT marker yields no turns at all.
  */
 export function ownerTurns(file: string): Turn[] {
   const raw = readFileSync(file, 'utf8');
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
   const turns: Turn[] = [];
+  const state = { open: false };
   raw.split('\n').forEach((row, i) => {
     let o: { type?: string; isSidechain?: boolean; isMeta?: boolean; message?: { content?: unknown } };
     try {
@@ -84,11 +101,13 @@ export function ownerTurns(file: string): Turn[] {
     } catch {
       return;
     }
-    if (o.type !== 'user' || o.isSidechain === true || o.isMeta === true) return;
+    if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain === true || o.isMeta === true) return;
     const c = o.message?.content;
     const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((b: { type?: string; text?: string }) => (b?.type === 'text' ? b.text ?? '' : '')).join(' ') : '';
-    const flat = scrub(text.replace(/<private>[\s\S]*?<\/private>/g, ' ')).replace(/\s+/g, ' ').trim();
-    if (flat !== '' && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
+    const visible = hidePrivate(text, state);
+    if (o.type !== 'user') return;
+    const flat = scrub(visible).replace(/\s+/g, ' ').trim();
+    if (flat !== '' && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
   return turns;
 }
@@ -101,7 +120,7 @@ export function findCorrections(turns: Turn[]): Candidate[] {
   const out: Candidate[] = [];
   for (const t of turns.slice(1)) {
     for (const quote of t.text.split(/(?<=[.!?])\s+/)) {
-      if (CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
+      if (!quote.includes(HIDDEN) && CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
     }
   }
   return out;
@@ -111,7 +130,7 @@ export type Extract = (turns: Turn[]) => Candidate[];
 
 /** FR-003: a candidate survives only if its quote is verbatim in the turn it names. */
 export const verbatim = (turns: Turn[], candidates: Candidate[]): Candidate[] =>
-  candidates.filter((c) => c.quote.trim() !== '' && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
+  candidates.filter((c) => c.quote.trim() !== '' && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
 
 export interface Processed {
   read: number;
@@ -120,21 +139,28 @@ export interface Processed {
   expired: number;
 }
 
+/** Deletes records and episodes past their 30 days; runs on every sweep, whatever the opt-in says. */
+export function expireTranscripts(db: DatabaseSync): number {
+  return Number(db.prepare('DELETE FROM transcripts WHERE at < ?').run(cutoff()).changes);
+}
+
 /**
  * Finds the owner's corrections in every recorded transcript of this tenant's store, once each (FR-004): one proposal
  * per correction, owner trust, the session and line as evidence, nothing but the quote and that reference kept. A
  * transcript that is gone is skipped and counted; records past 30 days are deleted unread. The store belongs to one
  * tenant, so what is read here can only reach that tenant.
  */
-export function processTranscripts(db: DatabaseSync, tenant: string, extract: Extract = findCorrections): Processed {
+export function processTranscripts(db: DatabaseSync, tenant: string, config: Config, extract: Extract = findCorrections): Processed {
   const done: Processed = { read: 0, proposed: 0, missing: 0, expired: 0 };
-  done.expired = Number(db.prepare('DELETE FROM transcripts WHERE at < ?').run(cutoff()).changes);
+  done.expired = expireTranscripts(db);
   const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all() as { id: string; session: string; repository: string; path: string }[];
   for (const r of rows) {
     let outcome = 'read';
     if (!existsSync(r.path)) {
       outcome = 'missing';
       done.missing++;
+    } else if (automationRefusal(config, process.env, r.path) !== null) {
+      outcome = 'automation';
     } else {
       done.read++;
       const turns = ownerTurns(r.path);
