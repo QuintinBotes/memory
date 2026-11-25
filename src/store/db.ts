@@ -254,6 +254,23 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     if (!has) db.exec('ALTER TABLE items ADD COLUMN origin_repository TEXT;');
     db.exec("UPDATE items SET origin_repository = scope_key WHERE scope = 'repository' AND origin_repository IS NULL;");
   },
+
+  // v15 - SCF export (#13): the proposal an item was sent as, and the run outcomes already counted from SCF, so an export
+  // run twice posts nothing new and a feedback import run twice counts nothing twice. Deleted with the item.
+  `
+  CREATE TABLE IF NOT EXISTS scf_links (
+    item_id TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    proposal_id TEXT NOT NULL,
+    fact_id TEXT,
+    exported_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS scf_feedback (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('reinforced', 'weakened')),
+    PRIMARY KEY (item_id, run_id)
+  );
+  `,
 ];
 const SECURE_DELETE = 6;
 

@@ -10,6 +10,7 @@ import {
   SUBAGENT_BUDGET,
   TENANT_NAME,
   TENANT_PATTERN,
+  scfUrl,
   consented,
   recallOn,
   currentConfigDir,
@@ -46,6 +47,7 @@ import { importSilos } from './import/import.ts';
 import { SYMBOL_KEY } from './import/silos.ts';
 import { renderReport, tenantReport, testCoverage } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
+import { ScfError, exportToScf, importFromScf, scfClient, type ScfClient } from './export/scf.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
@@ -71,7 +73,7 @@ suppressSqliteExperimentalWarning();
 const USAGE = `usage: memory <command>
 
   init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
-       [--failing-commands on|off] [--recall on] [--confirm]
+       [--failing-commands on|off] [--recall on] [--scf <tenant>=<url|off>]... [--confirm]
       show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
       sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
       --failing-commands on keeps failed Bash commands as scrubbed episodes, 30 days, so the same command passing
@@ -85,6 +87,12 @@ const USAGE = `usage: memory <command>
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
       only a repository of the tenant bound here; any other is refused and nothing of another tenant is read
+  export --to scf [--repo <owner/repo> | --all-repos]
+      send this repository's tenant's proposed repository and organisation items to the SCF set for it with memory init
+      --scf <tenant>=<url> (key in SCF_API_KEY), as world proposals of layer memory with their evidence; nothing in
+      the person file, no other tenant, nothing redaction would change. Run twice, it sends nothing new. An SCF that does
+      not answer leaves memory as it was. memory import --scf then brings back SCF's approvals and rejections and the
+      outcomes of runs that used the items, counted once each as helped or wrong
   export --markdown <dir> [--repo <owner/repo> | --all-repos]
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
       for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository.
@@ -215,7 +223,7 @@ function setUp(data: string): Config {
 function init(args: string[], data: string): void {
   const { values } = parseArgs({
     args,
-    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, 'failing-commands': { type: 'string' }, recall: { type: 'string' }, confirm: { type: 'boolean' } },
+    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, 'failing-commands': { type: 'string' }, recall: { type: 'string' }, scf: { type: 'string', multiple: true }, confirm: { type: 'boolean' } },
   });
   const network = networkFilesystem(data);
   if (network !== undefined) {
@@ -238,6 +246,17 @@ function init(args: string[], data: string): void {
     if (unknown !== undefined) throw new Refusal(`no tenant named "${unknown}"; add it with --tenant first`, 2);
     config.configs[currentConfigDir()] = tenants;
   }
+  for (const spec of values.scf ?? []) {
+    const [name = '', address = ''] = [spec.slice(0, Math.max(0, spec.indexOf('='))), spec.slice(spec.indexOf('=') + 1)];
+    if (!(name in config.tenants)) throw new Refusal(`--scf: no tenant named "${name}"; add it with --tenant first`, 2);
+    if (address === 'off') delete config.scf?.[name];
+    else {
+      const url = scfUrl(address);
+      if (typeof url === 'string') throw new Refusal(`--scf ${name}: ${url}`, 2);
+      config.scf = { ...config.scf, [name]: { url: url.href } };
+    }
+  }
+  if (config.scf !== undefined && Object.keys(config.scf).length === 0) delete config.scf;
   if (values.automation !== undefined) {
     if (values.automation !== 'on' && values.automation !== 'off') throw new Refusal('--automation is on or off', 2);
     if (values.automation === 'on') config.automation = true;
@@ -548,9 +567,14 @@ function list(args: string[], data: string, cwd: string): void {
 }
 
 /** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
-function exportCommand(args: string[], data: string, cwd: string): void {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: 'string' }, ...REACH_OPTIONS } });
-  if (values.markdown === undefined || positionals.length > 0) throw new Refusal('memory export needs --markdown <dir>', 2);
+async function exportCommand(args: string[], data: string, cwd: string): Promise<void> {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: 'string' }, to: { type: 'string' }, ...REACH_OPTIONS } });
+  if (values.to !== undefined) {
+    if (values.to !== 'scf' || values.markdown !== undefined || positionals.length > 0) throw new Refusal('usage: memory export --to scf [--repo <owner/repo> | --all-repos]', 2);
+    const config = setUp(data);
+    return scfExport(config, data, cwd, reachOf(values, config, resolveContext(cwd, config, currentConfigDir())));
+  }
+  if (values.markdown === undefined || positionals.length > 0) throw new Refusal('memory export needs --markdown <dir> or --to scf', 2);
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
   const reach = reachOf(values, config, context);
@@ -567,6 +591,52 @@ function exportCommand(args: string[], data: string, cwd: string): void {
     console.log(`exported ${exportMarkdown(stores, values.markdown, reach === undefined || reach === 'all' ? undefined : reach.repository)} items of tenant ${tenant} and the person file to ${values.markdown}`);
   } finally {
     for (const { db } of stores) db.close();
+  }
+}
+
+/** The SCF client and the tenant's store for `export --to scf` and `import --scf`; refuses unless the owner set both up for this tenant. */
+function scfSetUp(config: Config, data: string, cwd: string): { tenant: string; client: ScfClient; db: DatabaseSync } {
+  if (!covers(config, 'scf')) throw new Refusal('SCF is a kind of data you have not agreed to; run memory init and confirm');
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const tenant = context.tenant;
+  if (tenant === null) throw new Refusal(`there is no tenant here: ${context.reason}`);
+  const address = config.scf?.[tenant];
+  if (address === undefined) throw new Refusal(`tenant ${tenant} has no SCF address; memory init --scf ${tenant}=<url> sets one`);
+  const key = process.env['SCF_API_KEY'];
+  if (key === undefined || key === '') throw new Refusal('SCF_API_KEY is not set');
+  const db = openStore(tenantFile(data, tenant), false);
+  if (db === null) throw new Refusal(`tenant ${tenant} has no items yet`);
+  return { tenant, client: scfClient(scfUrl(address.url) as URL, key), db };
+}
+
+const unreachable = (error: unknown): never => {
+  if (error instanceof ScfError) throw new Refusal(`${error.message}; nothing was changed`);
+  throw error;
+};
+
+/** `memory export --to scf`: this tenant's proposals to the SCF set for it; the person file is never read. */
+async function scfExport(config: Config, data: string, cwd: string, reach: Reach | undefined): Promise<void> {
+  const { tenant, client, db } = scfSetUp(config, data, cwd);
+  try {
+    const r = await exportToScf(db, tenant, client, reach === undefined || reach === 'all' ? undefined : reach.repository).catch(unreachable);
+    console.log(`sent ${r.posted} proposals of tenant ${tenant} to SCF; ${r.already} already there${r.withheld > 0 ? `; ${r.withheld} not sent because they hold text redaction removes` : ''}`);
+    if (r.stoppedBy !== undefined) {
+      console.error(`${r.stoppedBy}; the rest waits for the next run`);
+      process.exitCode = 1;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+/** `memory import --scf`: SCF's decisions and run outcomes, applied to the items this tenant sent. */
+async function scfImport(data: string, cwd: string): Promise<void> {
+  const { tenant, client, db } = scfSetUp(setUp(data), data, cwd);
+  try {
+    const r = await importFromScf(db, tenant, client).catch(unreachable);
+    console.log(`from SCF for tenant ${tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.helped} helped, ${r.wrong} wrong`);
+  } finally {
+    db.close();
   }
 }
 
@@ -592,8 +662,12 @@ function reportCommand(args: string[], data: string): void {
   else process.stdout.write(out.join(''));
 }
 
-function importCommand(args: string[], data: string): void {
-  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' } } });
+async function importCommand(args: string[], data: string): Promise<void> {
+  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' }, scf: { type: 'boolean' } } });
+  if (values.scf === true) {
+    if (values['dry-run'] === true || values.orbit === true) throw new Refusal('usage: memory import --scf', 2);
+    return scfImport(data, process.cwd());
+  }
   const dryRun = values['dry-run'] === true;
   console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun, values.orbit === true), null, 2));
   if (dryRun) console.error('Nothing was written. Run memory import without --dry-run to store these as proposals.');

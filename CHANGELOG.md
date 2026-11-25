@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Export memory as SCF. `memory export --to scf [--repo | --all-repos]` posts a
+  tenant's proposed repository and organisation items to the SCF set for it
+  (`memory init --scf <tenant>=<url>`, key in `SCF_API_KEY`) as world proposals
+  with layer `memory` and their evidence, once each; `memory import --scf` brings
+  back SCF's approvals and rejections and counts run outcomes as helped and wrong.
+  Schema 15 adds `scf_links` and `scf_feedback`. The person file and other tenants
+  are never sent, text redaction would change is withheld, and an unreachable SCF
+  changes nothing. New consent category `scf` (plan version 10).
+
 - Filter memory by repository, and record where each item came from. Schema 14
   adds `origin_repository` (null = unknown) to every item; `remember`, `capture`,
   `memory_propose` and `memory import` fill it from the repository they ran in

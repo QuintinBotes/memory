@@ -295,6 +295,28 @@ are not exported. The folder is read only: nothing reads it back, and editing
 it changes nothing in memory. Export needs confirmed consent, and refuses a
 folder inside a git repository that belongs to another tenant.
 
+## Moving proposals to SCF and back
+
+Memory's items are shaped like Swarm Code Factory's world facts, so SCF can later
+be the backend. `memory init --scf <tenant>=<url> --confirm` sets the SCF a tenant
+may send to (https, or http to this machine; no credentials in the address; the
+key is `SCF_API_KEY`, never stored). Without an address a tenant sends nothing.
+`memory export --to scf [--repo <owner/repo> | --all-repos]` posts this
+repository's tenant's proposed repository and organisation items to
+`POST /world/proposals` as proposals of a `world_fact` with layer `memory`: the
+statement is the fact's value, and the item id, type, scope, anchors, trust and
+evidence rows (source, role, time) ride in its `qualifiers`. The person file and
+other tenants are never read, quarantined items are not sent, and an item whose
+text redaction would change is withheld. Run twice it sends nothing new: each
+item is linked to its proposal, and SCF's own list is read first, so a lost
+local link adopts the existing proposal. An unreachable SCF leaves memory as it
+was. `memory import --scf` applies SCF's decisions (accepted makes the item
+active, rejected rejects it) and counts each run outcome on the accepted fact
+once, `reinforced` as helped and `weakened` as wrong. It reads
+`GET /world/proposals` and `GET /world/facts/<id>/feedback`; SCF does not serve
+the second yet (its `world_fact_feedback` rows have no read route), so that route
+is what this asks of SCF.
+
 ## Importing what you already have
 
 `memory import --dry-run` lists every file it would read with the number of
