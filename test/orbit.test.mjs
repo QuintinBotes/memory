@@ -8,7 +8,7 @@ import { setup, run, commit, tokens } from './helpers.mjs';
 const DAY = 86_400_000;
 
 /** An Orbit knowledge store with the tables and columns memory reads, in the shape of Orbit's own schema (migration 2). */
-function orbitStore(path, { lessons = [], edges = [], observations = [] }) {
+function orbitStore(path, { lessons = [], edges = [], observations = [], now = Date.now() }) {
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(`
@@ -20,7 +20,6 @@ function orbitStore(path, { lessons = [], edges = [], observations = [] }) {
     CREATE TABLE observations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, state TEXT NOT NULL, failure_class TEXT, data_json TEXT NOT NULL,
       created_at INTEGER NOT NULL) STRICT;
   `);
-  const now = Date.now();
   for (const l of lessons) {
     const lesson = {
       schema: 'orbit.lesson/1', id: l.id, kind: l.kind ?? 'failure-pattern', statement: l.statement, rationale: '',
@@ -350,8 +349,11 @@ test('finding 3-4 booleans read case-insensitively, at any consistent indent, wi
 
 test('finding 5 the 28-day cutoff and the ranking read the same day start, so the clock inside a day changes nothing', () => {
   const dayStart = Date.parse(new Date().toISOString().slice(0, 10));
-  const edge = (offsetMs) => ['SUPPORTED_BY', 'run-e', (Date.now() - (dayStart - 28 * DAY + offsetMs)) / DAY];
+  // The store is stamped with this one `now`, so an edge sits exactly offsetMs from the cutoff however long the setup takes.
+  const now = Date.now();
+  const edge = (offsetMs) => ['SUPPORTED_BY', 'run-e', (now - (dayStart - 28 * DAY + offsetMs)) / DAY];
   const s = orbit({
+    now,
     lessons: [
       { id: 'in', statement: 'Rebuild the lockfile before the unit check when it drifts', fingerprints: [FP], edges: [edge(5_000)] },
       { id: 'out', statement: 'Reseed the database before the unit check when it is empty', fingerprints: [FP], edges: [edge(-5_000)] },

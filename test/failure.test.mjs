@@ -45,9 +45,9 @@ function add(s, statement, source = 'remember', type = 'repair-recipe') {
 const contradictions = (s, id) => sql(s, 'SELECT contradictions FROM items WHERE id = ?', id)[0].contradictions;
 
 /** The PostToolUseFailure JSON Claude Code sends, run through the hook. */
-const fail = (s, error, extra = {}) =>
+const fail = (s, error, extra = {}, env) =>
   runAsync(['failure-recall'], {
-    cwd: extra.cwd ?? s.acmeApi, data: s.data, config: s.configA,
+    cwd: extra.cwd ?? s.acmeApi, data: s.data, config: s.configA, env,
     input: JSON.stringify({ session_id: 's1', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'npm run build' }, error, is_interrupt: false, cwd: s.acmeApi, ...extra }),
   });
 function context(r) {
@@ -248,31 +248,29 @@ test('with the write lock held the hook exits 0, prints nothing and counts the s
     process.stdin.resume();
   `], { stdio: ['pipe', 'pipe', 'inherit'] });
   await new Promise((ok) => holder.stdout.once('data', ok));
-  const started = Date.now();
-  const r = await fail(s, ERROR());
-  const took = Date.now() - started;
+  const work = join(s.base, 'work.json');
+  const r = await fail(s, ERROR(), {}, { WORK_LOG: work });
   const closed = new Promise((ok) => holder.on('exit', ok));
   holder.stdin.end();
   await closed;
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '');
-  assert.ok(took < 2000, `${took} ms`);
+  // Not how long it took (that depends on the machine's load): the lock wait it asked SQLite for is the hook's short one.
+  const { busyTimeouts } = JSON.parse(readFileSync(work, 'utf8'));
+  assert.ok(busyTimeouts.length > 0 && Math.max(...busyTimeouts) <= 500, `a hook waits at most 500 ms for a lock, not ${busyTimeouts}`);
   assert.deepEqual(logged(s).map((l) => [l.event, l.via, l.agent, l.session]), [['skipped', 'failure-recall', 'main', 's1']]);
   assert.notEqual(context(await fail(s, ERROR())), null);
 });
 
-test('a store of 10,000 items is read by type only, and the hook stays inside its time limit', async () => {
+test('a store of 10,000 items is read by type only, and the hook stays inside its work limit', async () => {
   const s = seeded();
   fillStore(tenantFile(s), 'acme', 'acme/api', 'acme', 10_000);
   const log = join(s.base, 'work.json');
-  const started = Date.now();
   const r = await runAsync(['failure-recall'], {
     cwd: s.acmeApi, data: s.data, config: s.configA, env: { WORK_LOG: log },
     input: JSON.stringify({ session_id: 's1', tool_name: 'Bash', tool_input: {}, error: ERROR(), cwd: s.acmeApi }),
   });
-  const took = Date.now() - started;
   assert.notEqual(context(r), null);
-  assert.ok(took < 1000, `${took} ms`);
   const work = JSON.parse(readFileSync(log, 'utf8'));
   const recipes = sql(s, "SELECT count(*) AS n FROM items WHERE type IN ('failure-pattern', 'repair-recipe')")[0].n;
   assert.ok(work.rows <= recipes + 20, `${work.rows} rows read, ${recipes} recipes and failure patterns held`);

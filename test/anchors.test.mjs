@@ -8,6 +8,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setup, remember, run, runAsync, commit, sessionStart } from './helpers.mjs';
 
+/** Waits for what a detached job leaves behind. The limit only ends a hung run: a slow machine just takes longer. */
+const until = async (done, limitMs = 120_000) => {
+  for (const end = Date.now() + limitMs; !done() && Date.now() < end;) await new Promise((ok) => setTimeout(ok, 20));
+};
+
 // Slice 9 (#10): symbol anchors that follow the code, through a fake code anchor provider (test/fake-provider.mjs).
 const here = dirname(fileURLToPath(import.meta.url));
 const PROVIDER = join(here, 'fake-provider.mjs');
@@ -20,7 +25,12 @@ const CLASS = sym('src/a.ts#Ledger#class', 'class', 'class Ledger', 2, 6, 'C1');
 const CONSUME = sym(KEY, 'method', 'consume(n: number): number', 3, 5, 'H1');
 const HAZARD = 'The ledger consumes one unit per call';
 
-const dbOf = (s) => new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+// The test reads while a detached job may be writing: wait for the lock (SQLite's default is to fail at once with 'database is locked').
+const dbOf = (s) => {
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.exec('PRAGMA busy_timeout = 30000');
+  return db;
+};
 function sql(s, text, ...args) {
   const db = dbOf(s);
   try {
@@ -319,7 +329,7 @@ test('FR-005 the refresh never runs inside a hook: session start returns while t
   assert.equal(r.status, 0, r.stderr);
   assert.equal(item(s).anchor.symbol, KEY, 'the hook returned before any move');
   writeFileSync(join(s.base, 'gate'), '');
-  for (let i = 0; i < 500 && moves(s).length === 0; i++) await new Promise((ok) => setTimeout(ok, 20));
+  await until(() => moves(s).length > 0);
   assert.equal(moves(s).length, 1, 'the detached job made the move');
 });
 
@@ -474,7 +484,7 @@ test('finding 8 adopt compares and sets: an item changed while the provider was 
   provide(s, { mode: 'gate', gate: join(s.base, 'gate') });
   reset(s);
   const pending = execAsync(s, ['anchors', 'adopt', s.id, a.key]);
-  for (let i = 0; i < 500 && requests(s).length === 0; i++) await new Promise((ok) => setTimeout(ok, 20));
+  await until(() => requests(s).length > 0);
   assert.equal(requests(s).length, 1, 'the adopt is waiting on the provider');
   const db = dbOf(s);
   db.prepare("UPDATE items SET anchors_json = REPLACE(anchors_json, 'consume', 'changed') WHERE id = ?").run(s.id);
@@ -504,7 +514,7 @@ test('finding 10 one job at a time: a second job exits at once and asks nothing;
   renamed(s);
   provide(s, { mode: 'gate', gate: join(s.base, 'gate') });
   const first = execAsync(s, ['anchors', 'refresh']);
-  for (let i = 0; i < 500 && requests(s).length === 0; i++) await new Promise((ok) => setTimeout(ok, 20));
+  await until(() => requests(s).length > 0);
   const second = exec(s, ['anchors', 'refresh']);
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stderr, /already running/);
