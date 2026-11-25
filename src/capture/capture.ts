@@ -193,6 +193,7 @@ export function keepCandidates(
       tenant: context.tenant,
       scope: 'repository' as const,
       scopeKey: context.repository,
+      originRepository: context.repository,
       type: c.kind === 'decision' ? 'decision' : 'precedent',
       statement,
       rationale: refusal(evidence) === null ? evidence : null,

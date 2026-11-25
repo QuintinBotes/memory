@@ -22,7 +22,7 @@ import {
   subagentAllowed,
   type Config,
 } from './config.ts';
-import { git, resolveContext, type Context } from './context.ts';
+import { filterRepository, git, resolveContext, type Context, type Reach } from './context.ts';
 import { refusal } from './gate.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from './items.ts';
@@ -81,11 +81,14 @@ const USAGE = `usage: memory <command>
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
       conflicts with one queues a supersession in review; --supersedes replaces that item at once
-  list
-      every item visible here
-  export --markdown <dir>
+  list [--repo <owner/repo> | --all-repos]
+      every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
+      global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
+      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read
+  export --markdown <dir> [--repo <owner/repo> | --all-repos]
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
-      for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository
+      for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository.
+      --repo limits it as list --repo does; --all-repos is what it writes without either
   report [--tenant <name>]
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
@@ -169,8 +172,9 @@ const USAGE = `usage: memory <command>
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
       as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
   purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
-      preview, or with --confirm delete, leaving no recoverable bytes. --source reaches this repository's tenant and the
-      person file: an item left without evidence returns to proposed, or with --with-derived is deleted
+      preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
+      learned in that repository. --source reaches this repository's tenant and the person file: an item left without
+      evidence returns to proposed, or with --with-derived is deleted
   eval [replay | false-recall | orbit | lab] [--since <date> --pulls <file>] [--log <file>]
        [--agent <command> --model <name> [--task <name>]]
       scorecard rows, memory off and on, one JSON object per line; no measure named means all four.
@@ -492,6 +496,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       rationale: values.rationale?.trim() ?? null,
       anchors,
       source: values.source?.trim() || 'remember',
+      originRepository: context.repository,
     };
     const where = `${scope}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''}`;
     if (values.supersedes !== undefined) {
@@ -519,17 +524,36 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
   }
 }
 
-function list(data: string, cwd: string): void {
+/**
+ * `--repo <owner/repo>` or `--all-repos`, as the read they name, or undefined for neither. A `--repo` of any tenant but the one
+ * bound here is refused before any store is opened.
+ */
+function reachOf(values: { repo?: string | undefined; 'all-repos'?: boolean | undefined }, config: Config, context: Context): Reach | undefined {
+  if (values.repo !== undefined && values['all-repos'] === true) throw new Refusal('give --repo or --all-repos, not both', 2);
+  if (values['all-repos'] === true) return 'all';
+  if (values.repo === undefined) return undefined;
+  const found = filterRepository(config, context, values.repo);
+  if ('reason' in found) throw new Refusal(`--repo: ${found.reason}`, found.malformed ? 2 : 1);
+  return found;
+}
+
+const REACH_OPTIONS = { repo: { type: 'string' }, 'all-repos': { type: 'boolean' } } as const;
+
+function list(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: REACH_OPTIONS });
+  if (positionals.length > 0) throw new Refusal('usage: memory list [--repo <owner/repo> | --all-repos]', 2);
   const config = setUp(data);
-  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], undefined, null)));
+  const context = resolveContext(cwd, config, currentConfigDir());
+  process.stdout.write(renderAll(visibleItems(data, context, cwd, [], undefined, null, reachOf(values, config, context))));
 }
 
 /** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
 function exportCommand(args: string[], data: string, cwd: string): void {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: 'string' } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: 'string' }, ...REACH_OPTIONS } });
   if (values.markdown === undefined || positionals.length > 0) throw new Refusal('memory export needs --markdown <dir>', 2);
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
+  const reach = reachOf(values, config, context);
   const tenant = context.tenant;
   if (tenant === null) throw new Refusal(`there is no tenant to export here: ${context.reason}`);
   const why = foreignRepository(values.markdown, config, tenant);
@@ -540,7 +564,7 @@ function exportCommand(args: string[], data: string, cwd: string): void {
     if (db !== null) stores.push({ db, tenant: t });
   }
   try {
-    console.log(`exported ${exportMarkdown(stores, values.markdown)} items of tenant ${tenant} and the person file to ${values.markdown}`);
+    console.log(`exported ${exportMarkdown(stores, values.markdown, reach === undefined || reach === 'all' ? undefined : reach.repository)} items of tenant ${tenant} and the person file to ${values.markdown}`);
   } finally {
     for (const { db } of stores) db.close();
   }
@@ -1186,7 +1210,8 @@ function purge(args: string[], data: string, cwd: string): void {
     if (tenants.length === 0) console.error(`--source reaches only the person file here: ${context?.reason ?? 'memory is not set up'}`);
   }
   const files = tenants.map((t) => tenantFile(data, t));
-  if (values.all === true || days !== undefined || values.item !== undefined || values.source !== undefined) files.push(personFile(data));
+  // --repo also reaches the person and global items learned in that repository.
+  if (values.all === true || days !== undefined || values.item !== undefined || values.source !== undefined || repository !== undefined) files.push(personFile(data));
 
   const report: Record<string, ReturnType<typeof previewPurge>> = {};
   const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [] as string[], checks: [] as string[] };
@@ -1299,7 +1324,7 @@ async function main(argv: string[]): Promise<void> {
     case 'remember':
       return remember(rest, data, process.cwd());
     case 'list':
-      return list(data, process.cwd());
+      return list(rest, data, process.cwd());
     case 'export':
       return exportCommand(rest, data, process.cwd());
     case 'import':

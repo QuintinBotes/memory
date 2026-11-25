@@ -57,6 +57,8 @@ export interface NewItem {
   exactOnly?: boolean;
   /** The external content the session that made this had read, named by its source; see `cleanTaint`. */
   taint?: string;
+  /** The repository (`owner/repo`) this was learned in, null when unknown. Absent: a repository item's own, else unknown. */
+  originRepository?: string | null;
 }
 
 /** What the slice and the list show. */
@@ -75,6 +77,8 @@ export interface Visible {
   source: string;
   /** The external sources its evidence came from or was made after reading (FR-006 of #22), comma-separated; absent when none. */
   taint?: string;
+  /** The repository it was learned in, null when unknown. */
+  origin?: string | null;
   /** A search's full-text match, against the best match in the same store: 1 is the best. */
   textRatio?: number;
 }
@@ -120,12 +124,12 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
   inTransaction(db, () => {
     db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
-         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?, ?)`,
+         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes, origin_repository)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id, item.tenant, item.scope, item.scopeKey, item.type, item.statement, statementKey(item.statement), item.rationale,
       item.status ?? 'active', item.statusReason ?? null, trust, quarantineOf(item), JSON.stringify(item.anchors), now,
-      item.validTo ?? null, now, item.supersedes ?? null,
+      item.validTo ?? null, now, item.supersedes ?? null, item.originRepository !== undefined ? item.originRepository : item.scope === 'repository' ? item.scopeKey : null,
     );
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
@@ -139,7 +143,8 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
 const SELECT = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
   coalesce(reinforced_at, valid_from) AS reinforced, anchors_json,
   (SELECT source_ref FROM evidence e WHERE e.item_id = items.id ORDER BY captured_at, id LIMIT 1) AS source,
-  (SELECT group_concat(DISTINCT taint) FROM evidence e WHERE e.item_id = items.id AND taint IS NOT NULL) AS taint
+  (SELECT group_concat(DISTINCT taint) FROM evidence e WHERE e.item_id = items.id AND taint IS NOT NULL) AS taint,
+  origin_repository AS origin
   FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`;
 
 interface Row {
@@ -155,6 +160,7 @@ interface Row {
   anchors_json: string;
   source: string | null;
   taint: string | null;
+  origin: string | null;
 }
 
 const visible = (rows: Row[]): Visible[] =>
@@ -171,6 +177,7 @@ const visible = (rows: Row[]): Visible[] =>
     anchors: JSON.parse(r.anchors_json) as Anchor[],
     source: r.source ?? '',
     ...(r.taint === null ? {} : { taint: r.taint }),
+    origin: r.origin,
   }));
 
 /** The items of a tenant file one repository may see, given tenant, repository and owner. The tenant column is checked as well as the file. */
@@ -227,8 +234,16 @@ export function failureStatements(db: DatabaseSync, tenant: string, repository: 
 export const itemsById = (db: DatabaseSync, ids: string[]): Visible[] =>
   ids.length === 0 ? [] : visible(db.prepare(`${SELECT} AND id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as unknown as Row[]);
 
-export function personItems(db: DatabaseSync): Visible[] {
-  return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all() as unknown as Row[]);
+/** Active items of the person file; with `origin`, only those learned in that repository. */
+export function personItems(db: DatabaseSync, origin?: string): Visible[] {
+  return origin === undefined
+    ? visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all() as unknown as Row[])
+    : visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE} AND origin_repository = ?`).all(origin) as unknown as Row[]);
+}
+
+/** Every active item of `tenant`'s file, whatever repository it belongs to. */
+export function allTenantItems(db: DatabaseSync, tenant: string): Visible[] {
+  return visible(db.prepare(`${SELECT} AND tenant = ?`).all(tenant) as unknown as Row[]);
 }
 
 /**

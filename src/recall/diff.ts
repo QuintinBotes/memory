@@ -28,7 +28,7 @@ export function diffRecall(data: string, config: Config, context: Context, cwd: 
   const reach = impact(config, context, cwd, range, changed);
   const dependents = reach !== null && 'dependents' in reach ? reach.dependents : [];
   const note = reach !== null && 'note' in reach ? `${reach.note}\n` : '';
-  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES.has(i.type)), changed, Date.now(), undefined, undefined, dependents);
+  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES.has(i.type)), changed, Date.now(), undefined, undefined, dependents, context.repository);
   const rows: string[] = [];
   const render = (list: string[]): string => (list.length === 0 ? 'No precedent or hazard matches this change.\n' : fence(ITEMS_LABEL, list.join(''))) + note;
   for (const h of hits) {

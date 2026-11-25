@@ -28,6 +28,8 @@ export const RANKING = {
   /** An item keyed to a failure fingerprint or check id the caller names (Orbit's recall). */
   key: 2,
   scope: { repository: 2, organisation: 1, person: 1, global: 0.5 } as Record<string, number>,
+  /** A person or global item learned in the repository in play; an unknown origin gets nothing. */
+  origin: 0.5,
   text: 2,
   /** A text match weaker than this share of the best match is noise, not relevance. */
   minTextRatio: 0.2,
@@ -49,7 +51,7 @@ export const RANKING = {
 export interface Hit {
   item: Visible;
   score: number;
-  /** Every point, in order: anchor, scope, text, semantic, graph, confidence, contradictions. */
+  /** Every point, in order: anchor, scope, this repository, text, semantic, graph, confidence, contradictions. */
   why: string;
 }
 
@@ -71,6 +73,7 @@ export function rank(
   similarity?: Map<string, number>,
   keyed?: ReadonlySet<string>,
   dependents: readonly { path: string; neither: boolean }[] = [],
+  repository: string | null = null,
 ): Hit[] {
   // The repository root, '.' or './', normalises to '' and holds every anchored path.
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\/?$|^\.\//, '').replace(/\/+$/, ''));
@@ -97,6 +100,7 @@ export function rank(
     const semantic = cos >= RANKING.minSimilarity ? tenth((RANKING.semantic * (cos - RANKING.minSimilarity)) / (1 - RANKING.minSimilarity)) : 0;
     if (overlap === 0 && reached.length === 0 && text === 0 && semantic === 0 && !near && !key) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
+    if (repository !== null && (item.scope === 'person' || item.scope === 'global') && item.origin === repository) add('this repository', RANKING.origin);
     if (text > 0) add('text', text);
     if (semantic > 0) add('semantic', semantic);
     if (near) add('graph', RANKING.graph);

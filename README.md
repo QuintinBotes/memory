@@ -87,13 +87,17 @@ only`, or from a terminal:
 memory remember --scope repository --type convention -- 'Releases are cut from the main branch only'
 memory remember --scope person --type preference -- 'Explain changes in plain English'
 memory list
+memory list --repo acme/web             # that repository's items, its owner's organisation items, and person/global items learned in it
+memory list --all-repos                 # every item of the tenant bound here, and the person file
 memory recheck                          # re-check anchored items, stale ones included (skips if another refresh is running)
 memory embed --backfill                 # embed active items that have no vector
 memory sweep                            # queue merges of active repeats for review
 memory purge --repo acme/api            # preview; add --confirm to delete
 ```
 
-A purge also takes `--item <id>`, or `--source <ref>` for everything learned
+A purge of `--repo` also deletes the person and global items learned in that
+repository (the preview counts them under `person.sqlite`); items of unknown
+origin are never touched by it. A purge also takes `--item <id>`, or `--source <ref>` for everything learned
 from one source, such as a pull request URL. `--source` reaches only this
 repository's tenant and the person file: evidence from the source is
 deleted, and an item left with none returns to proposed, or with
@@ -252,6 +256,28 @@ proposals: `memory review` and `memory approve` as ever.
 The `PostToolUse` hook on Bash runs after every command: it opens no store for
 one that is not a `git commit`, a `git revert` or (with the opt-in) a command
 with an open episode, and takes the write lock only to write.
+
+## Filtering by repository
+
+Every item records the repository it was learned in (`origin_repository`,
+`owner/repo`, empty when unknown). `remember`, `capture`, `memory_propose` and
+`memory import` fill it from the repository they ran in; a person or global
+item remembered outside a github.com checkout has none, and items stored before
+schema 14 keep none, except repository items, which take it from their scope.
+
+`memory list` and `memory export --markdown` take `--repo <owner/repo>` for that
+repository's items, its owner's organisation items and the person and global
+items learned in it, or `--all-repos` for everything in the tenant bound here
+plus the person file. They exclude each other; without either, behaviour is as
+before. `memory_search` takes the same as an optional `repository`; paths are
+then not matched against anchors, and the result says so.
+
+Only a repository of the tenant bound to the current checkout can be named:
+`matchingTenants` must return exactly that tenant. A repository of another
+tenant, one that matches no tenant, or a checkout with no tenant is refused
+before any store is opened, and `--all-repos` never opens another tenant's file.
+In recall, a person or global item learned in the current repository gains
+0.5 (`this repository` in `why`); unknown origins gain nothing.
 
 ## Reading memory as files
 
@@ -569,12 +595,12 @@ deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
 The plugin runs an MCP server with five tools. None of them can approve,
 reject, purge or change the configuration, and nothing they write is active.
 
-- `memory_search(query, paths?)` returns at most 10 rows,
+- `memory_search(query, paths?, repository?)` returns at most 10 rows,
   `[id] type · name path:line · statement (source) · why: points`, each at
   most 60 estimated tokens; a long statement is cut in the row. An item is a
   hit only when it shares an anchored path or words with the search. Its
   score is a fixed sum: 4 per anchor in the paths (at most 8), scope
-  (repository 2, organisation or person 1, global 0.5), full-text relevance up
+  (repository 2, organisation or person 1, global 0.5, plus 0.5 for a person or global item learned in the current repository), full-text relevance up
   to 2 (none below 20% of the best match), confidence up to 2, and minus 1 per
   contradiction. Ties go to support, then id. `why` lists every point.
   With embeddings (below) the sum gains two parts: `semantic`, up to 4 points

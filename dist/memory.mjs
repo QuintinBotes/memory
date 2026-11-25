@@ -203,6 +203,16 @@ function resolveContext(cwd, config, configDir) {
   }
   return { ...base2, tenant, reason: "" };
 }
+var REPOSITORY_FILTER = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/;
+function filterRepository(config, context, value) {
+  const repository = value.trim().toLowerCase();
+  if (!REPOSITORY_FILTER.test(repository)) return { reason: `${value} is not owner/repo`, malformed: true };
+  if (context.tenant === null) return { reason: `no tenant is bound here, so there is no repository to filter by; only the person file can be read`, malformed: false };
+  const [owner, repo] = repository.split("/");
+  const tenants = matchingTenants(config, owner, repo);
+  if (tenants.length !== 1 || tenants[0] !== context.tenant) return { reason: `${repository} is not a repository of the tenant bound here, so it cannot be read from here`, malformed: false };
+  return { repository };
+}
 
 // src/redact/redact.ts
 import { createHash as createHash2 } from "node:crypto";
@@ -744,6 +754,8 @@ var RANKING = {
   /** An item keyed to a failure fingerprint or check id the caller names (Orbit's recall). */
   key: 2,
   scope: { repository: 2, organisation: 1, person: 1, global: 0.5 },
+  /** A person or global item learned in the repository in play; an unknown origin gets nothing. */
+  origin: 0.5,
   text: 2,
   /** A text match weaker than this share of the best match is noise, not relevance. */
   minTextRatio: 0.2,
@@ -762,7 +774,7 @@ var RANKING = {
   limit: 10
 };
 var tenth = (n) => Math.round(n * 10) / 10;
-function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = []) {
+function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = [], repository = null) {
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\/?$|^\.\//, "").replace(/\/+$/, ""));
   const score = (item, near) => {
     const parts2 = [];
@@ -786,6 +798,7 @@ function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = [
     const semantic = cos >= RANKING.minSimilarity ? tenth(RANKING.semantic * (cos - RANKING.minSimilarity) / (1 - RANKING.minSimilarity)) : 0;
     if (overlap === 0 && reached.length === 0 && text4 === 0 && semantic === 0 && !near && !key2) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
+    if (repository !== null && (item.scope === "person" || item.scope === "global") && item.origin === repository) add("this repository", RANKING.origin);
     if (text4 > 0) add("text", text4);
     if (semantic > 0) add("semantic", semantic);
     if (near) add("graph", RANKING.graph);
@@ -911,8 +924,8 @@ function insertItem(db, item) {
   inTransaction(db, () => {
     db.prepare(
       `INSERT INTO items (id, tenant, scope, scope_key, type, statement, statement_key, rationale, status, status_reason,
-         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?, ?)`
+         authority, origin_trust, quarantine, anchors_json, valid_from, valid_to, created_at, supersedes, origin_repository)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'advisory', ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       item.tenant,
@@ -930,7 +943,8 @@ function insertItem(db, item) {
       now,
       item.validTo ?? null,
       now,
-      item.supersedes ?? null
+      item.supersedes ?? null,
+      item.originRepository !== void 0 ? item.originRepository : item.scope === "repository" ? item.scopeKey : null
     );
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
@@ -942,7 +956,8 @@ function insertItem(db, item) {
 var SELECT = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
   coalesce(reinforced_at, valid_from) AS reinforced, anchors_json,
   (SELECT source_ref FROM evidence e WHERE e.item_id = items.id ORDER BY captured_at, id LIMIT 1) AS source,
-  (SELECT group_concat(DISTINCT taint) FROM evidence e WHERE e.item_id = items.id AND taint IS NOT NULL) AS taint
+  (SELECT group_concat(DISTINCT taint) FROM evidence e WHERE e.item_id = items.id AND taint IS NOT NULL) AS taint,
+  origin_repository AS origin
   FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`;
 var visible = (rows) => rows.map((r) => ({
   id: r.id,
@@ -956,7 +971,8 @@ var visible = (rows) => rows.map((r) => ({
   reinforced: r.reinforced,
   anchors: JSON.parse(r.anchors_json),
   source: r.source ?? "",
-  ...r.taint === null ? {} : { taint: r.taint }
+  ...r.taint === null ? {} : { taint: r.taint },
+  origin: r.origin
 }));
 var TENANT_SCOPE = "tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))";
 var PERSON_SCOPE = "tenant = '' AND scope IN ('person', 'global')";
@@ -983,8 +999,11 @@ function failureStatements(db, tenant, repository, owner) {
   return db.prepare(`SELECT id, statement FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED} AND type IN ('failure-pattern', 'repair-recipe') AND ${TENANT_SCOPE}`).all(tenant, repository, owner);
 }
 var itemsById = (db, ids) => ids.length === 0 ? [] : visible(db.prepare(`${SELECT} AND id IN (${ids.map(() => "?").join(", ")})`).all(...ids));
-function personItems(db) {
-  return visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all());
+function personItems(db, origin) {
+  return origin === void 0 ? visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all()) : visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE} AND origin_repository = ?`).all(origin));
+}
+function allTenantItems(db, tenant) {
+  return visible(db.prepare(`${SELECT} AND tenant = ?`).all(tenant));
 }
 function closeQuestion(db, id) {
   return inTransaction(db, () => {
@@ -2527,7 +2546,15 @@ var MIGRATIONS = [
     resolved_at TEXT,
     UNIQUE (item_id, target, symbol)
   );
-  `
+  `,
+  // v14 - the repository an item was learned in (null = unknown), so a person or global item can be filtered, recalled and
+  // purged by where it came from. Repository items take it from their scope key; older person, global and organisation
+  // items stay unknown. Skipped when the column is there, so a store rolled back by version alone still opens.
+  (db) => {
+    const has = db.prepare("PRAGMA table_info(items)").all().some((c) => c.name === "origin_repository");
+    if (!has) db.exec("ALTER TABLE items ADD COLUMN origin_repository TEXT;");
+    db.exec("UPDATE items SET origin_repository = scope_key WHERE scope = 'repository' AND origin_repository IS NULL;");
+  }
 ];
 var SECURE_DELETE = 6;
 var WRITE_BUSY_MS = 5e3;
@@ -2748,6 +2775,7 @@ function keepCandidates(db, context, candidates, from2) {
       tenant: context.tenant,
       scope: "repository",
       scopeKey: context.repository,
+      originRepository: context.repository,
       type: c.kind === "decision" ? "decision" : "precedent",
       statement,
       rationale: refusal(evidence) === null ? evidence : null,
@@ -2971,17 +2999,19 @@ function withTextRatio(items, matches2) {
     return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
   });
 }
-function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = []) {
+function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = [], reach) {
   const out = [];
-  const instructions = withheld === null ? null : loadInstructions(cwd, currentConfigDir());
+  const other = reach !== void 0 && reach !== "all" && reach.repository !== context.repository;
+  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
   const add = (items, matches2) => void out.push(...withTextRatio(items, matches2));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const file = tenantFile(data, context.tenant);
     const db = openStore(file, false, busyMs);
     if (db !== null) {
       try {
-        withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
-        const items = tenantItems(db, context.tenant, context.repository, context.owner);
+        if (!other) withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
+        const named = reach !== void 0 && reach !== "all" ? reach.repository : void 0;
+        const items = reach === "all" ? allTenantItems(db, context.tenant) : tenantItems(db, context.tenant, named ?? context.repository, named === void 0 ? context.owner : named.split("/")[0]);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld), textMatches(db, terms));
       } finally {
         db.close();
@@ -2991,7 +3021,7 @@ function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, wi
   const person = openStore(personFile(data), false, busyMs);
   if (person !== null) {
     try {
-      const items = personItems(person);
+      const items = personItems(person, reach !== void 0 && reach !== "all" ? reach.repository : void 0);
       add(instructions === null ? items : screen(person, items, instructions, true, withheld), textMatches(person, terms));
     } finally {
       person.close();
@@ -3012,7 +3042,8 @@ var TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "Words of the task." },
-        paths: { type: "array", items: { type: "string" }, description: "Files or directories in play, relative to the repository root." }
+        paths: { type: "array", items: { type: "string" }, description: "Files or directories in play, relative to the repository root." },
+        repository: { type: "string", description: "owner/repo of another repository of the same tenant, to search its items instead of this checkout's. Paths then do not match anchors. Refused for a repository of any other tenant." }
       },
       required: ["query"],
       additionalProperties: false
@@ -3119,13 +3150,23 @@ async function search(args, data, config, context, cwd) {
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string")) throw new ToolError("paths is a list of strings");
   const top = paths.some((p) => isAbsolute4(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
   const relativePaths = paths.map((p) => isAbsolute4(p) && top !== void 0 ? relative3(top, p) : p);
+  const asked = args["repository"];
+  if (asked !== void 0 && typeof asked !== "string") throw new ToolError("repository is a string, owner/repo");
+  let reach;
+  if (asked !== void 0) {
+    const found = filterRepository(config, context, asked);
+    if ("reason" in found) throw new ToolError(`not searched: ${found.reason}`);
+    reach = found;
+  }
+  const elsewhere = reach !== void 0 && reach.repository !== context.repository;
   const withheld = [];
-  const items = visibleItems(data, context, cwd, searchTerms(query), void 0, withheld);
+  const items = visibleItems(data, context, cwd, searchTerms(query), void 0, withheld, reach);
   logWithheld(data, config, "memory_search", "mcp", withheld);
   const semantic = await similarities(data, context, config, query, items);
-  const hits = rank(items, relativePaths, Date.now(), "similarity" in semantic ? semantic.similarity : void 0);
-  const note = "note" in semantic ? `${semantic.note}
-` : "";
+  const hits = rank(items, elsewhere ? [] : relativePaths, Date.now(), "similarity" in semantic ? semantic.similarity : void 0, void 0, [], context.repository);
+  const note = ("note" in semantic ? `${semantic.note}
+` : "") + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach.repository} is not this checkout.
+` : "");
   if (hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
 `).join(""));
@@ -3218,7 +3259,7 @@ function propose2(args, data, config, context, cwd) {
   if (said?.kind === "repeats") return `not proposed: duplicates ${displayPath(ins, said.line.file)}:${said.line.line}, which the agent already loads`;
   const tenant = personal ? "" : context.tenant;
   const scopeKey = scope === "repository" ? context.repository : scope === "organisation" ? context.owner : "";
-  const candidate = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: "proposed", trust: origin };
+  const candidate = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: "proposed", trust: origin, originRepository: context.repository };
   const taint = [...typeof named === "string" ? [named.trim()] : [], ...origin === "external" || origin === "bot" ? [`${origin}:${source}`] : []];
   if (taint.length > 0) candidate.taint = taint.join(";");
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true);
@@ -3487,7 +3528,9 @@ function rejectPromotion(db, p) {
 var count = (db, sql, ...params) => db.prepare(sql).get(...params).n;
 function itemClause(scope) {
   if (scope.all === true || scope.tenant !== void 0) return { where: "1=1", params: [] };
-  if (scope.repository !== void 0) return { where: "scope = 'repository' AND scope_key = ?", params: [scope.repository] };
+  if (scope.repository !== void 0) {
+    return { where: "(scope = 'repository' AND scope_key = ?) OR (scope IN ('person', 'global') AND origin_repository = ?)", params: [scope.repository, scope.repository] };
+  }
   if (scope.item !== void 0) return { where: "id = ?", params: [scope.item] };
   return { where: "1=0", params: [] };
 }
@@ -4196,9 +4239,10 @@ function itemFile(r, evidence, supersededBy) {
   return `${lines2.join("\n")}
 `;
 }
-function read(db, tenant) {
-  const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE tenant = ? ORDER BY id`).all(tenant);
-  const evidence = db.prepare("SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE tenant = ?) ORDER BY item_id, captured_at, source_ref, author_role, taint, id").all(tenant);
+function read(db, tenant, repository) {
+  const [where2, params] = repository === void 0 ? ["tenant = ?", [tenant]] : tenant === "" ? ["tenant = ? AND scope IN ('person', 'global') AND origin_repository = ?", [tenant, repository]] : ["tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))", [tenant, repository, repository.split("/")[0]]];
+  const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE ${where2} ORDER BY id`).all(...params);
+  const evidence = db.prepare(`SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where2}) ORDER BY item_id, captured_at, source_ref, author_role, taint, id`).all(...params);
   const byItem = /* @__PURE__ */ new Map();
   for (const e of evidence) byItem.set(e.item_id, [...byItem.get(e.item_id) ?? [], e]);
   return rows.map((row4) => ({ row: row4, evidence: byItem.get(row4.id) ?? [] }));
@@ -4212,8 +4256,8 @@ function writeIfChanged(path, content, mayExist) {
   }
   writeFileSync5(path, content);
 }
-function exportMarkdown(stores2, dir) {
-  const all = stores2.flatMap(({ db, tenant }) => read(db, tenant)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
+function exportMarkdown(stores2, dir, repository) {
+  const all = stores2.flatMap(({ db, tenant }) => read(db, tenant, repository)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
   const successors = /* @__PURE__ */ new Map();
   for (const { row: row4 } of all) if (row4.supersedes !== null) successors.set(row4.supersedes, [...successors.get(row4.supersedes) ?? [], row4.id]);
   const items = join10(dir, "items");
@@ -4311,7 +4355,7 @@ function diffRecall(data, config, context, cwd, range) {
   const dependents = reach !== null && "dependents" in reach ? reach.dependents : [];
   const note = reach !== null && "note" in reach ? `${reach.note}
 ` : "";
-  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed, Date.now(), void 0, void 0, dependents);
+  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type)), changed, Date.now(), void 0, void 0, dependents, context.repository);
   const rows = [];
   const render = (list2) => (list2.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, list2.join(""))) + note;
   for (const h of hits) {
@@ -4382,7 +4426,7 @@ function orbitRecall(data, context, cwd, ask) {
     db.close();
   }
   const rows = [];
-  for (const h of rank(visible2.filter((i) => !stale.has(i.id)), ask.paths, today, void 0, keyed)) {
+  for (const h of rank(visible2.filter((i) => !stale.has(i.id)), ask.paths, today, void 0, keyed, [], context.repository)) {
     if (rows.length === ORBIT_ITEMS) break;
     const row4 = `${leanRow(h.item, "", LEAN_ROW_TOKENS)}
 `;
@@ -5666,11 +5710,14 @@ var USAGE = `usage: memory <command>
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
       conflicts with one queues a supersession in review; --supersedes replaces that item at once
-  list
-      every item visible here
-  export --markdown <dir>
+  list [--repo <owner/repo> | --all-repos]
+      every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
+      global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
+      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read
+  export --markdown <dir> [--repo <owner/repo> | --all-repos]
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
-      for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository
+      for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository.
+      --repo limits it as list --repo does; --all-repos is what it writes without either
   report [--tenant <name>]
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
@@ -5754,8 +5801,9 @@ var USAGE = `usage: memory <command>
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
       as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
   purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
-      preview, or with --confirm delete, leaving no recoverable bytes. --source reaches this repository's tenant and the
-      person file: an item left without evidence returns to proposed, or with --with-derived is deleted
+      preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
+      learned in that repository. --source reaches this repository's tenant and the person file: an item left without
+      evidence returns to proposed, or with --with-derived is deleted
   eval [replay | false-recall | orbit | lab] [--since <date> --pulls <file>] [--log <file>]
        [--agent <command> --model <name> [--task <name>]]
       scorecard rows, memory off and on, one JSON object per line; no measure named means all four.
@@ -6050,7 +6098,8 @@ async function remember(args, data, cwd) {
       statement,
       rationale: values.rationale?.trim() ?? null,
       anchors,
-      source: values.source?.trim() || "remember"
+      source: values.source?.trim() || "remember",
+      originRepository: context.repository
     };
     const where2 = `${scope}${scopeKey ? ` ${scopeKey}` : ""}${tenant ? `, tenant ${tenant}` : ""}`;
     if (values.supersedes !== void 0) {
@@ -6077,15 +6126,28 @@ async function remember(args, data, cwd) {
     db.close();
   }
 }
-function list(data, cwd) {
+function reachOf(values, config, context) {
+  if (values.repo !== void 0 && values["all-repos"] === true) throw new Refusal("give --repo or --all-repos, not both", 2);
+  if (values["all-repos"] === true) return "all";
+  if (values.repo === void 0) return void 0;
+  const found = filterRepository(config, context, values.repo);
+  if ("reason" in found) throw new Refusal(`--repo: ${found.reason}`, found.malformed ? 2 : 1);
+  return found;
+}
+var REACH_OPTIONS = { repo: { type: "string" }, "all-repos": { type: "boolean" } };
+function list(args, data, cwd) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: REACH_OPTIONS });
+  if (positionals.length > 0) throw new Refusal("usage: memory list [--repo <owner/repo> | --all-repos]", 2);
   const config = setUp(data);
-  process.stdout.write(renderAll(visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], void 0, null)));
+  const context = resolveContext(cwd, config, currentConfigDir());
+  process.stdout.write(renderAll(visibleItems(data, context, cwd, [], void 0, null, reachOf(values, config, context))));
 }
 function exportCommand(args, data, cwd) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: "string" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: "string" }, ...REACH_OPTIONS } });
   if (values.markdown === void 0 || positionals.length > 0) throw new Refusal("memory export needs --markdown <dir>", 2);
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
+  const reach = reachOf(values, config, context);
   const tenant = context.tenant;
   if (tenant === null) throw new Refusal(`there is no tenant to export here: ${context.reason}`);
   const why = foreignRepository(values.markdown, config, tenant);
@@ -6096,7 +6158,7 @@ function exportCommand(args, data, cwd) {
     if (db !== null) stores2.push({ db, tenant: t });
   }
   try {
-    console.log(`exported ${exportMarkdown(stores2, values.markdown)} items of tenant ${tenant} and the person file to ${values.markdown}`);
+    console.log(`exported ${exportMarkdown(stores2, values.markdown, reach === void 0 || reach === "all" ? void 0 : reach.repository)} items of tenant ${tenant} and the person file to ${values.markdown}`);
   } finally {
     for (const { db } of stores2) db.close();
   }
@@ -6647,7 +6709,7 @@ function purge(args, data, cwd) {
     if (tenants.length === 0) console.error(`--source reaches only the person file here: ${context?.reason ?? "memory is not set up"}`);
   }
   const files = tenants.map((t) => tenantFile(data, t));
-  if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0) files.push(personFile(data));
+  if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0 || repository !== void 0) files.push(personFile(data));
   const report = {};
   const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [] };
   const residue = [];
@@ -6760,7 +6822,7 @@ async function main(argv) {
     case "remember":
       return remember(rest, data, process.cwd());
     case "list":
-      return list(data, process.cwd());
+      return list(rest, data, process.cwd());
     case "export":
       return exportCommand(rest, data, process.cwd());
     case "import":

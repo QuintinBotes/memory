@@ -6,7 +6,7 @@ import { managedBy } from '../anchors/refresh.ts';
 import { withRefreshLock } from '../store/refresh-lock.ts';
 import { automationRefusal } from '../automation.ts';
 import { ConfigError, consented, currentConfigDir, loadConfig, organisationTerms, type Config } from '../config.ts';
-import { git, resolveContext, type Context } from '../context.ts';
+import { filterRepository, git, resolveContext, type Context } from '../context.ts';
 import { refusal } from '../gate.ts';
 import { addItem } from '../consolidate.ts';
 import { displayPath, judge, loadInstructions, type Withheld } from '../instructions.ts';
@@ -42,6 +42,7 @@ const TOOLS = [
       properties: {
         query: { type: 'string', description: 'Words of the task.' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Files or directories in play, relative to the repository root.' },
+        repository: { type: 'string', description: 'owner/repo of another repository of the same tenant, to search its items instead of this checkout\'s. Paths then do not match anchors. Refused for a repository of any other tenant.' },
       },
       required: ['query'],
       additionalProperties: false,
@@ -159,13 +160,22 @@ async function search(args: Args, data: string, config: Config, context: Context
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === 'string')) throw new ToolError('paths is a list of strings');
   const top = paths.some((p) => isAbsolute(p)) ? git(cwd, 'rev-parse', '--show-toplevel')?.trim() : undefined;
   const relativePaths = paths.map((p) => (isAbsolute(p) && top !== undefined ? relative(top, p) : p));
+  const asked = args['repository'];
+  if (asked !== undefined && typeof asked !== 'string') throw new ToolError('repository is a string, owner/repo');
+  let reach: { repository: string } | undefined;
+  if (asked !== undefined) {
+    const found = filterRepository(config, context, asked);
+    if ('reason' in found) throw new ToolError(`not searched: ${found.reason}`);
+    reach = found;
+  }
+  const elsewhere = reach !== undefined && reach.repository !== context.repository;
   const withheld: Withheld[] = [];
-  const items = visibleItems(data, context, cwd, searchTerms(query), undefined, withheld);
+  const items = visibleItems(data, context, cwd, searchTerms(query), undefined, withheld, reach);
   logWithheld(data, config, 'memory_search', 'mcp', withheld);
   const semantic = await similarities(data, context, config, query, items);
-  const hits = rank(items, relativePaths, Date.now(), 'similarity' in semantic ? semantic.similarity : undefined);
-  // The note sits outside the fence: it is memory's own sentence, not an item.
-  const note = 'note' in semantic ? `${semantic.note}\n` : '';
+  const hits = rank(items, elsewhere ? [] : relativePaths, Date.now(), 'similarity' in semantic ? semantic.similarity : undefined, undefined, [], context.repository);
+  // The notes sit outside the fence: they are memory's own sentences, not items.
+  const note = ('note' in semantic ? `${semantic.note}\n` : '') + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach!.repository} is not this checkout.\n` : '');
   if (hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
 }
@@ -271,7 +281,7 @@ function propose(args: Args, data: string, config: Config, context: Context, cwd
   if (said?.kind === 'repeats') return `not proposed: duplicates ${displayPath(ins, said.line.file)}:${said.line.line}, which the agent already loads`;
   const tenant = personal ? '' : context.tenant!;
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';
-  const candidate: NewItem = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: 'proposed', trust: origin };
+  const candidate: NewItem = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: 'proposed', trust: origin, originRepository: context.repository };
   // Someone outside the owner wrote the source: the agent read content from them, so the proposal is tainted by it.
   const taint = [...(typeof named === 'string' ? [named.trim()] : []), ...(origin === 'external' || origin === 'bot' ? [`${origin}:${source}`] : [])];
   if (taint.length > 0) candidate.taint = taint.join(';');

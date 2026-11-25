@@ -74,3 +74,24 @@ export function resolveContext(cwd: string, config: Config, configDir: string): 
   }
   return { ...base, tenant, reason: '' };
 }
+
+/** What a read may reach beyond the repository in play: one other repository of the bound tenant, or all of that tenant's. */
+export type Reach = { repository: string } | 'all';
+
+/** `owner/repo` as a repository filter takes it. */
+export const REPOSITORY_FILTER = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/;
+
+/**
+ * The repository a `--repo` or `repository` filter names, or why it may not be read. Only a repository of the tenant bound
+ * here is reachable: `matchingTenants` must return exactly that tenant. The refusal names no other tenant, and nothing is
+ * opened to decide it. `malformed` marks a value that is not owner/repo at all, a usage error.
+ */
+export function filterRepository(config: Config, context: Context, value: string): { repository: string } | { reason: string; malformed: boolean } {
+  const repository = value.trim().toLowerCase();
+  if (!REPOSITORY_FILTER.test(repository)) return { reason: `${value} is not owner/repo`, malformed: true };
+  if (context.tenant === null) return { reason: `no tenant is bound here, so there is no repository to filter by; only the person file can be read`, malformed: false };
+  const [owner, repo] = repository.split('/') as [string, string];
+  const tenants = matchingTenants(config, owner, repo);
+  if (tenants.length !== 1 || tenants[0] !== context.tenant) return { reason: `${repository} is not a repository of the tenant bound here, so it cannot be read from here`, malformed: false };
+  return { repository };
+}

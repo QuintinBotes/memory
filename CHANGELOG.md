@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Filter memory by repository, and record where each item came from. Schema 14
+  adds `origin_repository` (null = unknown) to every item; `remember`, `capture`,
+  `memory_propose` and `memory import` fill it from the repository they ran in,
+  and the migration backfills repository items from their scope key.
+  `memory list` and `memory export --markdown` take `--repo <owner/repo>` (that
+  repository's items, its owner's organisation items, and person or global items
+  learned in it) or `--all-repos` (the tenant bound here and the person file);
+  `memory_search` takes an optional `repository`, skipping anchor-path matching
+  for a repository other than the checkout and saying so. Only a repository of
+  the tenant bound here is reachable: another tenant's, one matching no tenant,
+  or no tenant here is refused before any store is opened, and `--all-repos`
+  never opens another tenant's file. `memory purge --repo` also deletes the
+  person and global items learned in that repository. A person or global item
+  learned in the current repository gains 0.5 in ranking. No consent change.
 - Promotion into checks (#19). `memory promote --propose` stores and lists
   proposals: a well-supported item (support 3 or more, no contradiction) as one
   line of the review-standards file, and an item on a symbol no test executes as
