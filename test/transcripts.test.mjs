@@ -214,7 +214,7 @@ test('US1.5 an item whose quote is not verbatim in the transcript is dropped, an
   const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
   try {
     const paraphrase = () => [{ line: 7, quote: 'No, please prefer the other branch for the release.' }, { line: 3, quote: "Don't worry, it is small." }, { line: 7, quote: 'No, use the other branch for the release.' }];
-    const done = m.processTranscripts(db, 'acme', { optIns: {}, consent: {} }, paraphrase);
+    const done = m.processTranscripts(db, 'acme', { automation: true }, paraphrase);
     assert.equal(done.proposed, 1, 'only the verbatim quote of the owner turn');
     assert.deepEqual(db.prepare("SELECT statement FROM items WHERE statement LIKE 'Owner correction:%'").all().map((r) => r.statement), ['Owner correction: "No, use the other branch for the release."']);
   } finally {
