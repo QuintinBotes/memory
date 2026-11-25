@@ -38,7 +38,10 @@ const count = (db: DatabaseSync, sql: string, ...params: string[]): number =>
 /** Items deleted outright by this scope, as a WHERE clause on `items`. */
 function itemClause(scope: PurgeScope): Clause {
   if (scope.all === true || scope.tenant !== undefined) return { where: '1=1', params: [] };
-  if (scope.repository !== undefined) return { where: "scope = 'repository' AND scope_key = ?", params: [scope.repository] };
+  // A repository's own items, and the person and global items learned in it (origin_repository; unknown stays).
+  if (scope.repository !== undefined) {
+    return { where: "(scope = 'repository' AND scope_key = ?) OR (scope IN ('person', 'global') AND origin_repository = ?)", params: [scope.repository, scope.repository] };
+  }
   if (scope.item !== undefined) return { where: 'id = ?', params: [scope.item] };
   return { where: '1=0', params: [] };
 }

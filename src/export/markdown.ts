@@ -98,12 +98,22 @@ function itemFile(r: ItemRow, evidence: EvidenceRow[], supersededBy: string[]): 
   return `${lines.join('\n')}\n`;
 }
 
-/** Items of `tenant` ('' for the person file) in id order, each with its evidence: two queries, not one per item. */
-function read(db: DatabaseSync, tenant: string): { row: ItemRow; evidence: EvidenceRow[] }[] {
-  const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE tenant = ? ORDER BY id`).all(tenant) as unknown as ItemRow[];
+/**
+ * Items of `tenant` ('' for the person file) in id order, each with its evidence: two queries, not one per item. With
+ * `repository`: a tenant file's items of that repository and its owner's organisation items, the person file's items
+ * learned in it.
+ */
+function read(db: DatabaseSync, tenant: string, repository?: string): { row: ItemRow; evidence: EvidenceRow[] }[] {
+  const [where, params] =
+    repository === undefined
+      ? ['tenant = ?', [tenant]]
+      : tenant === ''
+        ? ["tenant = ? AND scope IN ('person', 'global') AND origin_repository = ?", [tenant, repository]]
+        : ["tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))", [tenant, repository, repository.split('/')[0]!]];
+  const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE ${where} ORDER BY id`).all(...params) as unknown as ItemRow[];
   const evidence = db
-    .prepare('SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE tenant = ?) ORDER BY item_id, captured_at, source_ref, author_role, taint, id')
-    .all(tenant) as unknown as (EvidenceRow & { item_id: string })[];
+    .prepare(`SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where}) ORDER BY item_id, captured_at, source_ref, author_role, taint, id`)
+    .all(...params) as unknown as (EvidenceRow & { item_id: string })[];
   const byItem = new Map<string, EvidenceRow[]>();
   for (const e of evidence) byItem.set(e.item_id, [...(byItem.get(e.item_id) ?? []), e]);
   return rows.map((row) => ({ row, evidence: byItem.get(row.id) ?? [] }));
@@ -122,8 +132,8 @@ function writeIfChanged(path: string, content: string, mayExist: boolean): void 
 }
 
 /** Writes `index.md` and `items/<id>.md` under `dir`, replacing a previous export there; returns the number of items. */
-export function exportMarkdown(stores: { db: DatabaseSync; tenant: string }[], dir: string): number {
-  const all = stores.flatMap(({ db, tenant }) => read(db, tenant)).sort((a, b) => (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0));
+export function exportMarkdown(stores: { db: DatabaseSync; tenant: string }[], dir: string, repository?: string): number {
+  const all = stores.flatMap(({ db, tenant }) => read(db, tenant, repository)).sort((a, b) => (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0));
   const successors = new Map<string, string[]>();
   for (const { row } of all) if (row.supersedes !== null) successors.set(row.supersedes, [...(successors.get(row.supersedes) ?? []), row.id]);
 

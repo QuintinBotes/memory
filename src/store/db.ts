@@ -245,6 +245,15 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     UNIQUE (item_id, target, symbol)
   );
   `,
+
+  // v14 - the repository an item was learned in (null = unknown), so a person or global item can be filtered, recalled and
+  // purged by where it came from. Repository items take it from their scope key; older person, global and organisation
+  // items stay unknown. Skipped when the column is there, so a store rolled back by version alone still opens.
+  (db) => {
+    const has = (db.prepare('PRAGMA table_info(items)').all() as { name: string }[]).some((c) => c.name === 'origin_repository');
+    if (!has) db.exec('ALTER TABLE items ADD COLUMN origin_repository TEXT;');
+    db.exec("UPDATE items SET origin_repository = scope_key WHERE scope = 'repository' AND origin_repository IS NULL;");
+  },
 ];
 const SECURE_DELETE = 6;
 

@@ -90,7 +90,7 @@ export function orbitRecall(data: string, context: Context, cwd: string, ask: Or
     db.close();
   }
   const rows: string[] = [];
-  for (const h of rank(visible.filter((i) => !stale.has(i.id)), ask.paths, today, undefined, keyed)) {
+  for (const h of rank(visible.filter((i) => !stale.has(i.id)), ask.paths, today, undefined, keyed, [], context.repository)) {
     if (rows.length === ORBIT_ITEMS) break;
     const row = `${leanRow(h.item, '', LEAN_ROW_TOKENS)}\n`;
     if (estimate([...rows, row].join('')) > ask.maxTokens) break;
