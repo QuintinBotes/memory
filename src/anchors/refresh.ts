@@ -6,7 +6,7 @@ import { consented, loadConfig } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { sha256, type Anchor } from '../items.ts';
 import { recordAudit } from '../store/audit.ts';
-import { ProviderError, Refused, changesSince, resolveKey, type Changes, type Provider, type ProviderSymbol } from './provider.ts';
+import { ProviderError, Refused, changesSince, nearestTest, resolveKey, testsFor, type Changes, type Provider, type ProviderSymbol } from './provider.ts';
 
 /** Why an item is stale because of its symbol anchor; only these are the refresh's to restore. */
 const REASONS = ['path gone', 'cited text gone', 'signature changed', 'key gone', 'snapshot not at HEAD'];
@@ -253,13 +253,16 @@ export async function refreshAnchors(
     }
     const undone = undoneFrom(db, row.id);
     const outcomes: Outcome[] = [];
+    const current: (string | undefined)[] = [];
     let skipped = false;
     for (const a of anchors) {
       if (!isManaged(a)) {
         outcomes.push({ kind: 'keep' });
+        current.push(undefined);
         continue;
       }
       const c = await since(a.snapshot);
+      current.push(c.snapshot);
       try {
         const o = await resolve(a, c, undone);
         if (o.kind !== 'keep') attempts++;
@@ -272,20 +275,43 @@ export async function refreshAnchors(
       }
     }
     if (skipped) result.skipped++;
+    // The nearest executing test of each anchor that is not stale, asked once per snapshot (never in a hook).
+    const finals: Anchor[] = [];
+    for (const [i, a] of anchors.entries()) {
+      const o = outcomes[i]!;
+      // The same key keeps what it was last told; a moved symbol is a new key and is asked again.
+      const fin = o.kind === 'current' ? { ...o.anchor, ...(a.test === undefined ? {} : { test: a.test }), ...(a.testsAt === undefined ? {} : { testsAt: a.testsAt }) } : o.kind === 'move' ? o.anchor : a;
+      if (o.kind === 'stale' || !isManaged(fin) || fin.testsAt === current[i]) {
+        finals.push(fin);
+        continue;
+      }
+      try {
+        const found = await testsFor(provider, fin.symbol);
+        const nearest = nearestTest(found.tests);
+        const { test: _old, ...bare } = fin;
+        finals.push({ ...bare, testsAt: found.snapshot, ...(nearest === null ? {} : { test: { name: parts(nearest.key).name, path: parts(nearest.key).path, ...(nearest.line === undefined ? {} : { line: nearest.line }) } }) });
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error;
+        log({ event: 'tests_skipped', item: row.id, reason: error.message });
+        finals.push(fin);
+      }
+    }
+    const testsChanged = finals.some((f, i) => JSON.stringify(f) !== JSON.stringify(outcomes[i]!.kind === 'current' || outcomes[i]!.kind === 'move' ? (outcomes[i] as { anchor: Anchor }).anchor : anchors[i]));
     // Anchors the provider does not own are checked by path, as the hooks do.
     const rest = anchors.map((a) => (isManaged(a) ? null : checkAnchor(a, read.text(a.path) ?? null)));
-    if (outcomes.every((o) => o.kind === 'keep') && rest.every((r) => r === null)) continue;
-    result.checked++;
+    const onlyTests = outcomes.every((o) => o.kind === 'keep') && rest.every((r) => r === null);
+    if (onlyTests && !testsChanged) continue;
+    if (!onlyTests) result.checked++;
     const managedKept = anchors.some((a, i) => outcomes[i]!.kind === 'keep' && isManaged(a));
     const failed = outcomes.findIndex((o) => o.kind === 'stale');
     const restFailed = rest.findIndex((r) => r !== null && !r.ok);
     const next = anchors.map((a, i): Anchor => {
       const o = outcomes[i]!;
       const { candidates: _drop, ...clean } = a;
-      if (o.kind === 'current' || o.kind === 'move') return o.anchor;
+      if (o.kind === 'current' || o.kind === 'move') return finals[i]!;
       if (o.kind === 'stale') return o.candidates.length === 0 ? clean : { ...clean, candidates: o.candidates };
       const r = rest[i];
-      return r?.ok === true ? r.anchor : isManaged(a) ? a : clean;
+      return r?.ok === true ? r.anchor : isManaged(a) ? finals[i]! : clean;
     });
     const reason = failed >= 0 ? (outcomes[failed] as Extract<Outcome, { kind: 'stale' }>).reason : restFailed >= 0 ? (rest[restFailed] as { ok: false; reason: string }).reason : null;
     const moves = outcomes.flatMap((o, i) => (o.kind === 'move' ? [{ from: anchors[i]!, to: o.anchor }] : []));
@@ -319,6 +345,7 @@ export async function refreshAnchors(
       }
     });
     if (done !== true) continue;
+    if (onlyTests) continue;
     if (reason !== null) result.stale++;
     else result.current++;
     result.moved += moves.length;

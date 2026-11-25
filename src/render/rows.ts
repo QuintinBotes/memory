@@ -44,6 +44,12 @@ export const fence = (label: string, body: string): string => `~~~text ${label}\
 const location = (a: Anchor): string =>
   a.symbol !== undefined ? `${a.symbol.split('#')[1]} ${a.path}` : a.start === undefined ? a.path : `${a.path}:${a.start}`;
 
+/** `name path:line` of the nearest test that executes an anchored symbol, or '' when no anchor names one. */
+const provingTest = (anchors: Anchor[]): string => {
+  const t = anchors.find((a) => a.test !== undefined)?.test;
+  return t === undefined ? '' : `${t.name} ${t.path}${t.line === undefined ? '' : `:${t.line}`}`;
+};
+
 const cut = (text: string, room: number): string => (text.length <= room ? text : `${text.slice(0, Math.max(0, room - 1))}…`);
 const cutLeft = (text: string, room: number): string => (text.length <= room ? text : `…${text.slice(text.length - room + 1)}`);
 
@@ -58,11 +64,12 @@ export function leanRow(item: Visible, why = '', maxTokens = Infinity): string {
   const source = item.source !== '' && item.source !== 'remember' ? safe(item.source) : '';
   const statement = safe(item.statement);
   const taint = item.taint === undefined ? '' : ` · tainted: ${safe(taintList(item.taint))}`;
-  const build = (s: string, src: string, loc: string): string =>
-    `[${item.id}] ${item.type}${loc === '' ? '' : ` · ${loc}`} · ${s}${src === '' ? '' : ` (${src})`}${taint}${why === '' ? '' : ` · why: ${why}`}`;
+  const proof = safe(provingTest(item.anchors));
+  const build = (s: string, src: string, loc: string, tst = proof): string =>
+    `[${item.id}] ${item.type}${loc === '' ? '' : ` · ${loc}`} · ${s}${src === '' ? '' : ` (${src})`}${taint}${why === '' ? '' : ` · why: ${why}`}${tst === '' ? '' : ` · test: ${tst}`}`;
   const row = build(statement, source, where);
   const room = maxTokens * 4;
   if (row.length <= room) return row;
-  const [src, loc] = [cutLeft(source, 40), cutLeft(where, 40)];
-  return build(cut(statement, room - build('', src, loc).length), src, loc);
+  const [src, loc, tst] = [cutLeft(source, 40), cutLeft(where, 40), cutLeft(proof, 50)];
+  return build(cut(statement, room - build('', src, loc, tst).length), src, loc, tst);
 }

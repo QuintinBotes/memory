@@ -27,6 +27,9 @@ export interface Anchor {
   contentHash?: string;
   fileHash?: string;
   snapshot?: string;
+  /** The nearest test that executes `symbol`, as the provider named it at snapshot `testsAt` (docs/provider.md); none when no test does. */
+  test?: { name: string; path: string; line?: number };
+  testsAt?: string;
   /** On a stale anchor whose key is gone: the added symbols the owner may re-anchor to (`memory anchors adopt`). */
   candidates?: string[];
 }

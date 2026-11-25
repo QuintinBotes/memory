@@ -131,9 +131,24 @@ export async function impactOf(p: Provider, repository: string, keys: string[]):
 }
 
 /** Operation 5: the tests that prove `key`, each with the evidence the provider has. */
-export async function testsFor(p: Provider, key: string): Promise<{ snapshot: string; tests: { key: string; evidence: string }[] }> {
+export async function testsFor(p: Provider, key: string): Promise<{ snapshot: string; tests: ProvingTest[] }> {
   const a = await p.ask('tests', { key });
   const list = a['tests'];
   if (!Array.isArray(list)) bad('tests');
-  return { snapshot: text(a['snapshot'], 'snapshot'), tests: (list as Record<string, unknown>[]).map((d) => ({ key: text(d?.['key'], 'test key'), evidence: text(d?.['evidence'], 'evidence') })) };
+  return { snapshot: text(a['snapshot'], 'snapshot'), tests: (list as Record<string, unknown>[]).map((d) => ({ key: text(d?.['key'], 'test key'), evidence: text(d?.['evidence'], 'evidence'), ...(Number.isInteger(d?.['line']) && (d?.['line'] as number) >= 1 ? { line: d['line'] as number } : {}) })) };
+}
+
+export interface ProvingTest {
+  key: string;
+  evidence: string;
+  line?: number;
+}
+
+/** The evidence kinds that execute the symbol, nearest first; `reference`, `import` and anything else never prove it. */
+const EXECUTING = ['call', 'dispatch', 'observed', 'transitive_call'];
+
+/** The nearest test whose evidence executes the symbol (ties keep the provider's order), or null. */
+export function nearestTest(tests: ProvingTest[]): ProvingTest | null {
+  const rank = (t: ProvingTest): number => EXECUTING.indexOf(t.evidence);
+  return tests.filter((t) => rank(t) >= 0).reduce<ProvingTest | null>((best, t) => (best === null || rank(t) < rank(best) ? t : best), null);
 }

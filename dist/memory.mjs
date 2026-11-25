@@ -1039,6 +1039,10 @@ var fence = (label, body) => `~~~text ${label}
 ${body}~~~
 `;
 var location = (a) => a.symbol !== void 0 ? `${a.symbol.split("#")[1]} ${a.path}` : a.start === void 0 ? a.path : `${a.path}:${a.start}`;
+var provingTest = (anchors) => {
+  const t = anchors.find((a) => a.test !== void 0)?.test;
+  return t === void 0 ? "" : `${t.name} ${t.path}${t.line === void 0 ? "" : `:${t.line}`}`;
+};
 var cut = (text4, room) => text4.length <= room ? text4 : `${text4.slice(0, Math.max(0, room - 1))}\u2026`;
 var cutLeft = (text4, room) => text4.length <= room ? text4 : `\u2026${text4.slice(text4.length - room + 1)}`;
 function leanRow(item, why = "", maxTokens = Infinity) {
@@ -1046,12 +1050,13 @@ function leanRow(item, why = "", maxTokens = Infinity) {
   const source = item.source !== "" && item.source !== "remember" ? safe(item.source) : "";
   const statement = safe(item.statement);
   const taint = item.taint === void 0 ? "" : ` \xB7 tainted: ${safe(taintList(item.taint))}`;
-  const build = (s, src2, loc2) => `[${item.id}] ${item.type}${loc2 === "" ? "" : ` \xB7 ${loc2}`} \xB7 ${s}${src2 === "" ? "" : ` (${src2})`}${taint}${why === "" ? "" : ` \xB7 why: ${why}`}`;
+  const proof = safe(provingTest(item.anchors));
+  const build = (s, src2, loc2, tst2 = proof) => `[${item.id}] ${item.type}${loc2 === "" ? "" : ` \xB7 ${loc2}`} \xB7 ${s}${src2 === "" ? "" : ` (${src2})`}${taint}${why === "" ? "" : ` \xB7 why: ${why}`}${tst2 === "" ? "" : ` \xB7 test: ${tst2}`}`;
   const row4 = build(statement, source, where2);
   const room = maxTokens * 4;
   if (row4.length <= room) return row4;
-  const [src, loc] = [cutLeft(source, 40), cutLeft(where2, 40)];
-  return build(cut(statement, room - build("", src, loc).length), src, loc);
+  const [src, loc, tst] = [cutLeft(source, 40), cutLeft(where2, 40), cutLeft(proof, 50)];
+  return build(cut(statement, room - build("", src, loc, tst).length), src, loc, tst);
 }
 
 // src/slice.ts
@@ -1306,7 +1311,12 @@ async function testsFor(p, key2) {
   const a = await p.ask("tests", { key: key2 });
   const list2 = a["tests"];
   if (!Array.isArray(list2)) bad("tests");
-  return { snapshot: text(a["snapshot"], "snapshot"), tests: list2.map((d) => ({ key: text(d?.["key"], "test key"), evidence: text(d?.["evidence"], "evidence") })) };
+  return { snapshot: text(a["snapshot"], "snapshot"), tests: list2.map((d) => ({ key: text(d?.["key"], "test key"), evidence: text(d?.["evidence"], "evidence"), ...Number.isInteger(d?.["line"]) && d?.["line"] >= 1 ? { line: d["line"] } : {} })) };
+}
+var EXECUTING = ["call", "dispatch", "observed", "transitive_call"];
+function nearestTest(tests) {
+  const rank3 = (t) => EXECUTING.indexOf(t.evidence);
+  return tests.filter((t) => rank3(t) >= 0).reduce((best, t) => best === null || rank3(t) < rank3(best) ? t : best, null);
 }
 
 // src/anchors/refresh.ts
@@ -1511,13 +1521,16 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
     }
     const undone = undoneFrom(db, row4.id);
     const outcomes = [];
+    const current = [];
     let skipped = false;
     for (const a of anchors) {
       if (!isManaged(a)) {
         outcomes.push({ kind: "keep" });
+        current.push(void 0);
         continue;
       }
       const c = await since(a.snapshot);
+      current.push(c.snapshot);
       try {
         const o = await resolve6(a, c, undone);
         if (o.kind !== "keep") attempts++;
@@ -1530,19 +1543,40 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
       }
     }
     if (skipped) result.skipped++;
+    const finals = [];
+    for (const [i, a] of anchors.entries()) {
+      const o = outcomes[i];
+      const fin = o.kind === "current" ? { ...o.anchor, ...a.test === void 0 ? {} : { test: a.test }, ...a.testsAt === void 0 ? {} : { testsAt: a.testsAt } } : o.kind === "move" ? o.anchor : a;
+      if (o.kind === "stale" || !isManaged(fin) || fin.testsAt === current[i]) {
+        finals.push(fin);
+        continue;
+      }
+      try {
+        const found = await testsFor(provider, fin.symbol);
+        const nearest = nearestTest(found.tests);
+        const { test: _old, ...bare } = fin;
+        finals.push({ ...bare, testsAt: found.snapshot, ...nearest === null ? {} : { test: { name: parts(nearest.key).name, path: parts(nearest.key).path, ...nearest.line === void 0 ? {} : { line: nearest.line } } } });
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error;
+        log({ event: "tests_skipped", item: row4.id, reason: error.message });
+        finals.push(fin);
+      }
+    }
+    const testsChanged = finals.some((f, i) => JSON.stringify(f) !== JSON.stringify(outcomes[i].kind === "current" || outcomes[i].kind === "move" ? outcomes[i].anchor : anchors[i]));
     const rest = anchors.map((a) => isManaged(a) ? null : checkAnchor(a, read2.text(a.path) ?? null));
-    if (outcomes.every((o) => o.kind === "keep") && rest.every((r) => r === null)) continue;
-    result.checked++;
+    const onlyTests = outcomes.every((o) => o.kind === "keep") && rest.every((r) => r === null);
+    if (onlyTests && !testsChanged) continue;
+    if (!onlyTests) result.checked++;
     const managedKept = anchors.some((a, i) => outcomes[i].kind === "keep" && isManaged(a));
     const failed = outcomes.findIndex((o) => o.kind === "stale");
     const restFailed = rest.findIndex((r) => r !== null && !r.ok);
     const next = anchors.map((a, i) => {
       const o = outcomes[i];
       const { candidates: _drop, ...clean } = a;
-      if (o.kind === "current" || o.kind === "move") return o.anchor;
+      if (o.kind === "current" || o.kind === "move") return finals[i];
       if (o.kind === "stale") return o.candidates.length === 0 ? clean : { ...clean, candidates: o.candidates };
       const r = rest[i];
-      return r?.ok === true ? r.anchor : isManaged(a) ? a : clean;
+      return r?.ok === true ? r.anchor : isManaged(a) ? finals[i] : clean;
     });
     const reason = failed >= 0 ? outcomes[failed].reason : restFailed >= 0 ? rest[restFailed].reason : null;
     const moves = outcomes.flatMap((o, i) => o.kind === "move" ? [{ from: anchors[i], to: o.anchor }] : []);
@@ -1574,6 +1608,7 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
       }
     });
     if (done !== true) continue;
+    if (onlyTests) continue;
     if (reason !== null) result.stale++;
     else result.current++;
     result.moved += moves.length;
@@ -3902,11 +3937,17 @@ var row2 = (r) => safe(
   `- [${r.id}] ${r.type}, ${r.scope}, net ${net(r)} (helped ${r.helped}, wrong ${r.wrong}, stale ${r.stale}), confidence ${r.confidence.toFixed(2)}` + // A quarantined item reads as an instruction: its text is never shown.
   (r.quarantine === null ? `: ${JSON.stringify(safe(r.statement))}` : `, quarantined (${r.quarantine}), statement withheld`)
 ) + "\n";
-function renderReport(tenant, { ranked, none }) {
+function testCoverage(db, tenant) {
+  const rows = db.prepare(`SELECT anchors_json FROM items WHERE tenant = ? AND status = 'active' AND anchors_json LIKE '%"symbol"%'`).all(tenant);
+  const anchors = rows.map((r) => JSON.parse(r.anchors_json).filter((a) => a.symbol !== void 0 && a.snapshot !== void 0)).filter((a) => a.length > 0);
+  return { code: anchors.length, named: anchors.filter((a) => a.some((x) => x.test !== void 0)).length };
+}
+function renderReport(tenant, { ranked, none }, coverage) {
   const section = (title, list2) => `${title}
 ${list2.length === 0 ? "(none)\n" : list2.map(row2).join("")}`;
   return `Tenant ${tenant}
-` + fence(PROPOSALS_LABEL, `${section("Ranked by net feedback, then confidence", ranked)}${section("No feedback", none)}`);
+${coverage === void 0 ? "" : `${coverage}
+`}` + fence(PROPOSALS_LABEL, `${section("Ranked by net feedback, then confidence", ranked)}${section("No feedback", none)}`);
 }
 
 // src/export/markdown.ts
@@ -5872,7 +5913,9 @@ function reportCommand(args, data) {
     const db = openStore(tenantFile(data, tenant), false);
     if (db === null) continue;
     try {
-      out.push(renderReport(tenant, tenantReport(db, tenant)));
+      const { code, named } = testCoverage(db, tenant);
+      const line = providerConfig(data) === void 0 ? "none, no code anchor provider is configured" : `${named} of ${code}`;
+      out.push(renderReport(tenant, tenantReport(db, tenant), `Code items naming an executing test: ${line}`));
     } finally {
       db.close();
     }

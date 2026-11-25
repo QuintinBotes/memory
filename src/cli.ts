@@ -43,7 +43,7 @@ import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/pla
 import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
 import { SYMBOL_KEY } from './import/silos.ts';
-import { renderReport, tenantReport } from './report/report.ts';
+import { renderReport, tenantReport, testCoverage } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
@@ -549,7 +549,9 @@ function reportCommand(args: string[], data: string): void {
     const db = openStore(tenantFile(data, tenant), false);
     if (db === null) continue;
     try {
-      out.push(renderReport(tenant, tenantReport(db, tenant)));
+      const { code, named } = testCoverage(db, tenant);
+      const line = providerConfig(data) === undefined ? 'none, no code anchor provider is configured' : `${named} of ${code}`;
+      out.push(renderReport(tenant, tenantReport(db, tenant), `Code items naming an executing test: ${line}`));
     } finally {
       db.close();
     }
