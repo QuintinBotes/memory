@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { setup, run, runAsync, remember } from './helpers.mjs';
+import { setup, run, runAsync, remember, until } from './helpers.mjs';
 
 // Review findings on #24: a read-then-write that is not under the write lock, and the injection log's rewrite, lose or
 // repeat work when two processes meet. Each race is made deterministic by a lock holder that releases on cue.
@@ -20,7 +20,10 @@ const query = (s, sql, ...args) => {
 };
 const key = (text) => createHash('sha256').update(text.toLowerCase()).digest('hex');
 const hook = (s, name, input) => runAsync([name], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 's1', cwd: s.acmeApi, ...input }) });
-const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+/** A contender's env: it logs a line as it asks for the write lock, which the holder has, so it is about to queue. */
+const queueLog = (s) => join(s.base, 'queued.log');
+const queueing = (s) => ({ LOCK_WAIT_LOG: queueLog(s) });
+const waitQueued = (s, n) => until(() => existsSync(queueLog(s)) && readFileSync(queueLog(s), 'utf8').split('\n').filter(Boolean).length >= n);
 const logFile = (s) => join(s.data, 'logs/injections.jsonl');
 const logLines = (s) => readFileSync(logFile(s), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l));
 
@@ -64,8 +67,8 @@ test('a sweep reads its rows under the write lock, so two sweeps never propose t
   }
   const h = holder(s, rows);
   await h.locked;
-  const sweeps = [runAsync(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA }), runAsync(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA })];
-  await sleep(1500);
+  const sweeps = [runAsync(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA, env: queueing(s) }), runAsync(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA, env: queueing(s) })];
+  await waitQueued(s, 2);
   await h.go();
   const done = await Promise.all(sweeps);
   for (const r of done) assert.equal(r.status, 0, r.stderr);
@@ -84,8 +87,8 @@ test('a proposal waits its turn at the tombstone check: a statement rejected whi
     { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } } },
     { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_propose', arguments: { statement, scope: 'repository', type: 'precedent', evidence: { source: 'probe:t' } } } },
   ];
-  const proposing = runAsync(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: calls.map((c) => JSON.stringify(c)).join('\n') + '\n' });
-  await sleep(1500);
+  const proposing = runAsync(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: calls.map((c) => JSON.stringify(c)).join('\n') + '\n', env: queueing(s) });
+  await waitQueued(s, 1);
   await h.go();
   assert.equal((await proposing).status, 0);
   assert.equal(query(s, "SELECT count(*) AS n FROM items WHERE statement_key = ? AND status = 'proposed'", key(statement))[0].n, 0);
@@ -101,8 +104,8 @@ test('an import rejection is applied to what is proposed when the lock is won, n
   writeFileSync(cfg, JSON.stringify({ ...JSON.parse(readFileSync(cfg, 'utf8')), imports: { [s.acmeApi]: { rejections: 'rejected.jsonl' } } }));
   const h = holder(s, [{ id: 'm-prop', statement, statement_key: key(statement), status: 'proposed' }]);
   await h.locked;
-  const importing = runAsync(['import'], { cwd: s.base, data: s.data, config: s.configA });
-  await sleep(1500);
+  const importing = runAsync(['import'], { cwd: s.base, data: s.data, config: s.configA, env: queueing(s) });
+  await waitQueued(s, 1);
   await h.go();
   const r = await importing;
   assert.equal(r.status, 0, r.stderr);

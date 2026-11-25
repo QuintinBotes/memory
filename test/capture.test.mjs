@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setup, run, runAsync, remember, assemble } from './helpers.mjs';
+import { setup, run, runAsync, remember, assemble, until } from './helpers.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const LESSON = 'Retries in the ledger must be idempotent because the queue redelivers';
@@ -252,7 +252,7 @@ test('S7 the hook returns at once with the work detached, and the capture lands 
   });
   assert.equal(r.status, 0);
   assert.equal(r.stdout, '');
-  for (let i = 0; i < 100 && !existsSync(join(logs(s), 'capture.jsonl')); i++) await new Promise((ok) => setTimeout(ok, 100));
+  await until(() => existsSync(join(logs(s), 'capture.jsonl')));
   assert.equal(items(s).length, 1);
   // Broken input never fails the hook either.
   assert.equal(run(['capture'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: 'not json' }).status, 0);

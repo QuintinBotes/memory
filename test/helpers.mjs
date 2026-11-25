@@ -81,7 +81,7 @@ function childEnv({ data, config, path, env: extra, netLog }) {
   const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv, ...extra };
   env.NODE_OPTIONS = `--import ${pathToFileURL(join(root, 'test', 'no-network.mjs')).href}`;
   // WORK_LOG names the file that receives this run's SQLite work (test/work-count.mjs).
-  if (env.WORK_LOG) env.NODE_OPTIONS += ` --import ${pathToFileURL(join(root, 'test', 'work-count.mjs')).href}`;
+  if (env.WORK_LOG || env.LOCK_WAIT_LOG) env.NODE_OPTIONS += ` --import ${pathToFileURL(join(root, 'test', 'work-count.mjs')).href}`;
   env.NO_NET_LOG = netLog ?? netDefault;
   if (data) env.MEMORY_DATA_DIR = data;
   if (config) env.CLAUDE_CONFIG_DIR = config;
@@ -186,4 +186,9 @@ export function fenced(text) {
   const marks = lines.map((l, i) => (/^\s{0,3}(?:~{3,}|`{3,})/.test(l) ? i : -1)).filter((i) => i >= 0);
   if (marks.length !== 2) throw new Error(`expected one fence, found ${marks.length} fence lines in:\n${text}`);
   return lines.slice(marks[0] + 1, marks[1]);
+}
+
+/** Waits until `done()` is true. The limit only ends a hung run: a slow machine just takes longer. */
+export async function until(done, limitMs = 120_000) {
+  for (const end = Date.now() + limitMs; !done() && Date.now() < end;) await new Promise((ok) => setTimeout(ok, 20));
 }

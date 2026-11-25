@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { setup, run, runAsync, remember, sessionStart, storeBytes } from './helpers.mjs';
+import { setup, run, runAsync, remember, sessionStart, storeBytes, until } from './helpers.mjs';
 
 function seeded() {
   const s = setup();
@@ -140,8 +140,20 @@ test('purge waits out a reader that lets go soon, then leaves no recoverable byt
   const { id } = db.prepare('SELECT id FROM items').get();
   db.close();
   const reader = await holdReader(file);
-  setTimeout(() => reader.kill(), 1000);
-  const r = await runAsync(['purge', '--item', id, '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  const purging = runAsync(['purge', '--item', id, '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  // The purge's deletions commit, then it waits for the reader: let go once the item is gone, however long the start-up took.
+  const gone = () => {
+    const peek = new DatabaseSync(file, { readOnly: true });
+    try {
+      peek.exec('PRAGMA busy_timeout = 30000');
+      return peek.prepare('SELECT count(*) AS n FROM items WHERE id = ?').get(id).n === 0;
+    } finally {
+      peek.close();
+    }
+  };
+  await until(gone);
+  reader.kill();
+  const r = await purging;
   assert.equal(r.status, 0, r.stderr);
   assert.equal(storeBytes(s.data).includes('xylophone7731'), false);
 });

@@ -1,6 +1,6 @@
-// Preloaded (NODE_OPTIONS=--import) when a test sets WORK_LOG: counts what the process asked of SQLite and writes
+// Preloaded (NODE_OPTIONS=--import) when a test sets WORK_LOG or LOCK_WAIT_LOG: counts what the process asked of SQLite and writes
 // { statements, rows, busyTimeouts } to that file on exit, so a test can assert the work done instead of the time taken.
-import { writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { DatabaseSync, StatementSync } from 'node:sqlite';
 
 const stats = { statements: 0, rows: 0, busyTimeouts: [] };
@@ -12,6 +12,8 @@ DatabaseSync.prototype.prepare = function (...args) {
 };
 const exec = DatabaseSync.prototype.exec;
 DatabaseSync.prototype.exec = function (sql) {
+  // LOCK_WAIT_LOG: one line per write-lock request, written before it can block, so a test can wait for a process to queue.
+  if (process.env.LOCK_WAIT_LOG && /BEGIN IMMEDIATE/.test(String(sql))) appendFileSync(process.env.LOCK_WAIT_LOG, '1\n');
   for (const m of String(sql).matchAll(/busy_timeout\s*=\s*(\d+)/g)) stats.busyTimeouts.push(Number(m[1]));
   return exec.call(this, sql);
 };
@@ -27,4 +29,6 @@ StatementSync.prototype.get = function (...args) {
   if (row !== undefined) stats.rows++;
   return row;
 };
-process.on('exit', () => writeFileSync(process.env.WORK_LOG, JSON.stringify(stats)));
+process.on('exit', () => {
+  if (process.env.WORK_LOG) writeFileSync(process.env.WORK_LOG, JSON.stringify(stats));
+});
