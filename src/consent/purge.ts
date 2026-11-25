@@ -123,6 +123,9 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
     // Failure episodes (#18) hold no item id: a purge of the whole tenant or repository takes them all, --older-than those before its cut-off.
     if (scope.all === true || scope.tenant !== undefined || scope.repository !== undefined) db.prepare('DELETE FROM episodes').run();
     else if (scope.before !== undefined) db.prepare('DELETE FROM episodes WHERE at < ?').run(scope.before);
+    // Transcript records and compaction episodes (#12) likewise.
+    if (scope.all === true || scope.tenant !== undefined || scope.repository !== undefined) db.prepare('DELETE FROM transcripts').run();
+    else if (scope.before !== undefined) db.prepare('DELETE FROM transcripts WHERE at < ?').run(scope.before);
     // A vector is derived from an active item's text: an item that went back to proposed, or became a tombstone, keeps none.
     db.prepare("DELETE FROM item_vectors WHERE item_id NOT IN (SELECT id FROM items WHERE status = 'active')").run();
     // A deleted item's audit trail goes with it: an anchor_moved entry names its cited file.

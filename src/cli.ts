@@ -50,6 +50,7 @@ import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, reanchorCandidates, renderProposals, type Proposal } from './review/review.ts';
+import { processTranscripts, recordTranscript, transcriptsOn } from './capture/transcripts.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { captureCi } from './capture/ci.ts';
 import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './capture/failures.ts';
@@ -71,11 +72,13 @@ suppressSqliteExperimentalWarning();
 const USAGE = `usage: memory <command>
 
   init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
-       [--failing-commands on|off] [--recall on] [--confirm]
+       [--failing-commands on|off] [--transcripts on|off] [--recall on] [--confirm]
       show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
       sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
       --failing-commands on keeps failed Bash commands as scrubbed episodes, 30 days, so the same command passing
-      later becomes a repair proposal; off is the default. --recall on turns recall back on after memory turned it
+      later becomes a repair proposal; off is the default. --transcripts on records each session's transcript path
+      at its end and turns your corrections in it into quoted proposals at the next session start or sweep; off is
+      the default. --recall on turns recall back on after memory turned it
       off itself, when two memory-linked reverts came within seven days
   remember [--scope repository|organisation|person|global] [--type <type>]
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
@@ -168,6 +171,9 @@ const USAGE = `usage: memory <command>
       count the reverts of commits memory linked items to, as the hook does after a git revert
   pre-compact
       the PreCompact hook: at most 1,000 characters of the items shown at the point of action this session
+  transcript
+      the SessionEnd and PostCompact hook, with the transcripts opt-in on: records the transcript's path (never its text),
+      or a compaction's redacted summary as an episode; the next session start or sweep reads the corrections
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
       as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
@@ -215,7 +221,7 @@ function setUp(data: string): Config {
 function init(args: string[], data: string): void {
   const { values } = parseArgs({
     args,
-    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, 'failing-commands': { type: 'string' }, recall: { type: 'string' }, confirm: { type: 'boolean' } },
+    options: { tenant: { type: 'string', multiple: true }, bind: { type: 'string' }, automation: { type: 'string' }, 'failing-commands': { type: 'string' }, transcripts: { type: 'string' }, recall: { type: 'string' }, confirm: { type: 'boolean' } },
   });
   const network = networkFilesystem(data);
   if (network !== undefined) {
@@ -246,6 +252,10 @@ function init(args: string[], data: string): void {
   if (values['failing-commands'] !== undefined) {
     if (values['failing-commands'] !== 'on' && values['failing-commands'] !== 'off') throw new Refusal('--failing-commands is on or off', 2);
     config.optIns.failingCommands = values['failing-commands'] === 'on';
+  }
+  if (values.transcripts !== undefined) {
+    if (values.transcripts !== 'on' && values.transcripts !== 'off') throw new Refusal('--transcripts is on or off', 2);
+    config.optIns.transcripts = values.transcripts === 'on';
   }
   if (values.recall !== undefined) {
     if (values.recall !== 'on') throw new Refusal('--recall can only be on: memory turns it off itself', 2);
@@ -912,14 +922,16 @@ function recallCommand(args: string[], data: string, cwd: string): void {
 
 /** `memory sweep`, or with `due` the session start's: each store this repository may see, once a day. */
 function sweepCommand(data: string, cwd: string, due: boolean): void {
-  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
   let proposed = 0;
-  for (const { file } of proposalStores(data, context)) {
+  for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false, due ? HOOK_BUSY_MS : undefined);
     if (db === null) continue;
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
       expireEpisodes(db);
+      if (tenant !== '' && transcriptsOn(config)) processTranscripts(db, tenant);
     } finally {
       db.close();
     }
@@ -1079,6 +1091,15 @@ function revertsCommand(data: string, cwd: string): void {
     console.log(message === '' ? 'no new memory-linked reverts' : (JSON.parse(message) as { systemMessage: string }).systemMessage);
   } finally {
     db.close();
+  }
+}
+
+/** The SessionEnd hook's second job and the PostCompact hook: record a transcript's path, or a compaction's summary. Silent, never fails the session. */
+function transcriptHook(data: string): void {
+  try {
+    recordTranscript(data, hookInput());
+  } catch {
+    // Silent by design.
   }
 }
 
@@ -1370,6 +1391,8 @@ async function main(argv: string[]): Promise<void> {
       return ciCommand(data, process.cwd());
     case 'reverts':
       return revertsCommand(data, process.cwd());
+    case 'transcript':
+      return transcriptHook(data);
     case 'pre-compact':
       return preCompactHook(data);
     case 'capture':
