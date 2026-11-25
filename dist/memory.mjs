@@ -1039,20 +1039,30 @@ var fence = (label, body) => `~~~text ${label}
 ${body}~~~
 `;
 var location = (a) => a.symbol !== void 0 ? `${a.symbol.split("#")[1]} ${a.path}` : a.start === void 0 ? a.path : `${a.path}:${a.start}`;
+var provingTest = (anchors) => {
+  const t = anchors.find((a) => a.test !== void 0)?.test;
+  return t === void 0 ? "" : `${t.name} ${t.path}${t.line === void 0 ? "" : `:${t.line}`}`;
+};
 var cut = (text4, room) => text4.length <= room ? text4 : `${text4.slice(0, Math.max(0, room - 1))}\u2026`;
 var cutLeft = (text4, room) => text4.length <= room ? text4 : `\u2026${text4.slice(text4.length - room + 1)}`;
 function leanRow(item, why = "", maxTokens = Infinity) {
   const where2 = safe(item.anchors.map(location).join(", "));
   const source = item.source !== "" && item.source !== "remember" ? safe(item.source) : "";
   const statement = safe(item.statement);
-  const taint = item.taint === void 0 ? "" : ` \xB7 tainted: ${safe(taintList(item.taint))}`;
-  const build = (s, src2, loc2) => `[${item.id}] ${item.type}${loc2 === "" ? "" : ` \xB7 ${loc2}`} \xB7 ${s}${src2 === "" ? "" : ` (${src2})`}${taint}${why === "" ? "" : ` \xB7 why: ${why}`}`;
-  const row4 = build(statement, source, where2);
+  const taintText = item.taint === void 0 ? "" : safe(taintList(item.taint));
+  const proof = safe(provingTest(item.anchors));
+  const build = (s, src, loc, tst, taint, w) => `[${item.id}] ${item.type}${loc === "" ? "" : ` \xB7 ${loc}`} \xB7 ${s}${src === "" ? "" : ` (${src})`}${taint === "" ? "" : ` \xB7 tainted: ${taint}`}${w === "" ? "" : ` \xB7 why: ${w}`}${tst === "" ? "" : ` \xB7 test: ${tst}`}`;
+  const row4 = build(statement, source, where2, proof, taintText, why);
   const room = maxTokens * 4;
   if (row4.length <= room) return row4;
-  const [src, loc] = [cutLeft(source, 40), cutLeft(where2, 40)];
-  return build(cut(statement, room - build("", src, loc).length), src, loc);
+  for (const [n, k, tst, taint, w] of [[40, 40, 50, Infinity, Infinity], [30, 30, 40, 40, 60], [16, 16, 24, 16, 24]]) {
+    const [src, loc, p, ta, wh] = [cutLeft(source, n), cutLeft(where2, k), cutLeft(proof, tst), cut(taintText, taint), cut(why, w)];
+    const space = room - build("", src, loc, p, ta, wh).length;
+    if (space >= MIN_STATEMENT || n === 16) return cut(build(cut(statement, Math.max(0, space)), src, loc, p, ta, wh), room);
+  }
+  return row4;
 }
+var MIN_STATEMENT = 12;
 
 // src/slice.ts
 var SCOPE_POINTS = { repository: 2, organisation: 1, person: 1, global: 0.5 };
@@ -1302,11 +1312,27 @@ async function impactOf(p, repository, keys) {
   });
   return { snapshot: text(a["snapshot"], "snapshot"), dependents };
 }
+var cleanPath = (p) => p.length <= 200 && !p.startsWith("/") && !/^[A-Za-z]:/.test(p) && !p.includes("\\") && !/[\u0000-\u001f]/.test(p) && p.split("/").every((s) => s !== "" && s !== "." && s !== "..");
+function provingTest2(d) {
+  const e = d;
+  if (typeof e !== "object" || e === null) return null;
+  const [key2, evidence, line] = [e["key"], e["evidence"], e["line"]];
+  if (typeof key2 !== "string" || typeof evidence !== "string" || evidence === "") return null;
+  const [path, name, kind, ...more] = key2.split("#");
+  if (path === void 0 || !cleanPath(path) || name === void 0 || name === "" || name.length > 200 || kind === void 0 || kind === "" || more.length > 0) return null;
+  if (line !== void 0 && !(Number.isInteger(line) && line >= 1 && line <= 1e7)) return null;
+  return { key: key2, evidence, ...line === void 0 ? {} : { line } };
+}
 async function testsFor(p, key2) {
   const a = await p.ask("tests", { key: key2 });
   const list2 = a["tests"];
   if (!Array.isArray(list2)) bad("tests");
-  return { snapshot: text(a["snapshot"], "snapshot"), tests: list2.map((d) => ({ key: text(d?.["key"], "test key"), evidence: text(d?.["evidence"], "evidence") })) };
+  return { snapshot: text(a["snapshot"], "snapshot"), tests: list2.flatMap((d) => provingTest2(d) ?? []) };
+}
+var EXECUTING = ["call", "dispatch", "observed", "transitive_call"];
+function nearestTest(tests) {
+  const rank3 = (t) => EXECUTING.indexOf(t.evidence);
+  return tests.filter((t) => rank3(t) >= 0).reduce((best, t) => best === null || rank3(t) < rank3(best) ? t : best, null);
 }
 
 // src/anchors/refresh.ts
@@ -1357,6 +1383,7 @@ var REASONS = ["path gone", "cited text gone", "signature changed", "key gone", 
 var MIN_MOVE_TOKENS = 10;
 var tokenCount = (text4) => (text4.match(/[A-Za-z0-9_$]+|[^\sA-Za-z0-9_$]/g) ?? []).length;
 var ANCHORS_PER_RUN = 50;
+var TESTS_PER_RUN = 50;
 var parts = (key2) => {
   const [path = "", name = "", kind = ""] = key2.split("#");
   return { path, name, kind };
@@ -1458,7 +1485,7 @@ function indexOf(c) {
   return i;
 }
 var atHead = (head, commit) => commit !== void 0 && commit.length >= 7 && head.startsWith(commit);
-async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { limit = ANCHORS_PER_RUN, log = () => void 0 } = {}) {
+async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { limit = ANCHORS_PER_RUN, testLimit = TESTS_PER_RUN, log = () => void 0 } = {}) {
   const result = { examined: 0, checked: 0, current: 0, moved: 0, stale: 0, restored: 0, skipped: 0, left: 0 };
   const rows = db.prepare(
     `SELECT id, status, status_reason, anchors_json FROM items
@@ -1503,6 +1530,9 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
   }
   const touch = db.prepare("UPDATE items SET anchors_json = ? WHERE id = ? AND anchors_json = ?");
   let attempts = 0;
+  let lookups = 0;
+  let testsFailed = false;
+  let testsLeft = 0;
   for (const row4 of rows) {
     const anchors = JSON.parse(row4.anchors_json);
     if (attempts >= limit) {
@@ -1511,13 +1541,16 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
     }
     const undone = undoneFrom(db, row4.id);
     const outcomes = [];
+    const current = [];
     let skipped = false;
     for (const a of anchors) {
       if (!isManaged(a)) {
         outcomes.push({ kind: "keep" });
+        current.push(void 0);
         continue;
       }
       const c = await since(a.snapshot);
+      current.push(c.snapshot);
       try {
         const o = await resolve7(a, c, undone);
         if (o.kind !== "keep") attempts++;
@@ -1530,19 +1563,49 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
       }
     }
     if (skipped) result.skipped++;
+    const finals = [];
+    let waiting = false;
+    for (const [i, a] of anchors.entries()) {
+      const o = outcomes[i];
+      const fin = o.kind === "current" ? { ...o.anchor, ...a.test === void 0 ? {} : { test: a.test }, ...a.testsAt === void 0 ? {} : { testsAt: a.testsAt } } : o.kind === "move" ? o.anchor : a;
+      if (o.kind === "stale" || !isManaged(fin) || fin.testsAt === current[i]) {
+        finals.push(fin);
+        continue;
+      }
+      if (testsFailed || lookups >= testLimit) {
+        if (!testsFailed && !waiting) testsLeft++;
+        waiting = true;
+        finals.push(fin);
+        continue;
+      }
+      lookups++;
+      try {
+        const found = await testsFor(provider, fin.symbol);
+        const nearest = nearestTest(found.tests);
+        const { test: _old, ...bare } = fin;
+        finals.push({ ...bare, testsAt: found.snapshot, ...nearest === null ? {} : { test: { name: parts(nearest.key).name, path: parts(nearest.key).path, ...nearest.line === void 0 ? {} : { line: nearest.line } } } });
+      } catch (error) {
+        if (!(error instanceof ProviderError) || error instanceof ForeignAnswer) throw error;
+        log({ event: "tests_skipped", item: row4.id, reason: error.message });
+        testsFailed = true;
+        finals.push(fin);
+      }
+    }
+    const testsChanged = finals.some((f, i) => JSON.stringify(f) !== JSON.stringify(outcomes[i].kind === "current" || outcomes[i].kind === "move" ? outcomes[i].anchor : anchors[i]));
     const rest = anchors.map((a) => isManaged(a) ? null : checkAnchor(a, read2.text(a.path) ?? null));
-    if (outcomes.every((o) => o.kind === "keep") && rest.every((r) => r === null)) continue;
-    result.checked++;
+    const onlyTests = outcomes.every((o) => o.kind === "keep") && rest.every((r) => r === null);
+    if (onlyTests && !testsChanged) continue;
+    if (!onlyTests) result.checked++;
     const managedKept = anchors.some((a, i) => outcomes[i].kind === "keep" && isManaged(a));
     const failed = outcomes.findIndex((o) => o.kind === "stale");
     const restFailed = rest.findIndex((r) => r !== null && !r.ok);
     const next = anchors.map((a, i) => {
       const o = outcomes[i];
       const { candidates: _drop, ...clean } = a;
-      if (o.kind === "current" || o.kind === "move") return o.anchor;
+      if (o.kind === "current" || o.kind === "move") return finals[i];
       if (o.kind === "stale") return o.candidates.length === 0 ? clean : { ...clean, candidates: o.candidates };
       const r = rest[i];
-      return r?.ok === true ? r.anchor : isManaged(a) ? a : clean;
+      return r?.ok === true ? r.anchor : isManaged(a) ? finals[i] : clean;
     });
     const reason = failed >= 0 ? outcomes[failed].reason : restFailed >= 0 ? rest[restFailed].reason : null;
     const moves = outcomes.flatMap((o, i) => o.kind === "move" ? [{ from: anchors[i], to: o.anchor }] : []);
@@ -1574,11 +1637,13 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
       }
     });
     if (done !== true) continue;
+    if (onlyTests) continue;
     if (reason !== null) result.stale++;
     else result.current++;
     result.moved += moves.length;
   }
-  if (result.left > 0) log({ event: "capped", done: attempts, left: result.left });
+  result.left += testsLeft;
+  if (result.left > 0) log({ event: "capped", done: attempts, left: result.left, tests: lookups, testsLeft });
   return result;
 }
 function undoMove(db, moveId) {
@@ -4063,11 +4128,17 @@ var row2 = (r) => safe(
   `- [${r.id}] ${r.type}, ${r.scope}, net ${net(r)} (helped ${r.helped}, wrong ${r.wrong}, stale ${r.stale}), confidence ${r.confidence.toFixed(2)}` + // A quarantined item reads as an instruction: its text is never shown.
   (r.quarantine === null ? `: ${JSON.stringify(safe(r.statement))}` : `, quarantined (${r.quarantine}), statement withheld`)
 ) + "\n";
-function renderReport(tenant, { ranked, none }) {
+function testCoverage(db, tenant) {
+  const rows = db.prepare(`SELECT anchors_json FROM items WHERE tenant = ? AND status = 'active' AND anchors_json LIKE '%"symbol"%'`).all(tenant);
+  const anchors = rows.map((r) => JSON.parse(r.anchors_json).filter((a) => a.symbol !== void 0 && a.snapshot !== void 0)).filter((a) => a.length > 0);
+  return { code: anchors.length, named: anchors.filter((a) => a.some((x) => x.test !== void 0)).length };
+}
+function renderReport(tenant, { ranked, none }, coverage) {
   const section = (title, list2) => `${title}
 ${list2.length === 0 ? "(none)\n" : list2.map(row2).join("")}`;
   return `Tenant ${tenant}
-` + fence(PROPOSALS_LABEL, `${section("Ranked by net feedback, then confidence", ranked)}${section("No feedback", none)}`);
+${coverage === void 0 ? "" : `${coverage}
+`}` + fence(PROPOSALS_LABEL, `${section("Ranked by net feedback, then confidence", ranked)}${section("No feedback", none)}`);
 }
 
 // src/export/markdown.ts
@@ -5877,11 +5948,13 @@ async function anchorsCommand(args, data, cwd) {
   {
     if (sub === "refresh") {
       const limit = Number(process.env["MEMORY_ANCHORS_PER_RUN"]);
+      const testLimit = Number(process.env["MEMORY_TESTS_PER_RUN"]);
       const ran = await withJobLock(`${file}.anchors.lock`, async () => {
         try {
           const result = await withStore2(
             (db) => refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work), {
               ...Number.isInteger(limit) && limit > 0 ? { limit } : {},
+              ...Number.isInteger(testLimit) && testLimit > 0 ? { testLimit } : {},
               log: (event) => logAnchors(data, { repository, ...event })
             })
           );
@@ -6038,7 +6111,9 @@ function reportCommand(args, data) {
     const db = openStore(tenantFile(data, tenant), false);
     if (db === null) continue;
     try {
-      out.push(renderReport(tenant, tenantReport(db, tenant)));
+      const { code, named } = testCoverage(db, tenant);
+      const line = providerConfig(data) === void 0 ? "none, no code anchor provider is configured" : `${named} of ${code}`;
+      out.push(renderReport(tenant, tenantReport(db, tenant), `Code items naming an executing test: ${line}`));
     } finally {
       db.close();
     }

@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failing provider changes nothing and anchors are checked by path. Consent
   plan 9 adds the `symbols` category. No schema change.
 
+- Items name the tests that prove them (#17). The anchor refresh asks the code
+  anchor provider's `tests` op for each anchored symbol, once per snapshot, and
+  keeps the nearest test whose evidence executes it (`call`, `dispatch`,
+  `observed`, `transitive_call`; never `reference` or `import`). A recalled row
+  ends `test: name path:line` within the same 60 estimated tokens; `memory
+  report` says how many code items name a test. Nothing is looked up inside a
+  hook. A run makes at most `MEMORY_TESTS_PER_RUN` lookups (default 50) and the
+  next continues; a failing `tests` op ends the lookups for the run without
+  costing any anchor its move; invalid entries are dropped. No consent or
+  schema change (consent plan stays 9).
+
 ## [0.7.0] - 2026-11-24
 
 ### Added

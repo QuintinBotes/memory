@@ -10,6 +10,7 @@
 //   flood    like hang, after writing 5 MB to stdout
 //   garbage  answer text that is not JSON
 //   gate     answer once the file named by `gate` exists
+// A fixture "testsMode" misbehaves for the tests op only: refuse (status error), garbage, no_snapshot, hang (ignores SIGTERM, 30 s)
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const [fixture, log] = process.argv.slice(2);
@@ -40,6 +41,11 @@ const file = (key) => key.split('#')[0];
 const snap = s.snapshots[s.current];
 const now = snap.symbols;
 const base = { status: 'ok', repository: s.answerRepository ?? s.repository, snapshot: s.current, ...(snap.commit === undefined ? {} : { commit: snap.commit }) };
+if (req.op === 'tests' && s.testsMode === 'garbage') return void process.stdout.write('not json\n');
+if (req.op === 'tests' && s.testsMode === 'hang') {
+  process.on('SIGTERM', () => {});
+  await new Promise((done) => setTimeout(done, 30_000));
+}
 const answer = (() => {
   switch (req.op) {
     case 'key':
@@ -63,6 +69,8 @@ const answer = (() => {
     case 'symbol_impact':
       return { ...base, dependents: s.dependents ?? [] };
     case 'tests':
+      if (s.testsMode === 'refuse') return { status: 'error', error: 'no tests here' };
+      if (s.testsMode === 'no_snapshot') return { status: 'no_snapshot' };
       return { ...base, tests: s.tests?.[req.key] ?? [] };
     default:
       return { status: 'error', error: `unknown op ${req.op}` };
