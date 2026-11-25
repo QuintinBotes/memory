@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Symbol anchors that follow the code (#10). A code anchor provider is the
+  command named under `impactProvider` in `config.json` (the one command, run
+  without a shell with one JSON line in and one out, that diff recall uses too;
+  `docs/provider.md`: a stable key per symbol, the symbol at a line, changes
+  between snapshots, impact and proving tests). `memory remember
+  --anchor path#name#kind` stores the key, signature, lines, hashes and
+  snapshot. At session start a detached `memory anchors refresh` re-resolves
+  only anchors in changed files: a moved or renamed symbol with an identical
+  content hash is re-anchored on its own, logged, and reversible with `memory
+  anchors undo <move-id>`; a changed signature or lost citation is stale; an
+  uncertain key loss is stale with a re-anchor proposal in `memory review`
+  (`memory anchors adopt`). An answer about another repository is dropped; a
+  failing provider changes nothing and anchors are checked by path. Consent
+  plan 9 adds the `symbols` category. No schema change.
+
 ## [0.7.0] - 2026-11-24
 
 ### Added

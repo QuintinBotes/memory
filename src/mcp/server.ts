@@ -2,6 +2,7 @@ import { isAbsolute, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { DatabaseSync } from 'node:sqlite';
 import { recheck } from '../anchors.ts';
+import { managedBy } from '../anchors/refresh.ts';
 import { withRefreshLock } from '../store/refresh-lock.ts';
 import { automationRefusal } from '../automation.ts';
 import { ConfigError, consented, currentConfigDir, loadConfig, organisationTerms, type Config } from '../config.ts';
@@ -202,7 +203,7 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
   const id = text(args, 'id');
   const format = args['format'] === undefined ? 'rows' : oneOf(args['format'], ['rows', 'json'] as const, 'format');
   const found = first(data, context, (db, store) => {
-    const checked = store.tenant === '' ? undefined : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository!, cwd, { id }));
+    const checked = store.tenant === '' ? undefined : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository!, cwd, { id, managed: managedBy(data, context.repository) }));
     // Proposals and tombstones are the owner's queue, not memory.
     const row = db
       .prepare(
@@ -303,7 +304,7 @@ function feedback(args: Args, data: string, context: Context, cwd: string): stri
   }[signal];
   const done = first(data, context, (db, store) => {
     // A stale report re-checks the citation first; one that fails at HEAD makes the item stale as the re-check does.
-    const gone = signal === 'stale' && store.tenant !== '' ? withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository!, cwd, { id }))?.staleItems.find((i) => i.id === id) : undefined;
+    const gone = signal === 'stale' && store.tenant !== '' ? withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository!, cwd, { id, managed: managedBy(data, context.repository) }))?.staleItems.find((i) => i.id === id) : undefined;
     if (gone !== undefined) return `${id} is stale: its citation fails at HEAD (${gone.reason}), so it leaves recall until the citation holds again`;
     db.exec('BEGIN IMMEDIATE');
     try {

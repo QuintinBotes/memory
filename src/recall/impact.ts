@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { runProvider } from '../provider/run.ts';
 import { posix } from 'node:path';
 import { git } from '../context.ts';
 import { covers } from '../consent/plan.ts';
@@ -18,8 +18,6 @@ export interface Dependent {
   neither: boolean;
 }
 
-/** A provider that does not answer in this long counts as failed; recall must stay cheap. */
-const PROVIDER_TIMEOUT_MS = 5000;
 const MAX_DEPENDENTS = 1000;
 
 /**
@@ -31,22 +29,9 @@ const MAX_DEPENDENTS = 1000;
 export function impact(config: Config, context: Context, cwd: string, range: string, changed: string[]): { dependents: Dependent[] } | { note: string } | null {
   if (config.impactProvider === undefined) return null;
   if (!covers(config, 'impact')) return { note: 'The impact provider was not run: agree to the current plan with memory init, then recall again. Path overlap only.' };
-  const [program, ...args] = config.impactProvider.command as [string, ...string[]];
-  // Only what a provider needs reaches it; the data directory and keys in the environment do not.
-  const env = { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '' };
-  const r = spawnSync(program, args, {
-    cwd,
-    env,
-    input: `${JSON.stringify({ op: 'impact', repository: context.repository, range, changed })}\n`,
-    encoding: 'utf8',
-    timeout: PROVIDER_TIMEOUT_MS,
-    // SIGTERM can be trapped; a provider must not be able to hold a recall.
-    killSignal: 'SIGKILL',
-    maxBuffer: 4 * 1024 * 1024,
-    stdio: ['pipe', 'pipe', 'ignore'],
-  });
+  const r = runProvider(config.impactProvider.command, cwd, { op: 'impact', repository: context.repository, range, changed });
   const failed = { note: 'The impact provider failed or answered unexpectedly. Path overlap only.' };
-  if (r.error !== undefined || r.status !== 0) return failed;
+  if (!r.ok) return failed;
   let answer: { status?: unknown; dependents?: unknown } | null;
   try {
     answer = JSON.parse(r.stdout) as typeof answer;

@@ -22,6 +22,13 @@ export interface Anchor {
   citedHash?: string;
   /** A symbol key, `path#qualified_name#kind`. */
   symbol?: string;
+  /** What a code anchor provider reported when it last resolved `symbol` (docs/provider.md); all present or none. */
+  signature?: string;
+  contentHash?: string;
+  fileHash?: string;
+  snapshot?: string;
+  /** On a stale anchor whose key is gone: the added symbols the owner may re-anchor to (`memory anchors adopt`). */
+  candidates?: string[];
 }
 
 export interface NewItem {

@@ -18,6 +18,7 @@ export interface Proposal {
    */
   status: string;
   stale_reports: number;
+  status_reason: string | null;
   scope: string;
   scope_key: string;
   type: string;
@@ -32,6 +33,10 @@ export interface Proposal {
   supersedes: string | null;
   older: { id: string; type: string; statement: string; evidence: Proposal['evidence'] } | null;
 }
+
+/** The keys a stale item's anchor could move to, when the refresh could not decide (`memory anchors adopt`). */
+export const reanchorCandidates = (p: Pick<Proposal, 'status' | 'status_reason' | 'anchors_json'>): string[] =>
+  p.status === 'stale' && p.status_reason === 'key gone' ? (JSON.parse(p.anchors_json) as { candidates?: string[] }[]).flatMap((a) => a.candidates ?? []) : [];
 
 /** What an automatic gate would have done: three corroborating signals, one from the owner, no contradiction. */
 export function shadow(p: Proposal): { decision: 'approve' | 'hold'; signals: number; owner: number } {
@@ -49,9 +54,10 @@ export function shadow(p: Proposal): { decision: 'approve' | 'hold'; signals: nu
 export function proposals(db: DatabaseSync, tenant: string, id?: string): Proposal[] {
   const rows = db
     .prepare(
-      `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports, supersedes FROM items
+      `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports, status_reason, supersedes FROM items
        WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0)
-              OR (status = 'active' AND EXISTS (SELECT 1 FROM items o WHERE o.id = items.supersedes AND o.status = 'active')) OR (status = 'stale' AND status_reason = 'reported stale')) AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
+              OR (status = 'active' AND EXISTS (SELECT 1 FROM items o WHERE o.id = items.supersedes AND o.status = 'active')) OR (status = 'stale' AND status_reason = 'reported stale')
+              OR (status = 'stale' AND status_reason = 'key gone' AND anchors_json LIKE '%"candidates"%')) AND tenant = ? ${id === undefined ? '' : 'AND id = ?'}
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`,
     )
@@ -82,8 +88,9 @@ export function renderProposals(list: Proposal[]): string {
       const taint = taintOf(p.evidence);
       return [
         // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
-        safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${taint === null ? '' : `, tainted by ${taint}`}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}${p.status === 'stale' ? ', hidden by an agent through an older install' : p.stale_reports === 0 ? '' : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? '' : 's'}`}: ${JSON.stringify(safe(p.statement))}`),
+        safe(`- [${p.id}] ${p.type}, ${where}, trust ${p.origin_trust}${taint === null ? '' : `, tainted by ${taint}`}${p.quarantine === null ? '' : `, quarantined (${p.quarantine})`}${p.status === 'stale' ? (reanchorCandidates(p).length > 0 ? ', stale: its symbol is gone' : ', hidden by an agent through an older install') : p.stale_reports === 0 ? '' : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? '' : 's'}`}: ${JSON.stringify(safe(p.statement))}`),
         ...p.evidence.map((e) => evidenceLine('  ', e)),
+        ...(reanchorCandidates(p).length === 0 ? [] : [safe(`  re-anchor candidates: ${reanchorCandidates(p).join(', ')}; the owner decides with memory anchors adopt ${p.id} <key>`)]),
         ...(p.older === null
           ? []
           : [
