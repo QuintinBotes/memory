@@ -361,11 +361,11 @@ test('the Bash hook on every command stays cheap: it opens no store for a comman
   const holder = new DatabaseSync(tenantFile(s));
   holder.exec('BEGIN IMMEDIATE');
   try {
-    const started = Date.now();
-    const r = await hook('ls -la');
+    const r = await hook('ls -la', { WORK_LOG: log });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stdout, '');
-    assert.ok(Date.now() - started < 1500, 'a read-only pass does not wait for the lock');
+    // Not how long it took (that depends on the machine's load): the lock wait it asked SQLite for is the hook's short one.
+    assert.ok(Math.max(0, ...JSON.parse(readFileSync(log, 'utf8')).busyTimeouts) <= 500, 'a read-only pass does not wait for the lock');
     const blocked = await passed(s, 'npm run build');
     assert.equal(blocked.status, 0, 'a hook that cannot write still exits 0');
     assert.equal(repairs(s).length, 0);

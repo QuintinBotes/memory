@@ -39,12 +39,12 @@ function seeded({ on = true } = {}) {
 }
 
 /** The PreToolUse JSON Claude Code sends, run through the hook. */
-const hook = (s, tool, toolInput, extra = {}) =>
+const hook = (s, tool, toolInput, extra = {}, env) =>
   runAsync(['point-of-action'], {
-    cwd: s.acmeApi, data: s.data, config: s.configA,
+    cwd: s.acmeApi, data: s.data, config: s.configA, env,
     input: JSON.stringify({ session_id: 's1', hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: s.acmeApi, ...extra }),
   });
-const read = (s, extra) => hook(s, 'Read', { file_path: join(s.acmeApi, 'src/a.ts'), offset: 30, limit: 51 }, extra);
+const read = (s, extra, env) => hook(s, 'Read', { file_path: join(s.acmeApi, 'src/a.ts'), offset: 30, limit: 51 }, extra, env);
 /** The context the hook added; asserts it exited 0 and returned no permission decision. */
 function context(r) {
   assert.equal(r.status, 0, r.stderr);
@@ -225,15 +225,16 @@ test('with the write lock held the hook exits 0, prints nothing and counts the s
     process.stdin.resume();
   `], { stdio: ['pipe', 'pipe', 'inherit'] });
   await new Promise((ok) => holder.stdout.once('data', ok));
-  const started = Date.now();
-  const r = await read(s);
-  const took = Date.now() - started;
+  const work = join(s.base, 'work.json');
+  const r = await read(s, undefined, { WORK_LOG: work });
   const closed = new Promise((ok) => holder.on('exit', ok));
   holder.stdin.end();
   await closed;
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '');
-  assert.ok(took < 2000, `${took} ms`);
+  // Not how long it took (that depends on the machine's load): the lock wait it asked SQLite for is the hook's short one.
+  const { busyTimeouts } = JSON.parse(readFileSync(work, 'utf8'));
+  assert.ok(busyTimeouts.length > 0 && Math.max(...busyTimeouts) <= 500, `a hook waits at most 500 ms for a lock, not ${busyTimeouts}`);
   const lines = logged(s);
   assert.deepEqual(lines.map((l) => [l.event, l.via, l.agent, l.session]), [['skipped', 'point-of-action', 'main', 's1']]);
   assert.notEqual(context(await read(s)), null);
