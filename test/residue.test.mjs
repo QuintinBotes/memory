@@ -207,13 +207,15 @@ test('the injection log keeps no line of a purged item; --older-than drops lines
   assert.equal(existsSync(logFile(s)), false);
 });
 
-test('purging one item from a 10,000-item tenant takes under 2 seconds', () => {
+test('purging one item from a 10,000-item tenant reads nothing like 10,000 rows', () => {
   const s = setup();
   const id = idOf(remember(s.acmeApi, s.data, s.configA, 'Releases are tagged'));
   fill(acme(s), 10_000);
-  const start = Date.now();
-  assert.equal(purge(s, s.acmeApi, '--item', id, '--confirm').status, 0);
-  assert.ok(Date.now() - start < 2000, `${Date.now() - start} ms`);
+  const log = join(s.base, 'work.json');
+  assert.equal(run(['purge', '--item', id, '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA, env: { WORK_LOG: log } }).status, 0);
+  const work = JSON.parse(readFileSync(log, 'utf8'));
+  // Work done, not time taken: the purge is by id and does not read the other 10,000 items.
+  assert.ok(work.rows <= 200 && work.statements <= 200, `${work.rows} rows read in ${work.statements} statements`);
 });
 
 test('purge --source previews the id of every item it would return to proposed', () => {
