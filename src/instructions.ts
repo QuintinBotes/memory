@@ -26,7 +26,7 @@ const MAX_BYTES = 256 * 1024;
 const MAX_IMPORT_DEPTH = 5;
 /** Owner-approved support from which an item that no tool can check is proposed for an instruction file. */
 export const PROMOTE_SUPPORT = 3;
-const PROMOTABLE = new Set(['convention', 'preference', 'decision']);
+export const PROMOTABLE = new Set(['convention', 'preference', 'decision']);
 
 export interface InstructionLine {
   file: string;
@@ -45,7 +45,7 @@ export interface Instructions {
   userTarget: string;
 }
 
-const inside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+export const inside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
 /** The file's text up to `MAX_BYTES`, or null when it is missing, not a file, or reaches outside `root` through a link. */
 function readInside(path: string, root: string): string | null {
@@ -289,7 +289,7 @@ function writableTarget(ins: Instructions, file: string): string {
 }
 
 /** The whole file as text, or throws when it is over the cap or not valid UTF-8: a lossy rewrite would damage it. */
-function readWhole(path: string, name: string): string {
+export function readWhole(path: string, name: string): string {
   const bytes = readFileSync(path);
   if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
   try {
@@ -300,7 +300,7 @@ function readWhole(path: string, name: string): string {
 }
 
 /** Temp file in the same directory, then rename: the file is whole either way. Keeps the mode of an existing file. */
-function writeAtomic(path: string, content: string): void {
+export function writeAtomic(path: string, content: string): void {
   if (Buffer.byteLength(content) > MAX_BYTES) throw new Error(`${basename(path)} would exceed ${MAX_BYTES / 1024} KB; nothing was written`);
   const tmp = join(dirname(path), `.${basename(path)}.${randomBytes(4).toString('hex')}.tmp`);
   try {

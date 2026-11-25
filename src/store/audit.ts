@@ -30,6 +30,9 @@ export type AuditAction =
   | 'instruction_edit_proposed'
   | 'instruction_edit_applied'
   | 'instruction_edit_rejected'
+  | 'promotion_proposed'
+  | 'promotion_applied'
+  | 'promotion_rejected'
   | 'undone';
 
 export function recordAudit(

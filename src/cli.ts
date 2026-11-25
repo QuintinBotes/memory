@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { parseArgs } from 'node:util';
 import { suppressSqliteExperimentalWarning } from './warnings.ts';
@@ -36,6 +36,7 @@ import { serve } from './mcp/server.ts';
 import { EmbedError, WRITE_TIMEOUT_MS, providerFor } from './embed/provider.ts';
 import { embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
+import { DEFAULT_STANDARDS, applyPromotion, insidePath, promotions, propose as proposePromotions, rejectPromotion, renderPromotion } from './promote/promote.ts';
 import { applyEdit, edits, loadInstructions, rejectEdit, renderEdit, type Withheld } from './instructions.ts';
 import { appendInjections, injectionLock, logWithheld } from './store/injections.ts';
 import { PROPOSALS_LABEL, fence } from './render/rows.ts';
@@ -103,6 +104,11 @@ const USAGE = `usage: memory <command>
       the edits memory proposes to instruction files (CLAUDE.md, AGENTS.md): a loaded line an item contradicts (the file
       wins and the item is not recalled) and an item proven enough to be promoted into the file. Nothing is written until
       apply --confirm, which writes exactly the diff shown; reject resolves it. review lists the open ones
+  promote [--propose | --apply <id> [--yes-non-interactive] | --reject <id>]
+      turn an item that has proved itself into a check: a line of the review-standards file (imports' "standards" path,
+      docs/review-standards.md by default), or, for an item on a symbol no test executes, a test to write. --propose
+      stores the proposals and lists them; --apply, from a terminal, writes exactly the line shown, marks the item
+      promoted and takes it out of recall; --reject keeps the proposal as a tombstone. Nothing is committed or pushed
   undo <audit-id>
       reverse one merge or supersession, by the audit id its command printed
   sweep
@@ -670,6 +676,66 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
   }
   throw new Refusal(`no edit ${id} here; memory conflicts lists them`);
 }
+
+/**
+ * `memory promote [--propose | --apply <id> [--yes-non-interactive] | --reject <id>]`: proposals to turn proven items into
+ * checks, for the owner. Only apply writes a file, from a terminal, and it never commits.
+ */
+function promoteCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { propose: { type: 'boolean' }, apply: { type: 'string' }, reject: { type: 'string' }, 'yes-non-interactive': { type: 'boolean' } } });
+  const modes = [values.propose === true, values.apply !== undefined, values.reject !== undefined].filter(Boolean).length;
+  if (positionals.length > 0 || modes > 1 || (values['yes-non-interactive'] === true && values.apply === undefined)) {
+    throw new Refusal('usage: memory promote [--propose | --apply <id> [--yes-non-interactive] | --reject <id>]', 2);
+  }
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const top = git(cwd, 'rev-parse', '--show-toplevel')?.trim();
+  if (context.tenant === null || context.repository === null || context.owner === null || top === undefined) throw new Refusal(`no tenant applies here: ${context.reason}`);
+  const db = openStore(tenantFile(data, context.tenant), values.propose === true);
+  if (db === null) return void console.error('No promotions here.');
+  try {
+    if (values.propose === true) {
+      const configured = Object.entries(config.imports ?? {}).find(([checkout]) => realpathOrSelf(checkout) === realpathOrSelf(top))?.[1].standards;
+      const rel = insidePath(configured ?? DEFAULT_STANDARDS);
+      if (rel === null) console.error(`The review-standards path ${configured} is not inside the repository; no line is proposed for it.`);
+      const made = proposePromotions(db, context.tenant, context.repository, context.owner, top, rel);
+      console.error(`${made} new promotion proposal${made === 1 ? '' : 's'}.`);
+    }
+    const id = values.apply ?? values.reject;
+    const found = promotions(db, id);
+    if (id === undefined) {
+      const open = found.filter((p) => p.status === 'open');
+      if (open.length === 0) console.error('No open promotions here.');
+      else process.stdout.write(fence(PROPOSALS_LABEL, open.map(renderPromotion).join('')));
+      return;
+    }
+    const [p] = found;
+    if (p === undefined) throw new Refusal(`no promotion ${id} here; memory promote lists them`);
+    try {
+      if (values.reject !== undefined) {
+        rejectPromotion(db, p);
+        return void console.log(`rejected ${p.id}; it is kept so it is not proposed again, and no file was written`);
+      }
+      process.stdout.write(fence(PROPOSALS_LABEL, renderPromotion(p)));
+      if (!process.stdin.isTTY && values['yes-non-interactive'] !== true) {
+        throw new Refusal('nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command', 2);
+      }
+      console.log(applyPromotion(db, p, top));
+    } catch (error) {
+      throw error instanceof Refusal ? error : new Refusal((error as Error).message);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+const realpathOrSelf = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+};
 
 /** `memory approve <id> [--scope]` and `memory reject <id> [--reason]`: the owner's decision on one proposal. */
 async function decideCommand(args: string[], data: string, cwd: string, decision: 'approve' | 'reject'): Promise<void> {
@@ -1245,6 +1311,8 @@ async function main(argv: string[]): Promise<void> {
       return decideCommand(rest, data, process.cwd(), command);
     case 'conflicts':
       return conflictsCommand(rest, data, process.cwd());
+    case 'promote':
+      return promoteCommand(rest, data, process.cwd());
     case 'sweep':
       return sweepCommand(data, process.cwd(), false);
     case 'recheck':

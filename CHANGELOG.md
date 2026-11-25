@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Promotion into checks (#19). `memory promote --propose` stores and lists
+  proposals: a well-supported item (support 3 or more, no contradiction) as one
+  line of the review-standards file, and an item on a symbol no test executes as
+  "write a test for <symbol>". `--apply <id>` (terminal only) writes the line,
+  sets `promoted` and `promoted_to` and removes the item from recall; it refuses
+  a secret, email, handle or committer's name, and a symbolic link or a path
+  outside the repository, and never commits or pushes. `--reject <id>` keeps a
+  tombstone so it is not proposed again. Schema 13 adds `promotions`; no consent
+  change. The Review Voice policy and Orbit check targets are not built yet.
 - Symbol anchors that follow the code (#10). A code anchor provider is the
   command named under `impactProvider` in `config.json` (the one command, run
   without a shell with one JSON line in and one out, that diff recall uses too;
