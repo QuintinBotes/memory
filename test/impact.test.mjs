@@ -241,14 +241,19 @@ test('budget: the note counts inside the 600 tokens', () => {
   commit(s.acmeApi, { ...files, 'src/core.ts': 'export const core = 1;\n' }, 'add');
   commit(s.acmeApi, { 'src/core.ts': 'export const core = 2;\n' }, 'change core');
   NAMES.slice(0, 12).forEach((n, i) => {
-    const statement = `${n} drifts after ${Array.from({ length: PAD }, (_, k) => `zq${i}x${k}`).join(' ')} so recheck ${n}`;
+    // Every row the same length, so how many fit the budget does not depend on the order the random ids put them in.
+    const two = (v) => String(v).padStart(2, '0');
+    const statement = `item${two(i)} drifts after ${Array.from({ length: PAD }, (_, k) => `zq${two(i)}x${two(k)}`).join(' ')} so recheck item${two(i)}`;
     assert.equal(remember(s.acmeApi, s.data, s.configA, statement, '--scope', 'repository', '--type', 'hazard', '--anchor', `src/core.ts:1-1`).status, 0);
   });
   s.fixture = join(s.base, 'impact.json');
   s.log = join(s.base, 'impact.log');
   writeFileSync(s.log, '');
   const plain = recall(s).stdout;
-  assert.ok(tokens(plain) <= 600 && tokens(plain) > 585, `control: the fence alone is ${tokens(plain)} tokens, full`);
+  // Full: within the budget and too little room left for one more row (rows are all one length, so this holds on any machine).
+  const rowTokens = tokens(`${rows(plain)[0]}\n`);
+  assert.ok(tokens(plain) <= 600 && 600 - tokens(plain) < rowTokens, `control: the fence alone is ${tokens(plain)} tokens, full`);
+  assert.ok(rows(plain).length < 12, 'control: some of the 12 items did not fit');
   answer(s, { status: 'no_snapshot' });
   const out = recall(s).stdout;
   assert.match(out, /No impact snapshot/);
