@@ -804,6 +804,14 @@ re-anchor proposal; `memory anchors adopt <item-id> <key>` accepts one. With
 no provider, or one that fails or times out, anchors are checked by path and
 hash and memory says so. The provider is named in the consent plan (version 9).
 
+The same job asks the provider for the tests of each anchored symbol and keeps the
+nearest one whose evidence executes it (a call, a dispatch, an observation; never a
+reference or an import). A recalled code item then ends its row with
+`test: name path:line`, so one command confirms it. `memory report` says how many
+active code items name a test. Tests are never looked up inside a hook. A run makes at
+most `MEMORY_TESTS_PER_RUN` lookups (50 by default) and the next run continues; a failing
+`tests` op is skipped for the rest of the run without costing any anchor its move.
+
 ## Development
 
 ```bash

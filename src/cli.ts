@@ -43,7 +43,7 @@ import { PLAN_VERSION, buildConsentPlan, covers, uncovered } from './consent/pla
 import { executePurge, previewPurge, PurgeResidueError, type PurgeScope } from './consent/purge.ts';
 import { importSilos } from './import/import.ts';
 import { SYMBOL_KEY } from './import/silos.ts';
-import { renderReport, tenantReport } from './report/report.ts';
+import { renderReport, tenantReport, testCoverage } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
@@ -377,11 +377,13 @@ async function anchorsCommand(args: string[], data: string, cwd: string): Promis
   {
     if (sub === 'refresh') {
       const limit = Number(process.env['MEMORY_ANCHORS_PER_RUN']);
+      const testLimit = Number(process.env['MEMORY_TESTS_PER_RUN']);
       const ran = await withJobLock(`${file}.anchors.lock`, async () => {
         try {
           const result = await withStore((db) =>
             refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work), {
               ...(Number.isInteger(limit) && limit > 0 ? { limit } : {}),
+              ...(Number.isInteger(testLimit) && testLimit > 0 ? { testLimit } : {}),
               log: (event) => logAnchors(data, { repository, ...event }),
             }),
           );
@@ -549,7 +551,9 @@ function reportCommand(args: string[], data: string): void {
     const db = openStore(tenantFile(data, tenant), false);
     if (db === null) continue;
     try {
-      out.push(renderReport(tenant, tenantReport(db, tenant)));
+      const { code, named } = testCoverage(db, tenant);
+      const line = providerConfig(data) === undefined ? 'none, no code anchor provider is configured' : `${named} of ${code}`;
+      out.push(renderReport(tenant, tenantReport(db, tenant), `Code items naming an executing test: ${line}`));
     } finally {
       db.close();
     }

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { READS_EXPIRED, confidence } from '../recall/rank.ts';
+import type { Anchor } from '../items.ts';
 import { fence, PROPOSALS_LABEL, safe } from '../render/rows.ts';
 
 /** One active item of a tenant with the feedback agents gave it. */
@@ -42,7 +43,14 @@ const row = (r: Ranked): string =>
       (r.quarantine === null ? `: ${JSON.stringify(safe(r.statement))}` : `, quarantined (${r.quarantine}), statement withheld`),
   ) + '\n';
 
-export function renderReport(tenant: string, { ranked, none }: ReturnType<typeof tenantReport>): string {
+/** Active items a code anchor provider follows, and how many of them name a test that executes their symbol. */
+export function testCoverage(db: DatabaseSync, tenant: string): { code: number; named: number } {
+  const rows = db.prepare("SELECT anchors_json FROM items WHERE tenant = ? AND status = 'active' AND anchors_json LIKE '%\"symbol\"%'").all(tenant) as { anchors_json: string }[];
+  const anchors = rows.map((r) => (JSON.parse(r.anchors_json) as Anchor[]).filter((a) => a.symbol !== undefined && a.snapshot !== undefined)).filter((a) => a.length > 0);
+  return { code: anchors.length, named: anchors.filter((a) => a.some((x) => x.test !== undefined)).length };
+}
+
+export function renderReport(tenant: string, { ranked, none }: ReturnType<typeof tenantReport>, coverage?: string): string {
   const section = (title: string, list: Ranked[]): string => `${title}\n${list.length === 0 ? '(none)\n' : list.map(row).join('')}`;
-  return `Tenant ${tenant}\n` + fence(PROPOSALS_LABEL, `${section('Ranked by net feedback, then confidence', ranked)}${section('No feedback', none)}`);
+  return `Tenant ${tenant}\n${coverage === undefined ? '' : `${coverage}\n`}` + fence(PROPOSALS_LABEL, `${section('Ranked by net feedback, then confidence', ranked)}${section('No feedback', none)}`);
 }

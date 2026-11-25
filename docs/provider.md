@@ -51,7 +51,7 @@ A symbol is `{ key, kind, signature?, start, end?, hash }`:
 | `symbol_at` | `path`, `line` | `symbol`: the innermost symbol enclosing the line, or `null` |
 | `changes` | `since`: a snapshot id | `since_found` (false when the provider no longer holds `since`), `files`: the paths changed since, `added`, `removed`, `changed`: symbols |
 | `symbol_impact` | `keys`: symbol keys | `dependents`: `[{ path, symbol?, relation, status }]`, the shape `impact` answers with (relation `caller`, `implementer` or `importer`, or ProofMesh's `calls`, `implements`, `overrides`, `inherits` or `imports`; status `changed`, `tested` or `neither`); a dependent naming another `repository` is dropped |
-| `tests` | `key` | `tests`: `[{ key, evidence }]` |
+| `tests` | `key` | `tests`: `[{ key, evidence, line? }]`, each test's key (`path#name#kind`), the kind of evidence it has and, optionally, the line it starts at |
 
 `impact` (`range`, `changed` paths) is slice 14's op, answered the way that slice defines it. `memory anchors at|impact|tests`
 print the answers to `symbol_at`, `symbol_impact` and `tests`. The last two are defined now so a provider is built once;
@@ -77,6 +77,23 @@ anchors were last made at, and re-resolves only anchors in the files named (ever
 
 `memory anchors undo <move-id>` puts the previous anchor back exactly and logs the undo; memory does not make that move
 again. `memory anchors adopt <item-id> <key>` is your yes to one candidate of a proposal.
+
+### Tests that prove an item
+
+In the same refresh, memory asks `tests` for each anchored symbol that is not stale, once per snapshot (an anchor already
+asked at the current snapshot is not asked again), and keeps the nearest test whose `evidence` executes the symbol:
+`call` first, then `dispatch`, `observed` and `transitive_call`, ties in the provider's order. `reference`, `import` and any
+other evidence kind never count, so a provider with no such evidence records no test. The anchor keeps `test`
+(`name`, `path` and `line` when given) and `testsAt`, the snapshot asked. A recalled row ends `test: name path:line`,
+inside the same 60 estimated tokens (long taint, why or test names are shortened first, so the row never exceeds it).
+A run makes at most `MEMORY_TESTS_PER_RUN` lookups (default 50, one provider process each), in item id order, writing each
+row as it goes; the rest wait for the next run and are reported as `testsLeft` in the `capped` log line and in `left`. The
+first lookup that fails (the provider refuses `tests`, times out, answers garbage or `no_snapshot`) ends the lookups for
+that run, logs `tests_skipped`, and costs the anchors nothing: moves and status changes of the same run still apply and the
+provider is not marked failed. Only an answer about another repository ends the run. Entries of a `tests` answer are
+dropped when invalid: the key must be `path#name#kind`, the path relative, normalised, without `..` and at most 200
+characters, the name at most 200, the evidence non-empty and `line`, when given, an integer from 1 to 10 000 000. Hooks never ask; they show what the job recorded. `memory report` prints how many
+active code items name a test, and says so when no provider is configured.
 
 While a provider answers, the hooks leave its anchors to the job. After a failure they check them by path again, so
 nothing goes unchecked.
