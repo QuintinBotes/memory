@@ -150,3 +150,109 @@ test('edge: with no provider configured memory keeps working and says so', () =>
   assert.match(r.stdout, /Code items naming an executing test: none, no code anchor provider is configured/);
   assert.equal(anchorOf(s, s.ids.core).test, undefined);
 });
+
+// Review of #75: bounded lookups, a failing tests op never costs an anchor its move, validated entries, bounded rows.
+const logEvents = (s) => (existsSync(join(s.data, 'logs/anchors.jsonl')) ? readFileSync(join(s.data, 'logs/anchors.jsonl'), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l)) : []);
+const FIVE = ['core', 'untested', 'viaRef', 'viaCall', 'viaTransitive'];
+
+test('review 1: a run makes at most MEMORY_TESTS_PER_RUN lookups and the next run continues (120 anchors on a new snapshot, cap 50)', () => {
+  const s = setup();
+  const names = Array.from({ length: 120 }, (_, i) => `f${String(i).padStart(3, '0')}`);
+  commit(s.acmeApi, { 'src/b.ts': lines(...names.flatMap((n) => [`export function ${n}() {`, `  return '${n}';`, '}'])) });
+  const syms = names.map((n, i) => ({ key: `src/b.ts#${n}#function`, kind: 'function', signature: `${n}()`, start: i * 3 + 1, end: i * 3 + 3, hash: `H${n}` }));
+  provide(s, { current: 's1', snapshots: { s1: { symbols: syms } }, tests: Object.fromEntries(syms.map((x) => [x.key, [test_('t', 'call', 3)]])) });
+  const cfg = join(s.data, 'config.json');
+  writeFileSync(cfg, JSON.stringify({ ...JSON.parse(readFileSync(cfg, 'utf8')), impactProvider: { command: [process.execPath, PROVIDER, stateFile(s), logFile(s)] } }));
+  for (const x of syms) {
+    const r = exec(s, ['remember', '--scope', 'repository', '--type', 'hazard', '--anchor', x.key, '--', `${x.key} is fragile`]);
+    assert.equal(r.status, 0, r.stderr);
+  }
+  provide(s, { current: 's2', snapshots: { s2: { symbols: syms } } });
+  writeFileSync(logFile(s), '');
+  const named = () => sql(s, "SELECT anchors_json FROM items WHERE anchors_json LIKE '%\"test\"%'").length;
+  const env = { MEMORY_TESTS_PER_RUN: '50' };
+  const go = () => run(['anchors', 'refresh'], { cwd: s.acmeApi, data: s.data, config: s.configA, env });
+  assert.equal(go().status, 0);
+  assert.equal(ops(s, 'tests').length, 50);
+  assert.equal(named(), 50);
+  assert.ok(logEvents(s).some((e) => e.event === 'capped' && e.testsLeft === 70), 'the cap is logged with what is left');
+  go();
+  go();
+  assert.equal(ops(s, 'tests').length, 120, 'each anchor was asked once over the three runs');
+  assert.equal(named(), 120);
+});
+
+test('review 2 and 3: the first tests failure stops lookups for the run, and a refused, garbage, no_snapshot or hung tests op leaves the other anchors moves applied', () => {
+  for (const testsMode of ['refuse', 'garbage', 'no_snapshot']) {
+    const s = world({ names: FIVE, tests: { [key('core')]: CORE_TESTS } });
+    provide(s, { testsMode });
+    refresh(s);
+    assert.equal(ops(s, 'tests').length, 1, `${testsMode}: one failed lookup ends the lookups`);
+    assert.ok(logEvents(s).some((e) => e.event === 'tests_skipped'), testsMode);
+    assert.equal(logEvents(s).some((e) => e.event === 'provider_failed'), false, `${testsMode}: the provider did not fail`);
+    assert.equal(anchorOf(s, s.ids.core).test, undefined);
+  }
+});
+
+test('review 3: a tests failure on one anchor does not undo a move applied in the same run (control: without the failure the test is recorded)', () => {
+  const renamed = (s, mode) => {
+    const moved = `export function movedCore() {\n  return 'core';\n}\n`;
+    commit(s.acmeApi, { 'src/a.ts': FILE.replace(/^export function core\(\) \{\n  return 'core';\n\}\n/, moved) });
+    const symbols = SYMBOLS.map((x) => (x.key === key('core') ? { ...x, key: 'src/a.ts#movedCore#function', signature: 'movedCore()', hash: x.hash } : x));
+    provide(s, { current: 's2', snapshots: { s2: { symbols } }, testsMode: mode, tests: { 'src/a.ts#movedCore#function': CORE_TESTS } });
+  };
+  for (const mode of [null, 'refuse', 'garbage', 'no_snapshot', 'hang']) {
+    const s = world({ names: ['core', 'untested'], tests: {} });
+    renamed(s, mode ?? undefined);
+    refresh(s);
+    const a = anchorOf(s, s.ids.core);
+    assert.equal(a.symbol, 'src/a.ts#movedCore#function', `${mode}: the move was applied`);
+    assert.equal(sql(s, "SELECT status FROM items WHERE id = ?", s.ids.core)[0].status, 'active');
+    assert.equal(a.test?.name, mode === null ? 'serviceDoubles' : undefined, `${mode}`);
+  }
+});
+
+test('review 4: invalid tests entries are dropped, valid ones next to them still count', () => {
+  const bad = [
+    { key: 'only#two', evidence: 'call' },
+    { key: 'a#b#c#d', evidence: 'call' },
+    { key: '/abs/x.test.ts#t#test', evidence: 'call' },
+    { key: '../x.test.ts#t#test', evidence: 'call' },
+    { key: 'a/../x.test.ts#t#test', evidence: 'call' },
+    { key: './x.test.ts#t#test', evidence: 'call' },
+    { key: 'a//x.test.ts#t#test', evidence: 'call' },
+    { key: `${'p'.repeat(201)}#t#test`, evidence: 'call' },
+    { key: `x.test.ts#${'n'.repeat(201)}#test`, evidence: 'call' },
+    { key: 'x.test.ts#t#test', evidence: 'call', line: 0 },
+    { key: 'x.test.ts#t#test', evidence: 'call', line: 1.5 },
+    { key: 'x.test.ts#t#test', evidence: 'call', line: 10_000_001 },
+    { key: 'x.test.ts#t#test', evidence: 'call', line: '7' },
+    { key: 'x.test.ts#t#test' },
+    { evidence: 'call' },
+    null,
+    'text',
+  ];
+  const s = world({ tests: { [key('core')]: [...bad, test_('good', 'call', 1e7)] } });
+  refresh(s);
+  assert.deepEqual(anchorOf(s, s.ids.core).test, { name: 'good', path: 'test/good.test.ts', line: 1e7 });
+  // Control: every bad entry alone records nothing, so each rule is what dropped it.
+  for (const [i, entry] of bad.entries()) {
+    const one = world({ names: ['core'], tests: { [key('core')]: [entry] } });
+    refresh(one);
+    assert.equal(anchorOf(one, one.ids.core).test, undefined, `entry ${i} ${JSON.stringify(entry)}`);
+  }
+});
+
+test('review 5: a row stays within 60 tokens with a long test name, a long taint and a long why', () => {
+  const s = world({ tests: { [key('core')]: [test_('n'.repeat(150), 'call', 12)] } });
+  refresh(s);
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  db.prepare('UPDATE items SET statement = ? WHERE id = ?').run('y'.repeat(300), s.ids.core);
+  db.prepare('UPDATE evidence SET taint = ? WHERE item_id = ?').run('t'.repeat(110), s.ids.core);
+  db.close();
+  commit(s.acmeApi, { 'src/a.ts': `${FILE}// edited\n` });
+  const row = exec(s, ['recall', '--diff', 'HEAD~1..HEAD']).stdout.split('\n').find((l) => l.includes(s.ids.core));
+  assert.ok(row, 'the item is recalled');
+  assert.ok(tokens(row) <= 60, `${tokens(row)} tokens: ${row}`);
+  assert.match(row, /test: /);
+});

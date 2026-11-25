@@ -85,7 +85,14 @@ asked at the current snapshot is not asked again), and keeps the nearest test wh
 `call` first, then `dispatch`, `observed` and `transitive_call`, ties in the provider's order. `reference`, `import` and any
 other evidence kind never count, so a provider with no such evidence records no test. The anchor keeps `test`
 (`name`, `path` and `line` when given) and `testsAt`, the snapshot asked. A recalled row ends `test: name path:line`,
-inside the same 60 estimated tokens. Hooks never ask; they show what the job recorded. `memory report` prints how many
+inside the same 60 estimated tokens (long taint, why or test names are shortened first, so the row never exceeds it).
+A run makes at most `MEMORY_TESTS_PER_RUN` lookups (default 50, one provider process each), in item id order, writing each
+row as it goes; the rest wait for the next run and are reported as `testsLeft` in the `capped` log line and in `left`. The
+first lookup that fails (the provider refuses `tests`, times out, answers garbage or `no_snapshot`) ends the lookups for
+that run, logs `tests_skipped`, and costs the anchors nothing: moves and status changes of the same run still apply and the
+provider is not marked failed. Only an answer about another repository ends the run. Entries of a `tests` answer are
+dropped when invalid: the key must be `path#name#kind`, the path relative, normalised, without `..` and at most 200
+characters, the name at most 200, the evidence non-empty and `line`, when given, an integer from 1 to 10 000 000. Hooks never ask; they show what the job recorded. `memory report` prints how many
 active code items name a test, and says so when no provider is configured.
 
 While a provider answers, the hooks leave its anchors to the job. After a failure they check them by path again, so

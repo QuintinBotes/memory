@@ -130,12 +130,28 @@ export async function impactOf(p: Provider, repository: string, keys: string[]):
   return { snapshot: text(a['snapshot'], 'snapshot'), dependents };
 }
 
-/** Operation 5: the tests that prove `key`, each with the evidence the provider has. */
+/** A relative, normalised path with no `..`, within 200 characters. */
+const cleanPath = (p: string): boolean =>
+  p.length <= 200 && !p.startsWith('/') && !/^[A-Za-z]:/.test(p) && !p.includes('\\') && !/[\u0000-\u001f]/.test(p) && p.split('/').every((s) => s !== '' && s !== '.' && s !== '..');
+
+/** One entry of a `tests` answer as memory keeps it, or null when it is not valid: a bad entry is dropped, never thrown. */
+function provingTest(d: unknown): ProvingTest | null {
+  const e = d as Record<string, unknown> | null;
+  if (typeof e !== 'object' || e === null) return null;
+  const [key, evidence, line] = [e['key'], e['evidence'], e['line']];
+  if (typeof key !== 'string' || typeof evidence !== 'string' || evidence === '') return null;
+  const [path, name, kind, ...more] = key.split('#');
+  if (path === undefined || !cleanPath(path) || name === undefined || name === '' || name.length > 200 || kind === undefined || kind === '' || more.length > 0) return null;
+  if (line !== undefined && !(Number.isInteger(line) && (line as number) >= 1 && (line as number) <= 1e7)) return null;
+  return { key, evidence, ...(line === undefined ? {} : { line: line as number }) };
+}
+
+/** Operation 5: the tests that prove `key`, each with the evidence the provider has. Invalid entries are dropped. */
 export async function testsFor(p: Provider, key: string): Promise<{ snapshot: string; tests: ProvingTest[] }> {
   const a = await p.ask('tests', { key });
   const list = a['tests'];
   if (!Array.isArray(list)) bad('tests');
-  return { snapshot: text(a['snapshot'], 'snapshot'), tests: (list as Record<string, unknown>[]).map((d) => ({ key: text(d?.['key'], 'test key'), evidence: text(d?.['evidence'], 'evidence'), ...(Number.isInteger(d?.['line']) && (d?.['line'] as number) >= 1 ? { line: d['line'] as number } : {}) })) };
+  return { snapshot: text(a['snapshot'], 'snapshot'), tests: (list as unknown[]).flatMap((d) => provingTest(d) ?? []) };
 }
 
 export interface ProvingTest {

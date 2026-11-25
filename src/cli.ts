@@ -377,11 +377,13 @@ async function anchorsCommand(args: string[], data: string, cwd: string): Promis
   {
     if (sub === 'refresh') {
       const limit = Number(process.env['MEMORY_ANCHORS_PER_RUN']);
+      const testLimit = Number(process.env['MEMORY_TESTS_PER_RUN']);
       const ran = await withJobLock(`${file}.anchors.lock`, async () => {
         try {
           const result = await withStore((db) =>
             refreshAnchors(db, tenant, repository, cwd, open, (work) => withRefreshLock(file, work), {
               ...(Number.isInteger(limit) && limit > 0 ? { limit } : {}),
+              ...(Number.isInteger(testLimit) && testLimit > 0 ? { testLimit } : {}),
               log: (event) => logAnchors(data, { repository, ...event }),
             }),
           );

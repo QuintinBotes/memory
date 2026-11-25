@@ -6,7 +6,7 @@ import { consented, loadConfig } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { sha256, type Anchor } from '../items.ts';
 import { recordAudit } from '../store/audit.ts';
-import { ProviderError, Refused, changesSince, nearestTest, resolveKey, testsFor, type Changes, type Provider, type ProviderSymbol } from './provider.ts';
+import { ForeignAnswer, ProviderError, Refused, changesSince, nearestTest, resolveKey, testsFor, type Changes, type Provider, type ProviderSymbol } from './provider.ts';
 
 /** Why an item is stale because of its symbol anchor; only these are the refresh's to restore. */
 const REASONS = ['path gone', 'cited text gone', 'signature changed', 'key gone', 'snapshot not at HEAD'];
@@ -17,6 +17,8 @@ const tokenCount = (text: string): number => (text.match(/[A-Za-z0-9_$]+|[^\sA-Z
 
 /** Anchors resolved in one run; the rest wait for the next. */
 export const ANCHORS_PER_RUN = 50;
+/** Test lookups made in one run (one provider process each); the rest wait for the next run. */
+export const TESTS_PER_RUN = 50;
 
 /** `path#qualified_name#kind` as its three parts. */
 const parts = (key: string): { path: string; name: string; kind: string } => {
@@ -189,7 +191,7 @@ export async function refreshAnchors(
   cwd: string,
   provider: Provider,
   lock: <T>(work: () => T) => T | undefined,
-  { limit = ANCHORS_PER_RUN, log = () => undefined }: { limit?: number; log?: (event: Record<string, unknown>) => void } = {},
+  { limit = ANCHORS_PER_RUN, testLimit = TESTS_PER_RUN, log = () => undefined }: { limit?: number; testLimit?: number; log?: (event: Record<string, unknown>) => void } = {},
 ): Promise<Refresh> {
   const result: Refresh = { examined: 0, checked: 0, current: 0, moved: 0, stale: 0, restored: 0, skipped: 0, left: 0 };
   const rows = (
@@ -245,6 +247,9 @@ export async function refreshAnchors(
 
   const touch = db.prepare('UPDATE items SET anchors_json = ? WHERE id = ? AND anchors_json = ?');
   let attempts = 0;
+  let lookups = 0;
+  let testsFailed = false;
+  let testsLeft = 0;
   for (const row of rows) {
     const anchors = JSON.parse(row.anchors_json) as Anchor[];
     if (attempts >= limit) {
@@ -277,6 +282,7 @@ export async function refreshAnchors(
     if (skipped) result.skipped++;
     // The nearest executing test of each anchor that is not stale, asked once per snapshot (never in a hook).
     const finals: Anchor[] = [];
+    let waiting = false;
     for (const [i, a] of anchors.entries()) {
       const o = outcomes[i]!;
       // The same key keeps what it was last told; a moved symbol is a new key and is asked again.
@@ -285,14 +291,24 @@ export async function refreshAnchors(
         finals.push(fin);
         continue;
       }
+      // Lookups stop for the rest of the run at the cap or after the first failure; the anchor keeps its old testsAt and is asked next run.
+      if (testsFailed || lookups >= testLimit) {
+        if (!testsFailed && !waiting) testsLeft++;
+        waiting = true;
+        finals.push(fin);
+        continue;
+      }
+      lookups++;
       try {
         const found = await testsFor(provider, fin.symbol);
         const nearest = nearestTest(found.tests);
         const { test: _old, ...bare } = fin;
         finals.push({ ...bare, testsAt: found.snapshot, ...(nearest === null ? {} : { test: { name: parts(nearest.key).name, path: parts(nearest.key).path, ...(nearest.line === undefined ? {} : { line: nearest.line }) } }) });
       } catch (error) {
-        if (!(error instanceof Refused)) throw error;
+        // A provider that cannot answer for tests costs the anchors no move or status; only a foreign answer ends the run.
+        if (!(error instanceof ProviderError) || error instanceof ForeignAnswer) throw error;
         log({ event: 'tests_skipped', item: row.id, reason: error.message });
+        testsFailed = true;
         finals.push(fin);
       }
     }
@@ -350,7 +366,8 @@ export async function refreshAnchors(
     else result.current++;
     result.moved += moves.length;
   }
-  if (result.left > 0) log({ event: 'capped', done: attempts, left: result.left });
+  result.left += testsLeft;
+  if (result.left > 0) log({ event: 'capped', done: attempts, left: result.left, tests: lookups, testsLeft });
   return result;
 }
 

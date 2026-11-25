@@ -63,13 +63,21 @@ export function leanRow(item: Visible, why = '', maxTokens = Infinity): string {
   const where = safe(item.anchors.map(location).join(', '));
   const source = item.source !== '' && item.source !== 'remember' ? safe(item.source) : '';
   const statement = safe(item.statement);
-  const taint = item.taint === undefined ? '' : ` · tainted: ${safe(taintList(item.taint))}`;
+  const taintText = item.taint === undefined ? '' : safe(taintList(item.taint));
   const proof = safe(provingTest(item.anchors));
-  const build = (s: string, src: string, loc: string, tst = proof): string =>
-    `[${item.id}] ${item.type}${loc === '' ? '' : ` · ${loc}`} · ${s}${src === '' ? '' : ` (${src})`}${taint}${why === '' ? '' : ` · why: ${why}`}${tst === '' ? '' : ` · test: ${tst}`}`;
-  const row = build(statement, source, where);
+  const build = (s: string, src: string, loc: string, tst: string, taint: string, w: string): string =>
+    `[${item.id}] ${item.type}${loc === '' ? '' : ` · ${loc}`} · ${s}${src === '' ? '' : ` (${src})`}${taint === '' ? '' : ` · tainted: ${taint}`}${w === '' ? '' : ` · why: ${w}`}${tst === '' ? '' : ` · test: ${tst}`}`;
+  const row = build(statement, source, where, proof, taintText, why);
   const room = maxTokens * 4;
   if (row.length <= room) return row;
-  const [src, loc, tst] = [cutLeft(source, 40), cutLeft(where, 40), cutLeft(proof, 50)];
-  return build(cut(statement, room - build('', src, loc, tst).length), src, loc, tst);
+  // Shorten the parts around the statement, harder each time, until the statement keeps room of its own: the row never exceeds its budget.
+  for (const [n, k, tst, taint, w] of [[40, 40, 50, Infinity, Infinity], [30, 30, 40, 40, 60], [16, 16, 24, 16, 24]] as const) {
+    const [src, loc, p, ta, wh] = [cutLeft(source, n), cutLeft(where, k), cutLeft(proof, tst), cut(taintText, taint), cut(why, w)];
+    const space = room - build('', src, loc, p, ta, wh).length;
+    if (space >= MIN_STATEMENT || n === 16) return cut(build(cut(statement, Math.max(0, space)), src, loc, p, ta, wh), room);
+  }
+  return row;
 }
+
+/** The statement characters a shortened row keeps before the other parts are cut harder. */
+const MIN_STATEMENT = 12;
