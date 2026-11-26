@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `memory purge --repo` deleted every episode in each store it opened (#82). Each failing-command episode now records its repository (schema 17; older episodes stay unknown). `--repo` deletes only that repository's episodes and keeps unknown-origin ones; `--tenant` still deletes them all. The preview lists episode counts per repository and, for kept unknown-origin episodes, names the `--tenant` command that removes them.
+
 ## [0.8.0] - 2026-11-26
 
 ### Fixed

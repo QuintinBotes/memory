@@ -25,6 +25,12 @@ export interface PurgePreview {
   returnedToProposedIds: string[];
   /** Promoted checks built from an item the purge deletes or takes evidence from, for the owner to review. */
   checks: string[];
+  /** Episodes this purge deletes. */
+  episodes: number;
+  /** Every episode in the store by the repository it came from, so the owner sees what a `--repo` purge leaves. */
+  episodesByRepository: Record<string, number>;
+  /** Episodes stored before their repository was recorded: a `--repo` purge keeps them, `--tenant` removes them. */
+  episodesNotAttributable: number;
 }
 
 interface Clause {
@@ -61,6 +67,15 @@ const orphaned = (e: Clause): Clause => ({
 });
 const SHOWN = "status IN ('active', 'stale')";
 
+/** Episodes deleted by this scope, as a WHERE clause on `episodes`. */
+function episodeClause(scope: PurgeScope): Clause {
+  if (scope.all === true || scope.tenant !== undefined) return { where: '1=1', params: [] };
+  // An episode of unknown repository (null) never matches: it cannot be attributed, so only --tenant removes it.
+  if (scope.repository !== undefined) return { where: 'repository = ?', params: [scope.repository] };
+  if (scope.before !== undefined) return { where: 'at < ?', params: [scope.before] };
+  return { where: '1=0', params: [] };
+}
+
 /**
  * Counts what a purge would remove, so the user sees the damage before
  * agreeing to it rather than after.
@@ -84,7 +99,16 @@ export function previewPurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
   const checks = (
     db.prepare(`SELECT DISTINCT promoted_to AS c FROM items WHERE promoted_to IS NOT NULL AND ${reached.where} ORDER BY c`).all(...reached.params) as { c: string }[]
   ).map((r) => r.c);
-  return { items, evidence, returnedToProposed: returnedToProposedIds.length, returnedToProposedIds, checks };
+  const x = episodeClause(scope);
+  const episodesByRepository: Record<string, number> = {};
+  for (const r of db.prepare('SELECT repository, COUNT(*) AS n FROM episodes WHERE repository IS NOT NULL GROUP BY repository ORDER BY repository').all() as { repository: string; n: number }[]) {
+    episodesByRepository[r.repository] = r.n;
+  }
+  return {
+    items, evidence, returnedToProposed: returnedToProposedIds.length, returnedToProposedIds, checks,
+    episodes: count(db, `SELECT COUNT(*) AS n FROM episodes WHERE ${x.where}`, ...x.params), episodesByRepository,
+    episodesNotAttributable: count(db, 'SELECT COUNT(*) AS n FROM episodes WHERE repository IS NULL'),
+  };
 }
 
 /**
@@ -120,9 +144,9 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
       }
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
-    // Failure episodes (#18) hold no item id: a purge of the whole tenant or repository takes them all, --older-than those before its cut-off.
-    if (scope.all === true || scope.tenant !== undefined || scope.repository !== undefined) db.prepare('DELETE FROM episodes').run();
-    else if (scope.before !== undefined) db.prepare('DELETE FROM episodes WHERE at < ?').run(scope.before);
+    // Failure episodes (#18) hold no item id: a purge of the whole tenant takes them all, --repo those of that repository, --older-than those before its cut-off.
+    const x = episodeClause(scope);
+    db.prepare(`DELETE FROM episodes WHERE ${x.where}`).run(...x.params);
     // Transcript records and compaction episodes (#12) likewise.
     if (scope.all === true || scope.tenant !== undefined) db.prepare('DELETE FROM transcripts').run();
     else if (scope.repository !== undefined) db.prepare('DELETE FROM transcripts WHERE repository = ?').run(scope.repository);
@@ -134,7 +158,7 @@ export function executePurge(db: DatabaseSync, scope: PurgeScope): PurgePreview 
     // In the same transaction: a purge that cannot be audited does not happen.
     // The entry survives the purge it records, and never names the source: a hash of a pull request URL is guessable.
     const audited = scope.source === undefined ? scope : { ...scope, source: 'withheld' };
-    const { returnedToProposedIds: _ids, ...counts } = preview;
+    const { returnedToProposedIds: _ids, episodesByRepository: _by, ...counts } = preview;
     recordAudit(db, 'purge', null, { scope: audited, removed: counts });
     db.exec('COMMIT');
   } catch (error) {

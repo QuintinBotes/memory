@@ -292,6 +292,34 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     PRIMARY KEY (item_id, run_id)
   );
   `,
+
+  // v17 - the repository an episode came from (null = unknown: stored before this version), so purge --repo deletes only
+  // that repository's episodes. The same failure in two repositories of one session is two episodes, so the unique key gains
+  // the repository (SQLite cannot alter a constraint: the table is rebuilt; unknown-origin rows stay distinct, as null does in a key).
+  // Copies the column when it is already there, so a store rolled back by version alone still opens.
+  (db) => {
+    const has = (db.prepare('PRAGMA table_info(episodes)').all() as { name: string }[]).some((c) => c.name === 'repository');
+    db.exec(`
+      CREATE TABLE episodes_v17 (
+        id TEXT PRIMARY KEY,
+        session TEXT NOT NULL,
+        command_key TEXT NOT NULL,
+        command TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        head TEXT NOT NULL,
+        at TEXT NOT NULL,
+        repaired_at TEXT,
+        repository TEXT,
+        UNIQUE (session, command_key, fingerprint, repository)
+      );
+      INSERT INTO episodes_v17 (id, session, command_key, command, fingerprint, signature, head, at, repaired_at, repository)
+        SELECT id, session, command_key, command, fingerprint, signature, head, at, repaired_at, ${has ? 'repository' : 'NULL'} FROM episodes;
+      DROP TABLE episodes;
+      ALTER TABLE episodes_v17 RENAME TO episodes;
+      CREATE INDEX IF NOT EXISTS idx_episodes_open ON episodes (session, command_key);
+    `);
+  },
 ];
 const SECURE_DELETE = 6;
 

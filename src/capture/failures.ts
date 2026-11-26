@@ -140,11 +140,11 @@ export function recordEpisode(data: string, input: Record<string, unknown>): voi
     inTransaction(db, () => {
       expireEpisodes(db);
       db.prepare(
-        `INSERT INTO episodes (id, session, command_key, command, fingerprint, signature, head, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (session, command_key, fingerprint) DO UPDATE SET at = excluded.at, head = excluded.head, repaired_at = NULL`,
+        `INSERT INTO episodes (id, session, command_key, command, fingerprint, signature, head, at, repository) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (session, command_key, fingerprint, repository) DO UPDATE SET at = excluded.at, head = excluded.head, repaired_at = NULL`,
       ).run(
         `x-${randomBytes(5).toString('hex')}`, str(input['session_id']) ?? 'unknown', key(command, cwd),
-        safe.slice(0, MAX_COMMAND), fingerprint, signature ?? '', git(cwd, 'rev-parse', 'HEAD')?.trim() ?? '', new Date().toISOString(),
+        safe.slice(0, MAX_COMMAND), fingerprint, signature ?? '', git(cwd, 'rev-parse', 'HEAD')?.trim() ?? '', new Date().toISOString(), context.repository,
       );
     });
   } finally {

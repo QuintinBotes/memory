@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, normalize } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import { parseArgs } from 'node:util';
 import { suppressSqliteExperimentalWarning } from './warnings.ts';
 import { pluginVersion } from './version.ts';
@@ -1324,7 +1324,8 @@ function purge(args: string[], data: string, cwd: string): void {
   if (values.all === true || days !== undefined || values.item !== undefined || values.source !== undefined || repository !== undefined) files.push(personFile(data));
 
   const report: Record<string, ReturnType<typeof previewPurge>> = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [] as string[], checks: [] as string[] };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [] as string[], checks: [] as string[], episodes: 0, episodesByRepository: {} as Record<string, number>, episodesNotAttributable: 0 };
+  const keptNotAttributable: string[] = [];
   const residue: string[] = [];
   for (const file of files) {
     const db = openStore(file, false);
@@ -1337,6 +1338,13 @@ function purge(args: string[], data: string, cwd: string): void {
       total.returnedToProposed += r.returnedToProposed;
       total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
+      total.episodes += r.episodes;
+      total.episodesNotAttributable += r.episodesNotAttributable;
+      for (const [repo, n] of Object.entries(r.episodesByRepository)) total.episodesByRepository[repo] = (total.episodesByRepository[repo] ?? 0) + n;
+      // --repo keeps what it cannot attribute; the command that removes them is the tenant's own purge.
+      if (repository !== undefined && r.episodesNotAttributable > 0 && file !== personFile(data)) {
+        keptNotAttributable.push(`${r.episodesNotAttributable} episode(s) not attributable to a repository are kept; memory purge --tenant ${basename(file, '.sqlite')} removes them (and everything else in that tenant)`);
+      }
     } catch (error) {
       // The other files are still purged; the failure is reported once at the end.
       if (!(error instanceof PurgeResidueError)) throw error;
@@ -1349,7 +1357,7 @@ function purge(args: string[], data: string, cwd: string): void {
     if (values.all === true) rmSync(injectionLog(data), { force: true });
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
-  console.log(JSON.stringify({ ...total, files: report }, null, 2));
+  console.log(JSON.stringify({ ...total, ...(keptNotAttributable.length > 0 ? { notAttributable: keptNotAttributable } : {}), files: report }, null, 2));
   if (residue.length > 0) throw new Refusal(`purge incomplete\n${residue.join('\n')}`);
   if (values.confirm !== true) console.error('Nothing was deleted. Run the same command with --confirm to delete.');
   else if (total.checks.length > 0) console.error('Review the promoted checks listed under "checks"; memory does not edit them.');
