@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -27,16 +27,10 @@ const setEmbeddings = (s, embeddings) => {
 };
 const FAKE = { provider: 'fake' };
 const VOYAGE = { provider: 'voyage' };
-/** Opens the semantic leg for acme (#28): its last head-to-head scorecard shows a vocabulary-miss share above 20%. */
-const trigger = (s) => {
-  mkdirSync(join(s.data, 'eval', 'head-to-head', 'acme'), { recursive: true });
-  writeFileSync(join(s.data, 'eval', 'head-to-head', 'acme', 'last.json'), JSON.stringify({ vocabulary_miss_share: 0.4 }));
-};
 
 function seeded(embeddings = FAKE) {
   const s = setup();
   if (embeddings !== null) setEmbeddings(s, embeddings);
-  trigger(s);
   const ok = (r) => assert.equal(r.status, 0, r.stderr);
   ok(remember(s.acmeApi, s.data, s.configA, TARGET, '--scope', 'repository', '--type', 'decision'));
   for (const t of NEAR) ok(remember(s.acmeApi, s.data, s.configA, t, '--scope', 'organisation', '--type', 'convention'));
@@ -95,6 +89,22 @@ test('changing the config key swaps the provider with no code change', () => {
   assert.match(filled.stdout, /embedded 4 .*fake-b/);
   assert.ok(rowsOf(search(s, QUESTION).text).some((l) => l.includes(TARGET)));
   assert.deepEqual([...new Set(vectors('tenants/acme.sqlite', s.data).map((v) => v.model))], ['fake-b'], 'an item keeps one vector: the current model\'s');
+});
+
+test('items that share an anchored path with a top hit enter as the graph list of the fusion, only when embeddings are used', () => {
+  const s = setup();
+  setEmbeddings(s, FAKE);
+  commit(s.acmeApi, { 'src/billing.ts': 'export const bill = 1;\nexport const pay = 2;\n' });
+  const ok = (r) => assert.equal(r.status, 0, r.stderr);
+  ok(remember(s.acmeApi, s.data, s.configA, TARGET, '--scope', 'repository', '--type', 'decision', '--anchor', 'src/billing.ts:1-2'));
+  ok(remember(s.acmeApi, s.data, s.configA, 'The invoice export is rounded to cents', '--scope', 'repository', '--type', 'hazard', '--anchor', 'src/billing.ts:1-2'));
+  const withVectors = rowsOf(search(s, QUESTION).text);
+  const sibling = withVectors.find((l) => l.includes('invoice export'));
+  assert.ok(sibling, withVectors.join('\n'));
+  // In the graph list only, first: 1 / 61, and its graph point listed.
+  assert.match(sibling, /why: repository 2, graph 1, confidence \w+ [\d.]+, rrf 0\.0164/);
+  setEmbeddings(s, undefined);
+  assert.ok(!rowsOf(search(s, QUESTION).text).some((l) => l.includes('invoice export')));
 });
 
 test('each tenant\'s vectors are in that tenant\'s own file, and nowhere else', () => {

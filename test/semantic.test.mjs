@@ -6,8 +6,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setup, run, runAsync, remember, commit, fenced } from './helpers.mjs';
 
-// #28: a local semantic leg over loopback Ollama, off by default, opened per tenant by the head-to-head trigger,
-// fused with the keyword ranking by RRF (k = 60), reached by memory_search and diff recall and never by a hook.
+// #28: a local semantic leg over loopback Ollama, off by default, fused with the keyword and graph rankings by RRF
+// (k = 60), and an optional local reranker; both reached by memory_search and diff recall and never by a hook.
 
 const STOP = new Set('a an and are as at be by for from has have in into is it its of on or that the this to was were will with when which while not no do does so if then'.split(' '));
 /** The stub's embedding: each word counts as its first three letters, so words of one prefix are close and others are not. */
@@ -34,6 +34,11 @@ async function ollama(mode = 'ok') {
       if (mode === '500') return void ((res.statusCode = 500), res.end('{}'));
       if (mode === '404') return void ((res.statusCode = 404), res.end('{"error":"model not found"}'));
       res.setHeader('content-type', 'application/json');
+      // The reranker's call: it answers the facts in reverse.
+      if (req.url === '/api/generate') {
+        const n = parsed.prompt.split('\n').filter((l) => /^\d+\. /.test(l)).length;
+        return void res.end(JSON.stringify({ model: parsed.model, response: JSON.stringify({ order: Array.from({ length: n }, (_, i) => n - i) }), done: true }));
+      }
       res.end(JSON.stringify({ model: parsed.model, embeddings: parsed.input.map(embed) }));
     });
   });
@@ -68,10 +73,9 @@ const KEYWORD = [
 const ABSTAIN = ['kubernetes helm', 'zebra yacht', 'umbrella violin', 'oxygen jungle', 'xylophone ember'];
 
 /** Items stored with the leg off; returns the context, then the leg is turned on over `stub` with a vector for each. */
-async function seeded(stub, { share = 0.4, items = [...MISSES, ...KEYWORD].map(([t]) => t) } = {}) {
+async function seeded(stub, { items = [...MISSES, ...KEYWORD].map(([t]) => t) } = {}) {
   const s = setup();
   for (const t of items) assert.equal(remember(s.acmeApi, s.data, s.configA, t, '--scope', 'repository', '--type', 'decision').status, 0);
-  if (share !== 'none') scorecard(s, share);
   if (stub !== undefined) {
     legOn(s, stub.url);
     const filled = await runAsync(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA });
@@ -162,6 +166,7 @@ test('scenario 3: with the leg on, the session slice, point-of-action and failur
     };
     const off = await hooks('s-off');
     legOn(s, stub.url);
+    setConfig(s, (c) => ({ ...c, rerank: { url: stub.url } }));
     const filled = await runAsync(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA });
     assert.equal(filled.status, 0, filled.stderr);
     stub.requests.length = 0;
@@ -172,8 +177,8 @@ test('scenario 3: with the leg on, the session slice, point-of-action and failur
     assert.deepEqual(on, off, 'byte-identical');
     assert.deepEqual(stub.requests, [], 'no hook called the embedder');
     // and the leg is live: a search in the same state does call it
-    await search(s, 'subscribe pay');
-    assert.equal(stub.requests.length, 1);
+    await search(s, 'subscribe pay billing computeTotal');
+    assert.deepEqual(stub.requests.map((q) => q.url), ['/api/embed', '/api/generate']);
   } finally {
     await stub.close();
   }
@@ -228,27 +233,16 @@ test('scenario 5: a client tenant refuses an embedder that is not on this machin
   }
 });
 
-test('FR-001: the leg runs only while the tenant\'s last head-to-head scorecard shows a vocabulary-miss share above 20%', async () => {
+test('no replay gate: the leg runs whenever an embedder is configured and consented; the scorecard\'s vocabulary-miss share is information only', async () => {
   const stub = await ollama();
   try {
-    const s = await seeded(stub, { share: 'none' });
-    const [none] = await search(s, 'subscribe pay');
-    assert.match(none, /Semantic leg skipped \(acme has no head-to-head scorecard, and the leg needs a vocabulary-miss share above 20%; memory eval head-to-head measures it\)/);
-    for (const [share, said] of [[0.2, /shows a vocabulary-miss share of 20%, and the leg needs a vocabulary-miss share above 20%/], [0.05, /share of 5%/], [null, /has no vocabulary-miss share/]]) {
-      scorecard(s, share);
+    const s = await seeded(stub);
+    for (const share of [undefined, 0.05]) {
+      if (share !== undefined) scorecard(s, share);
       const [text] = await search(s, 'subscribe pay');
-      assert.match(text, said);
-      assert.ok(!rowsOf(text).some((l) => l.includes('Subscription payments')));
+      assert.doesNotMatch(text, SKIPPED);
+      assert.ok(rowsOf(text)[0].includes('Subscription payments'), text);
     }
-    assert.deepEqual(stub.requests, [], 'a closed leg sends nothing');
-    scorecard(s, 0.21);
-    const [open] = await search(s, 'subscribe pay');
-    assert.doesNotMatch(open, SKIPPED);
-    assert.ok(rowsOf(open)[0].includes('Subscription payments'), open);
-    // Another tenant's scorecard opens nothing here.
-    scorecard(s, 0.1);
-    scorecard(s, 0.9, 'beta');
-    assert.match((await search(s, 'subscribe pay'))[0], /share of 10%/);
   } finally {
     await stub.close();
   }
@@ -257,9 +251,8 @@ test('FR-001: the leg runs only while the tenant\'s last head-to-head scorecard 
 test('FR-002: the leg is off by default: nothing is embedded or sent, and search says nothing about it', () => {
   const s = setup();
   assert.equal(remember(s.acmeApi, s.data, s.configA, 'Subscription payments belong to billing', '--scope', 'repository', '--type', 'decision').status, 0);
-  scorecard(s, 0.9);
   const text = run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: searchCall('subscribe pay') + '\n' }).stdout;
-  assert.doesNotMatch(text, /Semantic|Embeddings/);
+  assert.doesNotMatch(text, /Semantic|Embeddings|Rerank/);
   const db = new DatabaseSync(join(s.data, 'tenants', 'acme.sqlite'), { readOnly: true });
   assert.equal(db.prepare('SELECT count(*) AS n FROM item_vectors').get().n, 0);
   db.close();
@@ -312,5 +305,82 @@ test('the ollama embedder is validated in config: a url carries no credentials a
     setConfig(s, (c) => ({ ...c, embeddings }));
     const r = run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: searchCall('x') + '\n' });
     assert.match(r.stdout + r.stderr, /embeddings must be/);
+  }
+});
+
+const rerankOn = (s, rerank) => setConfig(s, (c) => ({ ...c, rerank }));
+const QUERY = 'release feature tagged flags';
+
+test('rerank: a local generative model reorders the top rows, inkling-2-mini unless named, and each row says its new place', async () => {
+  const stub = await ollama();
+  try {
+    const s = await seeded(undefined);
+    const [plain] = await search(s, QUERY);
+    const before = rowsOf(plain);
+    assert.ok(before.length >= 2, plain);
+    rerankOn(s, { url: stub.url });
+    const [text] = await search(s, QUERY);
+    assert.doesNotMatch(text, /Rerank skipped/);
+    const after = rowsOf(text);
+    assert.deepEqual(after.map((l) => l.replace(/, rerank \d+$/, '')), [...before].reverse());
+    after.forEach((l, i) => assert.ok(l.endsWith(`, rerank ${i + 1}`), l));
+    assert.deepEqual(stub.requests.map((q) => [q.url, q.body.model, q.body.stream]), [['/api/generate', 'inkling-2-mini', false]]);
+    assert.match(stub.requests[0].body.prompt, /^Query: release feature tagged flags\n1\. /);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('rerank: a failing or absent model keeps the fused order and says the rerank was skipped', async () => {
+  const s = await seeded(undefined);
+  const [plain] = await search(s, QUERY);
+  const down = await ollama();
+  await down.close();
+  for (const mode of ['500', '404', 'down']) {
+    const stub = mode === 'down' ? down : await ollama(mode);
+    try {
+      rerankOn(s, { url: stub.url, model: 'inkling-2-mini' });
+      const [text] = await search(s, QUERY);
+      assert.match(text, /Rerank skipped \(.*(Ollama answered|unreachable)/);
+      assert.match(text, /; the fused order stands\./);
+      assert.deepEqual(rowsOf(text), rowsOf(plain), 'the fused order, unchanged');
+    } finally {
+      if (mode !== 'down') await stub.close();
+    }
+  }
+});
+
+test('rerank: a client tenant refuses a model that is not on this machine', async () => {
+  const s = await seeded(undefined);
+  rerankOn(s, { url: 'http://192.0.2.10:11434' }); // never contacted: the network guard fails the test if it were
+  const [text] = await search(s, QUERY);
+  assert.match(text, /Rerank skipped \(acme is a client tenant, and its text goes only to a model on this machine .*; http:\/\/192\.0\.2\.10:11434 is not\)/);
+  assert.ok(rowsOf(text).length >= 2);
+});
+
+test('rerank: diff recall reaches it too', async () => {
+  const stub = await ollama();
+  try {
+    const s = await seeded(undefined, { items: [] });
+    for (const t of ['Consumption totals are cached', 'Consumption rates come from the meter']) {
+      assert.equal(remember(s.acmeApi, s.data, s.configA, t, '--scope', 'repository', '--type', 'hazard').status, 0);
+    }
+    commit(s.acmeApi, { 'src/consumption.ts': 'export const c = 1;\n' });
+    rerankOn(s, { url: stub.url });
+    const r = await runAsync(['recall', '--diff', 'HEAD~1..HEAD'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /rerank 1/);
+    assert.deepEqual(stub.requests.map((q) => q.url), ['/api/generate']);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('rerank config is validated: an http(s) url without credentials, and a model name', () => {
+  const s = setup();
+  for (const rerank of [{ url: 'http://u:p@127.0.0.1:11434' }, { url: 'ftp://127.0.0.1' }, { model: '' }, 'on']) {
+    rerankOn(s, rerank);
+    const r = run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: searchCall('x') + '\n' });
+    assert.match(r.stdout + r.stderr, /rerank must be/);
   }
 });

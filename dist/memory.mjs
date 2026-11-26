@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync16, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
-import { basename as basename4, isAbsolute as isAbsolute9, join as join19, normalize as normalize4 } from "node:path";
+import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
+import { basename as basename4, isAbsolute as isAbsolute9, join as join18, normalize as normalize4 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -117,6 +117,10 @@ function loadConfig(data) {
   if (emb !== void 0 && !(typeof emb === "object" && emb !== null && !Array.isArray(emb) && EMBEDDING_PROVIDERS.includes(emb.provider) && (emb.model === void 0 || typeof emb.model === "string" && emb.model !== "") && (emb.url === void 0 || emb.provider === "ollama" && typeof emb.url === "string" && plainHttp(emb.url)))) {
     throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(" or ")}, "model"?: a name, "url"?: Ollama's http(s) address without credentials}`);
   }
+  const rr = c.rerank;
+  if (rr !== void 0 && !(typeof rr === "object" && rr !== null && !Array.isArray(rr) && (rr.url === void 0 || typeof rr.url === "string" && plainHttp(rr.url)) && (rr.model === void 0 || typeof rr.model === "string" && rr.model !== ""))) {
+    throw new ConfigError('rerank must be {"url"?: an http(s) address without credentials, "model"?: a name}');
+  }
   const capture2 = c.capture;
   if (capture2 !== void 0) {
     const ok = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
@@ -152,6 +156,7 @@ function loadConfig(data) {
     ...types !== void 0 ? { subagentTypes: types } : {},
     ...imports !== void 0 ? { imports } : {},
     ...emb !== void 0 ? { embeddings: emb } : {},
+    ...rr !== void 0 ? { rerank: rr } : {},
     ...c.consent !== void 0 ? { consent: c.consent } : {},
     ...capture2 !== void 0 ? { capture: capture2 } : {},
     ...c.automation !== void 0 ? { automation: c.automation } : {},
@@ -826,6 +831,9 @@ var RANKING = {
   /** Provisional, like the confidence constants: a vector match scores 0 at this cosine and `semantic` points at 1. */
   minSimilarity: 0.35,
   semantic: 4,
+  /** An item sharing an anchored path with one of the `graphTop` best keyword or semantic hits (fuse.ts). */
+  graph: 1,
+  graphTop: 3,
   /** An item anchored on a depth-1 dependent of a change (#16); `untested` is added when that dependent is neither changed nor tested. Provisional until the review replay shows dependent false recall under 10%. */
   dependent: 2,
   untested: 1,
@@ -833,7 +841,7 @@ var RANKING = {
   limit: 10
 };
 var tenth = (n) => Math.round(n * 10) / 10;
-function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = [], repository = null) {
+function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = [], repository = null, near) {
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\/?$|^\.\//, "").replace(/\/+$/, ""));
   const score = (item) => {
     const parts2 = [];
@@ -855,11 +863,13 @@ function rank(items, paths, now = Date.now(), similarity2, keyed, dependents = [
     const text4 = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity2?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth(RANKING.semantic * (cos - RANKING.minSimilarity) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && reached.length === 0 && text4 === 0 && semantic === 0 && !key2) return null;
+    const graph = near?.has(item.id) === true;
+    if (overlap === 0 && reached.length === 0 && text4 === 0 && semantic === 0 && !graph && !key2) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (repository !== null && (item.scope === "person" || item.scope === "global") && item.origin === repository) add("this repository", RANKING.origin);
     if (text4 > 0) add("text", text4);
     if (semantic > 0) add("semantic", semantic);
+    if (graph) add("graph", RANKING.graph);
     const c = confidence(item, now);
     add(`confidence ${band(c)}`, tenth(RANKING.confidence * c));
     if (item.contradictions > 0) add("contradicted", -item.contradictions * RANKING.contradiction);
@@ -1392,7 +1402,7 @@ var DATA_CATEGORIES = [
   { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
   { id: "injections", since: 2, text: "Which items a subagent was shown, and with pointOfAction on which an agent was shown when it read or edited anchored code, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
   { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
-  { id: "embeddings", since: 4, text: "Embeddings, only when embeddings in config.json names a provider (off by default; a local Ollama with an embedding model you install, or voyage-4, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query and the changed files' names of memory recall --diff, are sent to that provider and the vectors that come back are kept in the item's own file. A tenant's text is sent only to a provider on this machine (an address of 127.0.0.1, localhost or [::1]); one elsewhere gets the person file's text only. Quarantined text is never sent. Search uses the vectors only for a tenant whose last head-to-head scorecard shows a vocabulary-miss share above 20%, and never in a hook. Without a provider, a key or a network, nothing is sent and recall uses words and paths only" },
+  { id: "embeddings", since: 4, text: "Embeddings, only when embeddings in config.json names a provider (off by default; a local Ollama with an embedding model you install, or voyage-4, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query and the changed files' names of memory recall --diff, are sent to that provider and the vectors that come back are kept in the item's own file. A tenant's text is sent only to a provider on this machine (an address of 127.0.0.1, localhost or [::1]); one elsewhere gets the person file's text only. When rerank in config.json names a generative model (off by default; Inkling 2 Mini on the same local Ollama unless set, which you install), each memory_search query or memory recall --diff file list and the statements of the rows it found are sent to it to reorder them, under the same rule for a tenant's text. Quarantined text is never sent, and no hook uses either. Without a provider, a key or a network, nothing is sent and recall uses words and paths only" },
   { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
@@ -1858,7 +1868,7 @@ var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lo
 
 // src/mcp/server.ts
 import { isAbsolute as isAbsolute4, relative as relative3 } from "node:path";
-import { createInterface as createInterface2 } from "node:readline";
+import { createInterface } from "node:readline";
 
 // src/automation.ts
 import { readFileSync as readFileSync5 } from "node:fs";
@@ -2375,26 +2385,26 @@ function logWithheld(data, config, via, session, withheld) {
 // src/recall/fuse.ts
 var RRF_K = 60;
 var fourth = (n) => Math.round(n * 1e4) / 1e4;
+var byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 function fuse(items, similarity2, ranked) {
   const cos = (i) => similarity2.get(i.id) ?? 0;
-  const semantic = items.filter((i) => cos(i) >= RANKING.minSimilarity).sort((a, b) => cos(b) - cos(a) || (a.id < b.id ? -1 : 1)).slice(0, RANKING.limit);
+  const keyword = ranked(items).map((h) => h.item);
+  const semantic = items.filter((i) => cos(i) >= RANKING.minSimilarity).sort((a, b) => cos(b) - cos(a) || byId(a, b)).slice(0, RANKING.limit);
+  const top = [.../* @__PURE__ */ new Set([...keyword.slice(0, RANKING.graphTop), ...semantic.slice(0, RANKING.graphTop)])];
+  const graph = items.filter((i) => top.some((t) => t.id !== i.id && t.anchors.some((a) => i.anchors.some((b) => b.path === a.path)))).sort((a, b) => b.support - a.support || byId(a, b)).slice(0, RANKING.limit);
+  const near = new Set(graph.map((i) => i.id));
   const fused = /* @__PURE__ */ new Map();
   const add = (item, at3) => {
     const f = fused.get(item.id) ?? { item, rrf: 0 };
     f.rrf += 1 / (RRF_K + at3 + 1);
     fused.set(item.id, f);
   };
-  ranked(items).forEach((h, at3) => add(h.item, at3));
-  semantic.forEach(add);
-  return [...fused.values()].sort((a, b) => b.rrf - a.rrf || b.item.support - a.item.support || (a.item.id < b.item.id ? -1 : 1)).slice(0, RANKING.limit).map(({ item, rrf }) => {
-    const points = ranked([item], /* @__PURE__ */ new Map([[item.id, cos(item)]]))[0];
+  for (const list2 of [keyword, semantic, graph]) list2.forEach(add);
+  return [...fused.values()].sort((a, b) => b.rrf - a.rrf || b.item.support - a.item.support || byId(a.item, b.item)).slice(0, RANKING.limit).map(({ item, rrf }) => {
+    const points = ranked([item], /* @__PURE__ */ new Map([[item.id, cos(item)]]), near.has(item.id) ? near : void 0)[0];
     return { item, score: fourth(rrf), why: `${points.why}, rrf ${fourth(rrf)}` };
   });
 }
-
-// src/recall/semantic.ts
-import { readFileSync as readFileSync8 } from "node:fs";
-import { join as join9 } from "node:path";
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
@@ -3071,6 +3081,49 @@ function providerFor(config, timeoutMs, env = process.env) {
   return voyage(model ?? "voyage-4", timeoutMs, env);
 }
 
+// src/recall/rerank.ts
+var RERANK_DEFAULTS = { url: OLLAMA_URL, model: "inkling-2-mini" };
+var RERANK_TIMEOUT_MS = 3e3;
+var PROMPT2 = `You rank remembered facts by how well each answers a search query.
+The facts are numbered. Answer JSON only: {"order":[<the numbers, most relevant first>]}.`;
+async function rerank(config, context, query, hits) {
+  if (config.rerank === void 0 || hits.length < 2) return { hits };
+  const { url, model } = { ...RERANK_DEFAULTS, ...config.rerank };
+  const skipped = (reason) => ({ hits, note: `Rerank skipped (${reason}); the fused order stands.` });
+  if (!covers(config, "embeddings")) return skipped("your consent does not cover it yet; run memory init and confirm");
+  if (context.tenant !== null && !onThisMachine(new URL(url))) {
+    return skipped(`${context.tenant} is a client tenant, and its text goes only to a model on this machine (a 127.0.0.1, localhost or [::1] address); ${url} is not`);
+  }
+  const refused = refusal(query);
+  if (refused !== null) return skipped(`the query cannot be sent: ${refused}`);
+  let answer;
+  try {
+    const res = await fetch(new URL("/api/generate", url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        system: PROMPT2,
+        format: "json",
+        stream: false,
+        options: { temperature: 0 },
+        prompt: `Query: ${scrub(query)}
+${hits.map((h, i) => `${i + 1}. ${h.item.statement}`).join("\n")}`
+      }),
+      signal: AbortSignal.timeout(RERANK_TIMEOUT_MS)
+    });
+    if (!res.ok) return skipped(`Ollama answered ${res.status}${res.status === 404 ? `; is ${model} installed?` : ""}`);
+    answer = JSON.parse((await res.json()).response ?? "");
+  } catch (error) {
+    return skipped(error instanceof SyntaxError ? `${model} did not answer JSON` : `${model} at ${url} is unreachable or too slow`);
+  }
+  const order = answer?.order;
+  const picked = Array.isArray(order) ? [...new Set(order.filter((n) => Number.isInteger(n) && n >= 1 && n <= hits.length).map((n) => n - 1))] : [];
+  if (picked.length === 0) return skipped(`${model} returned no order`);
+  const all = [...picked, ...hits.map((_, i) => i).filter((i) => !picked.includes(i))];
+  return { hits: all.map((i, at3) => ({ ...hits[i], why: `${hits[i].why}, rerank ${at3 + 1}` })) };
+}
+
 // src/embed/vectors.ts
 var toBlob = (v) => new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
 var fromBlob = (b) => new Float32Array(new Uint8Array(b).buffer);
@@ -3114,535 +3167,7 @@ function loadVectors(db, model) {
   return new Map(rows.map((r) => [r.item_id, fromBlob(r.vector)]));
 }
 
-// src/eval/head-to-head/scorecard.ts
-import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join8 } from "node:path";
-import { performance } from "node:perf_hooks";
-
-// src/eval/head-to-head/arms.ts
-import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join as join7 } from "node:path";
-import { createInterface } from "node:readline";
-
-// src/recall/visible.ts
-function withTextRatio(items, matches2) {
-  const best = Math.min(0, ...items.map((i) => matches2.get(i.id) ?? 0));
-  return items.map((item) => {
-    const bm25 = matches2.get(item.id);
-    return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
-  });
-}
-function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = [], reach) {
-  const out = [];
-  const other = reach !== void 0 && reach !== "all" && reach.repository !== context.repository;
-  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
-  const add = (items, matches2) => void out.push(...withTextRatio(items, matches2));
-  if (context.tenant !== null && context.repository !== null && context.owner !== null) {
-    const file = tenantFile(data, context.tenant);
-    const db = openStore(file, false, busyMs);
-    if (db !== null) {
-      try {
-        if (!other) withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
-        const named = reach !== void 0 && reach !== "all" ? reach.repository : void 0;
-        const items = reach === "all" ? allTenantItems(db, context.tenant) : tenantItems(db, context.tenant, named ?? context.repository, named === void 0 ? context.owner : named.split("/")[0]);
-        add(instructions === null ? items : screen(db, items, instructions, false, withheld), textMatches(db, terms));
-      } finally {
-        db.close();
-      }
-    }
-  }
-  const person = openStore(personFile(data), false, busyMs);
-  if (person !== null) {
-    try {
-      const items = personItems(person, reach !== void 0 && reach !== "all" ? reach.repository : void 0);
-      add(instructions === null ? items : screen(person, items, instructions, true, withheld), textMatches(person, terms));
-    } finally {
-      person.close();
-    }
-  }
-  return reach === "all" ? out : narrowerWins(out);
-}
-
-// src/eval/head-to-head/arms.ts
-var TYPE = { decision: "decision", correction: "convention", lesson: "precedent", hazard: "hazard", failure: "failure-pattern", "code-change": "" };
-function memoryArm() {
-  const dir = mkdtempSync(join7(tmpdir(), "memory-head-to-head-"));
-  const db = openStore(join7(dir, "arm.sqlite"), true);
-  let set;
-  const item = /* @__PURE__ */ new Map();
-  const evidence = /* @__PURE__ */ new Map();
-  return {
-    async ingest(s) {
-      set = s;
-      for (const e of s.ingest) {
-        if (e.kind === "code-change") {
-          for (const i of tenantItems(db, s.tenant, s.repository, s.repository.split("/")[0])) {
-            if (i.anchors.some((a) => a.path === e.path)) db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ?").run(`${e.path} changed`, i.id);
-          }
-          continue;
-        }
-        const c = {
-          tenant: s.tenant,
-          scope: "repository",
-          scopeKey: s.repository,
-          type: TYPE[e.kind],
-          statement: e.statement,
-          rationale: null,
-          anchors: e.path === void 0 ? [] : [{ path: e.path }],
-          source: `history ${e.id}`,
-          evidenceAt: e.at
-        };
-        const older = e.supersedes === void 0 ? void 0 : item.get(e.supersedes);
-        const id = (older === void 0 ? null : supersedeNow(db, c, older))?.id ?? insertItem(db, c);
-        item.set(e.id, id);
-        evidence.set(id, e.id);
-      }
-    },
-    async answer(q) {
-      const items = withTextRatio(tenantItems(db, set.tenant, set.repository, set.repository.split("/")[0]), textMatches(db, searchTerms(q.question))).map((i) => ({ ...i, id: evidence.get(i.id) }));
-      return rank(items, q.path === void 0 ? [] : [q.path], Date.now(), void 0, void 0, [], set.repository).map((h) => leanRow(h.item, h.why, LEAN_ROW_TOKENS));
-    },
-    close() {
-      db.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
-}
-var offArm = () => ({ async ingest() {
-}, async answer() {
-  return [];
-}, close() {
-} });
-var AUTO_MEMORY_LINES = 200;
-function autoMemoryArm() {
-  let text4 = "";
-  return {
-    async ingest(s) {
-      const lines2 = s.ingest.filter((e) => e.kind !== "code-change").map((e) => `- ${e.statement}${e.path === void 0 ? "" : ` (${e.path})`}`);
-      text4 = ["# Memory", ...lines2].slice(0, AUTO_MEMORY_LINES).join("\n");
-      if (lines2.length === 0) text4 = "";
-    },
-    async answer() {
-      return text4 === "" ? [] : [text4];
-    },
-    close() {
-    }
-  };
-}
-function wholeHistoryArm() {
-  let text4 = "";
-  return {
-    async ingest(s) {
-      text4 = s.ingest.map((e) => `${e.at} ${e.kind}: ${e.statement}${e.path === void 0 ? "" : ` (${e.path})`}`).join("\n");
-    },
-    async answer() {
-      return text4 === "" ? [] : [text4];
-    },
-    close() {
-    }
-  };
-}
-var EXTERNAL_ARMS = {
-  mem0: { MEM0_TELEMETRY: "False" },
-  graphiti: { GRAPHITI_TELEMETRY_ENABLED: "false" },
-  "basic-memory": {},
-  "community-plugin": {}
-};
-var ArmFailed = class extends Error {
-};
-var ANSWER_MS = 3e4;
-var INGEST_MS = 3e5;
-function externalArm(name, spec) {
-  let child;
-  let failed;
-  const replies = [];
-  let waiting;
-  const call2 = async (request, ms) => {
-    if (failed !== void 0) throw failed;
-    child.stdin.write(`${JSON.stringify(request)}
-`);
-    let timer;
-    while (replies.length === 0) {
-      if (failed !== void 0) throw failed;
-      await new Promise((ok) => {
-        waiting = ok;
-        timer = setTimeout(() => {
-          failed = new ArmFailed(`${name} crashed: no reply within ${ms / 1e3} s`);
-          ok();
-        }, ms);
-      });
-      clearTimeout(timer);
-    }
-    try {
-      const reply = JSON.parse(replies.shift());
-      if (typeof reply !== "object" || reply === null) throw new Error("not an object");
-      return reply;
-    } catch {
-      throw failed = new ArmFailed(`${name} crashed: a reply that is not a JSON object`);
-    }
-  };
-  return {
-    async ingest(set) {
-      const [program, ...args] = spec.command;
-      const c = spawn(program, args, {
-        env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", DO_NOT_TRACK: "1", ...EXTERNAL_ARMS[name] },
-        stdio: ["pipe", "pipe", "ignore"]
-      });
-      child = c;
-      c.on("error", (error) => {
-        failed = new ArmFailed(error.code === "ENOENT" ? `${name} is not installed: ${program} was not found` : `${name} crashed: ${error.message}`);
-        waiting?.();
-      });
-      c.on("exit", (code, signal) => {
-        failed ??= new ArmFailed(`${name} crashed: it exited (${signal ?? code})`);
-        waiting?.();
-      });
-      c.stdin.on("error", () => {
-      });
-      createInterface({ input: c.stdout }).on("line", (line) => {
-        replies.push(line);
-        waiting?.();
-      });
-      const hello = await call2({ op: "hello", arm: name }, ANSWER_MS);
-      if (hello["telemetry"] !== "off") throw failed = new ArmFailed(`${name} did not confirm its telemetry is off, so it was sent no evidence`);
-      await call2({ op: "ingest", tenant: set.tenant, repository: set.repository, evidence: set.ingest }, INGEST_MS);
-    },
-    async answer(q) {
-      const reply = await call2({ op: "answer", question: q.question, ...q.path !== void 0 ? { path: q.path } : {} }, ANSWER_MS);
-      const hits = reply["hits"];
-      if (!Array.isArray(hits) || !hits.every((h) => typeof h === "string")) throw failed = new ArmFailed(`${name} crashed: an answer without a hits list of text`);
-      return hits;
-    },
-    close() {
-      child?.removeAllListeners("exit");
-      child?.kill();
-    }
-  };
-}
-
-// src/eval/head-to-head/grade.ts
-var norm = (s) => ` ${s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
-var holds = (hit, key2) => norm(hit).includes(norm(key2));
-var at2 = (hits, key2, k) => hits.slice(0, k).findIndex((h) => holds(h, key2));
-function grade(arm, q, hits, tokens2, ms) {
-  const worst = Math.min(...q.mustNot.map((k) => at2(hits, k, 5)).filter((i) => i >= 0), Infinity);
-  const found = (k) => q.keys.filter((key2) => {
-    const i = at2(hits, key2, k);
-    return i >= 0 && i <= worst;
-  }).length;
-  const share = (n) => q.keys.length === 0 ? 0 : n / q.keys.length;
-  const top5 = found(5);
-  return {
-    arm,
-    question: q.id,
-    category: q.category,
-    at1: share(found(1)),
-    at5: share(top5),
-    abstained: hits.length === 0,
-    staleRecalled: worst !== Infinity,
-    correct: top5,
-    tokens: tokens2,
-    ms
-  };
-}
-var SAMPLE = 30;
-function sample(answers) {
-  const matches2 = [];
-  for (const { arm, q, hits } of answers) {
-    for (const key2 of [...q.keys, ...q.mustNot]) {
-      const line = hits.slice(0, 5).flatMap((h) => h.split("\n")).find((l) => holds(l, key2));
-      if (line !== void 0) matches2.push({ arm, question: q.id, key: key2, excerpt: line.slice(0, 400), correct: null });
-    }
-  }
-  const order = (s) => sha256(`${s.arm}
-${s.question}
-${s.key}`);
-  return matches2.sort((a, b) => order(a) < order(b) ? -1 : 1).slice(0, SAMPLE);
-}
-function precision(sampled, checked, where2) {
-  const mark = new Map(checked.filter((c) => typeof c.correct === "boolean").map((c) => [`${c.arm}
-${c.question}
-${c.key}`, c.correct]));
-  const marks = sampled.map((s) => mark.get(`${s.arm}
-${s.question}
-${s.key}`)).filter((m) => m !== void 0);
-  return {
-    sample: sampled.length,
-    checked: marks.length,
-    precision: marks.length === 0 ? null : marks.filter((m) => m).length / marks.length,
-    ...marks.length < sampled.length ? { note: `mark each grade in ${where2} correct true or false and pass it as --checked` } : {}
-  };
-}
-var sharesNoWord = (question, text4) => {
-  const words3 = new Set(searchTerms(text4, Infinity));
-  return !searchTerms(question, Infinity).some((w) => words3.has(w));
-};
-
-// src/eval/head-to-head/replay-set.ts
-var EVIDENCE_KINDS = ["decision", "correction", "lesson", "hazard", "failure", "code-change"];
-var EVENT_KINDS = ["correction", "decision", "failure"];
-var CATEGORIES = ["single-fact", "multi-source", "knowledge-update", "temporal", "abstention", "code-anchored-hazard", "stale-citation"];
-var isText = (v) => typeof v === "string" && v.trim() !== "";
-var isDate = (v) => isText(v) && !Number.isNaN(Date.parse(v));
-function parseHistory(text4) {
-  const h = JSON.parse(text4);
-  if (typeof h?.tenant !== "string" || !TENANT_NAME.test(h.tenant)) throw new Error("tenant must be a tenant name: lower-case letters, digits and dashes");
-  if (!isText(h.repository) || !Array.isArray(h.evidence) || !Array.isArray(h.events)) {
-    throw new Error('expected {"tenant", "repository", "evidence": [...], "events": [...]}');
-  }
-  const ids = /* @__PURE__ */ new Set();
-  for (const e of h.evidence) {
-    const bad2 = !isText(e?.id) || ids.has(e.id) ? "a unique id" : !isDate(e.at) ? "an at date" : !EVIDENCE_KINDS.includes(e.kind) ? `a kind of ${EVIDENCE_KINDS.join(", ")}` : !isText(e.statement) ? "a statement" : e.kind === "code-change" ? isText(e.path) ? null : "a path" : !isText(e.key) ? "a key" : e.path !== void 0 && !isText(e.path) ? "a path that is text" : null;
-    if (bad2 !== null) throw new Error(`evidence ${JSON.stringify(e?.id)} needs ${bad2}`);
-    ids.add(e.id);
-  }
-  const unknown = h.evidence.find((e) => e.supersedes !== void 0 && !ids.has(e.supersedes));
-  if (unknown !== void 0) throw new Error(`evidence ${unknown.id} supersedes ${String(unknown.supersedes)}, which the history does not hold`);
-  const events = /* @__PURE__ */ new Set();
-  for (const e of h.events) {
-    const bad2 = !isText(e?.id) || events.has(e.id) ? "a unique id" : !isDate(e.at) ? "an at date" : !EVENT_KINDS.includes(e.kind) ? `a kind of ${EVENT_KINDS.join(", ")}` : !isText(e.question) ? "a question" : !Array.isArray(e.answers) || !e.answers.every((a) => ids.has(a)) ? "answers naming evidence the history holds" : e.asOf !== void 0 && !isDate(e.asOf) ? "an asOf date" : e.path !== void 0 && !isText(e.path) ? "a path that is text" : null;
-    if (bad2 !== null) throw new Error(`event ${JSON.stringify(e?.id)} needs ${bad2}`);
-    events.add(e.id);
-  }
-  return { ...h, client: h.client !== false };
-}
-function buildReplaySet(h, since) {
-  const cut2 = Date.parse(since);
-  const before = (at3) => Date.parse(at3) < cut2;
-  const ingest = h.evidence.filter((e) => before(e.at)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : 1));
-  const held2 = new Map(ingest.map((e) => [e.id, e]));
-  const rewritten = (e) => e.path !== void 0 && ingest.some((c) => c.kind === "code-change" && c.path === e.path && Date.parse(c.at) > Date.parse(e.at));
-  let dropped = 0;
-  const questions = [];
-  for (const ev of h.events.filter((e) => !before(e.at))) {
-    const answers = ev.answers.map((id) => held2.get(id));
-    if (answers.some((a) => a === void 0)) {
-      dropped++;
-      continue;
-    }
-    const found = answers;
-    const older = found.flatMap((a) => a.supersedes === void 0 ? [] : [held2.get(a.supersedes)]);
-    const q = (category, keys, mustNot = []) => ({
-      id: ev.id,
-      category,
-      question: ev.question,
-      ...ev.path !== void 0 ? { path: ev.path } : {},
-      ...ev.asOf !== void 0 ? { asOf: ev.asOf } : {},
-      keys: keys.map((e) => e.key),
-      statements: keys.map((e) => e.statement),
-      mustNot: mustNot.map((e) => e.key)
-    });
-    questions.push(
-      found.length === 0 ? q("abstention", []) : ev.asOf !== void 0 ? q("temporal", found) : found.some(rewritten) ? q("stale-citation", found.filter((a) => !rewritten(a)), found.filter(rewritten)) : older.length > 0 ? q("knowledge-update", found, older) : found.length > 1 ? q("multi-source", found) : found[0].kind === "hazard" && found[0].path !== void 0 ? q("code-anchored-hazard", found) : q("single-fact", found)
-    );
-  }
-  return { tenant: h.tenant, repository: h.repository, client: h.client, since, ingest, questions, dropped };
-}
-
-// src/eval/head-to-head/scorecard.ts
-var BARS = {
-  "knowledge-update": "memory at or above the best alternative on knowledge-update recall at 1",
-  abstention: "memory at or above the best alternative on abstention precision",
-  "stale-citation": "memory at or above the best alternative on stale citation: one minus stale recall",
-  "single-fact": "memory within 5 points of the best alternative on single-fact recall at 5",
-  "multi-source": "memory within 5 points of the best alternative on multi-source recall at 5",
-  "tokens-per-correct-item": "memory at most one fifth of the best alternative's tokens per correct item, the best alternative being the one with the highest recall at 5 over all questions",
-  latency: "memory p95 latency at most 150 ms"
-};
-var P95_MS = 150;
-var BUILT_IN = { memory: memoryArm, off: offArm, "auto-memory": autoMemoryArm, "whole-history": wholeHistoryArm };
-var MODEL_RUNS = 3;
-function parseArms(text4) {
-  const doc = JSON.parse(text4);
-  const arms = doc?.arms;
-  if (typeof arms !== "object" || arms === null || Array.isArray(arms)) throw new Error('expected {"arms": {"<name>": {"command": [...]}}}');
-  for (const [name, spec] of Object.entries(arms)) {
-    if (name in BUILT_IN) throw new Error(`${name} is a built-in arm and takes no command`);
-    if (!Array.isArray(spec?.command) || spec.command.length === 0 || !spec.command.every((c) => typeof c === "string" && c !== "")) {
-      throw new Error(`arm ${name} needs a command: a list of the program and its arguments`);
-    }
-    for (const flag of ["offMachine", "modelBacked"]) {
-      if (spec[flag] !== void 0 && typeof spec[flag] !== "boolean") throw new Error(`arm ${name}: ${flag} is true or false`);
-    }
-  }
-  return arms;
-}
-async function runArm(arm, set) {
-  try {
-    await arm.ingest(set);
-    const out = [];
-    for (const q of set.questions) {
-      const start = performance.now();
-      const hits = await arm.answer(q);
-      out.push({ q, hits, ms: performance.now() - start });
-    }
-    return out;
-  } finally {
-    arm.close();
-  }
-}
-var r3 = (n) => Math.round(n * 1e3) / 1e3;
-var mean = (xs) => xs.length === 0 ? null : r3(xs.reduce((a, b) => a + b, 0) / xs.length);
-var pct = (xs, p) => {
-  if (xs.length === 0) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  return Math.round(s[Math.min(s.length - 1, Math.ceil(p / 100 * s.length) - 1)] * 10) / 10;
-};
-function figures(grades, all) {
-  const keyed = grades.filter((g) => g.category !== "abstention" && g.category !== "stale-citation");
-  const guarded = grades.filter((g) => g.category === "knowledge-update" || g.category === "stale-citation");
-  const correct = grades.reduce((a, g) => a + g.correct, 0);
-  const tokens2 = grades.reduce((a, g) => a + g.tokens, 0);
-  const silent = grades.filter((g) => g.abstained);
-  return {
-    samples: grades.length,
-    recall_at_1: mean(keyed.map((g) => g.at1)),
-    recall_at_5: mean(keyed.map((g) => g.at5)),
-    abstained: mean(grades.map((g) => g.abstained ? 1 : 0)),
-    stale_recall: mean(guarded.map((g) => g.staleRecalled ? 1 : 0)),
-    tokens_per_question: mean(grades.map((g) => g.tokens)),
-    tokens_per_correct_item: correct === 0 ? null : Math.round(tokens2 / correct * 10) / 10,
-    ...all ? { abstention_precision: silent.length === 0 ? null : r3(silent.filter((g) => g.category === "abstention").length / silent.length) } : {}
-  };
-}
-async function measure(name, make, set, runs) {
-  let first2 = [];
-  const perRun = {};
-  for (let i = 0; i < runs; i++) {
-    const answers = await runArm(make(), set);
-    if (i === 0) first2 = answers;
-    const grades = answers.map((a) => grade(name, a.q, a.hits, estimate(a.hits.join("\n")), a.ms));
-    for (const c of CATEGORIES) (perRun[c] ??= []).push(figures(grades.filter((g) => g.category === c), false)["recall_at_5"] ?? 0);
-  }
-  return { arm: name, status: "measured", runs, answers: first2, grades: first2.map((a) => grade(name, a.q, a.hits, estimate(a.hits.join("\n")), a.ms)), perRun };
-}
-async function headToHead(version, set, external, checked, out) {
-  const bars = { measure: "head-to-head-bars", version, tenant: set.tenant, since: set.since, status: "set before the run", bars: BARS };
-  const results = [];
-  for (const [name, make] of Object.entries(BUILT_IN)) results.push(await measure(name, make, set, 1));
-  for (const name of [.../* @__PURE__ */ new Set([...Object.keys(EXTERNAL_ARMS), ...Object.keys(external)])]) {
-    const spec = external[name];
-    const none = { arm: name, runs: 0, answers: [], grades: [], perRun: {} };
-    if (spec === void 0) results.push({ ...none, status: "failed", note: `${name} is not installed: no command for it in the arms file (README, Head to head)` });
-    else if (spec.offMachine === true && set.client) results.push({ ...none, status: "skipped", note: `${name} sends evidence off this machine, and ${set.tenant} is a client tenant` });
-    else {
-      try {
-        results.push(await measure(name, () => externalArm(name, spec), set, spec.modelBacked === true ? MODEL_RUNS : 1));
-      } catch (error) {
-        results.push({ ...none, status: "failed", note: error instanceof ArmFailed ? error.message : `${name} crashed: ${error.message}` });
-      }
-    }
-  }
-  const rows = [bars];
-  const latency = [];
-  for (const r of results) {
-    const base2 = { measure: "head-to-head", arm: r.arm, version, status: r.status, runs: r.runs };
-    const note = r.note === void 0 ? {} : { note: r.note };
-    for (const c of [...CATEGORIES, "all"]) {
-      const fields = r.status === "measured" ? figures(c === "all" ? r.grades : r.grades.filter((g) => g.category === c), c === "all") : { samples: set.questions.filter((q) => c === "all" || q.category === c).length, recall_at_1: 0, recall_at_5: 0, abstained: 0, stale_recall: null, tokens_per_question: null, tokens_per_correct_item: null, ...c === "all" ? { abstention_precision: null } : {} };
-      const spread = r.runs > 1 && c !== "all" ? { spread: { recall_at_5: [Math.min(...r.perRun[c]), Math.max(...r.perRun[c])] } } : {};
-      rows.push({ ...base2, category: c, ...fields, ...spread, ...note });
-    }
-    const ms = r.grades.map((g) => g.ms);
-    const p95 = pct(ms, 95);
-    latency.push({
-      measure: "head-to-head-latency",
-      arm: r.arm,
-      version,
-      status: r.status,
-      p50_ms: pct(ms, 50),
-      p95_ms: p95,
-      ...r.arm === "memory" ? { bar: BARS.latency, meets_bar: p95 !== null && p95 <= P95_MS } : {},
-      ...note
-    });
-  }
-  const score = (r, bar) => {
-    if (r.status !== "measured") return 0;
-    const of = (c) => figures(c === "all" ? r.grades : r.grades.filter((g) => g.category === c), c === "all");
-    const n = (v) => typeof v === "number" ? v : 0;
-    if (bar === "knowledge-update") return n(of(bar)["recall_at_1"]);
-    if (bar === "abstention") return n(of("all")["abstention_precision"]);
-    if (bar === "stale-citation") return 1 - n(of(bar)["stale_recall"] ?? 1);
-    return n(of(bar)["recall_at_5"]);
-  };
-  const memory = results.find((r) => r.arm === "memory");
-  const alternatives = results.filter((r) => r.arm !== "memory" && r.arm !== "off" && r.status !== "skipped");
-  const checks = [];
-  for (const bar of ["knowledge-update", "abstention", "stale-citation", "single-fact", "multi-source"]) {
-    const best2 = alternatives.reduce((a, b) => score(b, bar) > score(a, bar) ? b : a);
-    const [mine2, theirs2] = [r3(score(memory, bar)), r3(score(best2, bar))];
-    const meets = bar === "single-fact" || bar === "multi-source" ? mine2 >= theirs2 - 0.05 : mine2 >= theirs2;
-    checks.push({ bar, memory: mine2, best_alternative: theirs2, best_arm: best2.arm, meets });
-  }
-  const tokens2 = (r) => r.status === "measured" ? figures(r.grades, true)["tokens_per_correct_item"] : null;
-  const recall = (r) => r.status === "measured" ? figures(r.grades, true)["recall_at_5"] ?? 0 : 0;
-  const best = alternatives.reduce((a, b) => recall(b) > recall(a) ? b : a);
-  const [mine, theirs] = [tokens2(memory), tokens2(best)];
-  checks.push({ bar: "tokens-per-correct-item", memory: mine, best_alternative: theirs, best_arm: best.arm, meets: mine !== null && (theirs === null || mine * 5 <= theirs) });
-  let elsewhere = 0;
-  let vocabulary = 0;
-  memory.answers.forEach((a, i) => {
-    a.q.keys.forEach((key2, k) => {
-      if (a.hits.slice(0, 5).some((h) => holds(h, key2))) return;
-      if (!results.some((r) => r !== memory && r.answers[i]?.hits.slice(0, 5).some((h) => holds(h, key2)))) return;
-      elsewhere++;
-      if (sharesNoWord(a.q.question, a.q.statements[k])) vocabulary++;
-    });
-  });
-  const sampled = sample(results.flatMap((r) => r.answers.map((a) => ({ arm: r.arm, q: a.q, hits: a.hits }))));
-  const share = elsewhere === 0 ? null : r3(vocabulary / elsewhere);
-  const misses = checks.filter((c) => !c.meets).map((c) => c.bar);
-  const verdict2 = {
-    measure: "head-to-head-verdict",
-    version,
-    tenant: set.tenant,
-    since: set.since,
-    replay_set: {
-      questions: set.questions.length,
-      ingested: set.ingest.length,
-      dropped: set.dropped,
-      by_category: Object.fromEntries(CATEGORIES.map((c) => [c, set.questions.filter((q) => q.category === c).length]))
-    },
-    checks,
-    misses,
-    vocabulary_misses: vocabulary,
-    memory_misses_found_elsewhere: elsewhere,
-    vocabulary_miss_share: share,
-    matcher_precision: precision(sampled, checked, join8(out, "sample.jsonl"))
-  };
-  rows.push(...latency, verdict2);
-  mkdirSync7(out, { recursive: true, mode: 448 });
-  const write = (file, text4) => writeFileSync5(join8(out, file), text4, { mode: 384 });
-  const lines2 = (xs) => xs.map((x) => `${JSON.stringify(x)}
-`).join("");
-  write("replay-set.json", `${JSON.stringify(set, null, 1)}
-`);
-  write("results.jsonl", lines2(results.flatMap((r) => r.grades)));
-  write("sample.jsonl", lines2(sampled));
-  write("scorecard.jsonl", lines2(rows));
-  const last = { tenant: set.tenant, since: set.since, version, vocabulary_misses: vocabulary, memory_misses_found_elsewhere: elsewhere, vocabulary_miss_share: share, misses };
-  write("last.json", `${JSON.stringify(last, null, 2)}
-`);
-  return { rows, last };
-}
-var headToHeadDir = (data, tenant) => join8(data, "eval", "head-to-head", tenant);
-
 // src/recall/semantic.ts
-var VOCABULARY_TRIGGER = 0.2;
-function triggerRefusal(data, tenant) {
-  const need = `the leg needs a vocabulary-miss share above ${VOCABULARY_TRIGGER * 100}%`;
-  let share;
-  try {
-    share = JSON.parse(readFileSync8(join9(headToHeadDir(data, tenant), "last.json"), "utf8"))?.vocabulary_miss_share;
-  } catch {
-    return `${tenant} has no head-to-head scorecard, and ${need}; memory eval head-to-head measures it`;
-  }
-  if (typeof share !== "number") return `${tenant}'s last head-to-head scorecard has no vocabulary-miss share, and ${need}`;
-  if (share <= VOCABULARY_TRIGGER) return `${tenant}'s last head-to-head scorecard shows a vocabulary-miss share of ${Math.round(share * 1e3) / 10}%, and ${need}`;
-  return null;
-}
 function storeFiles(data, context) {
   const tenant = context.tenant !== null && context.repository !== null && context.owner !== null ? [tenantFile(data, context.tenant)] : [];
   return [...tenant, personFile(data)];
@@ -3652,10 +3177,7 @@ async function similarities(data, context, config, query, items) {
   if (provider === null) return null;
   const skipped = (reason) => ({ note: `Semantic leg skipped (${reason}); items are ranked by words and paths only.` });
   if (!covers(config, "embeddings")) return skipped("your consent does not cover embeddings yet; run memory init and confirm");
-  if (context.tenant === null) return skipped(`no tenant's head-to-head scorecard applies here: ${context.reason}`);
-  const closed = triggerRefusal(data, context.tenant);
-  if (closed !== null) return skipped(closed);
-  if (!provider.local) return skipped(notOnThisMachine(provider, context.tenant));
+  if (context.tenant !== null && !provider.local) return skipped(notOnThisMachine(provider, context.tenant));
   const refused = refusal(query);
   if (refused !== null) return skipped(`the query cannot be sent: ${refused}`);
   const wanted = new Set(items.map((i) => i.id));
@@ -3700,6 +3222,45 @@ function related(data, config, context, cwd, target, depth) {
   } finally {
     db.close();
   }
+}
+
+// src/recall/visible.ts
+function withTextRatio(items, matches2) {
+  const best = Math.min(0, ...items.map((i) => matches2.get(i.id) ?? 0));
+  return items.map((item) => {
+    const bm25 = matches2.get(item.id);
+    return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
+  });
+}
+function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = [], reach) {
+  const out = [];
+  const other = reach !== void 0 && reach !== "all" && reach.repository !== context.repository;
+  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
+  const add = (items, matches2) => void out.push(...withTextRatio(items, matches2));
+  if (context.tenant !== null && context.repository !== null && context.owner !== null) {
+    const file = tenantFile(data, context.tenant);
+    const db = openStore(file, false, busyMs);
+    if (db !== null) {
+      try {
+        if (!other) withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
+        const named = reach !== void 0 && reach !== "all" ? reach.repository : void 0;
+        const items = reach === "all" ? allTenantItems(db, context.tenant) : tenantItems(db, context.tenant, named ?? context.repository, named === void 0 ? context.owner : named.split("/")[0]);
+        add(instructions === null ? items : screen(db, items, instructions, false, withheld), textMatches(db, terms));
+      } finally {
+        db.close();
+      }
+    }
+  }
+  const person = openStore(personFile(data), false, busyMs);
+  if (person !== null) {
+    try {
+      const items = personItems(person, reach !== void 0 && reach !== "all" ? reach.repository : void 0);
+      add(instructions === null ? items : screen(person, items, instructions, true, withheld), textMatches(person, terms));
+    } finally {
+      person.close();
+    }
+  }
+  return reach === "all" ? out : narrowerWins(out);
 }
 
 // src/mcp/server.ts
@@ -3836,10 +3397,12 @@ async function search(args, data, config, context, cwd) {
   logWithheld(data, config, "memory_search", "mcp", withheld);
   const semantic = await similarities(data, context, config, query, items);
   const now = Date.now();
-  const ranked = (list2, similarity2) => rank(list2, elsewhere ? [] : relativePaths, now, similarity2, void 0, [], context.repository);
-  const hits = semantic !== null && "similarity" in semantic ? fuse(items, semantic.similarity, ranked) : ranked(items);
+  const ranked = (list2, similarity2, near) => rank(list2, elsewhere ? [] : relativePaths, now, similarity2, void 0, [], context.repository, near);
+  const fused = semantic !== null && "similarity" in semantic ? fuse(items, semantic.similarity, ranked) : ranked(items);
+  const { hits, note: reranked } = await rerank(config, context, query, fused);
   const note = (semantic !== null && "note" in semantic ? `${semantic.note}
-` : "") + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach.repository} is not this checkout.
+` : "") + (reranked === void 0 ? "" : `${reranked}
+`) + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach.repository} is not this checkout.
 ` : "");
   if (hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
@@ -4041,7 +3604,7 @@ async function handle(line, data, cwd, version) {
 }
 function serve(data, cwd, version) {
   let queue = Promise.resolve();
-  createInterface2({ input: process.stdin, terminal: false }).on("line", (line) => {
+  createInterface({ input: process.stdin, terminal: false }).on("line", (line) => {
     if (line.trim() === "") return;
     queue = queue.then(async () => {
       const reply = await handle(line, data, cwd, version);
@@ -4061,8 +3624,8 @@ function serve(data, cwd, version) {
 
 // src/promote/promote.ts
 import { randomBytes as randomBytes4 } from "node:crypto";
-import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync8, openSync as openSync2, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute5, join as join10, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
+import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync8, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute5, join as join7, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
 var DEFAULT_STANDARDS = "docs/review-standards.md";
 var BAR = `tenant = ? AND scope = 'repository' AND scope_key = ? AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}
   AND origin_trust = 'owner' AND quarantine IS NULL AND support >= ${PROMOTE_SUPPORT} AND contradictions = 0
@@ -4133,7 +3696,7 @@ function writable(top, rel) {
   while (!exists(dir)) dir = dirname9(dir);
   let real;
   try {
-    real = join10(realpathSync3(dir), relative4(dir, target));
+    real = join7(realpathSync3(dir), relative4(dir, target));
   } catch {
     throw new Error(`${clean} resolves outside the repository; nothing was written`);
   }
@@ -4152,7 +3715,7 @@ function readPlain(path, name) {
   }
   try {
     const { dev, ino } = fstatSync(fd);
-    const bytes = readFileSync9(fd);
+    const bytes = readFileSync8(fd);
     if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
     try {
       return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), dev, ino };
@@ -4174,7 +3737,7 @@ function applyPromotion(db, p, top, tenant, repository) {
   const read2 = readPlain(target, p.file);
   const text4 = read2?.text ?? "";
   if (text4.split("\n").some((l) => l.replace(/\r$/, "") === p.line)) throw new Error(`${p.file} already holds that line; nothing was written`);
-  mkdirSync8(dirname9(target), { recursive: true });
+  mkdirSync7(dirname9(target), { recursive: true });
   if (read2 !== null) {
     const now2 = lstatSync2(target);
     if (now2.isSymbolicLink() || now2.dev !== read2.dev || now2.ino !== read2.ino) throw new Error(`${p.file} changed while it was being read; nothing was written`);
@@ -4317,8 +3880,8 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync8, lstatSync as lstatSync3, readFileSync as readFileSync10, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join12, sep as sep3 } from "node:path";
+import { existsSync as existsSync8, lstatSync as lstatSync3, readFileSync as readFileSync9, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join9, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
 import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
@@ -4492,9 +4055,9 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 }
 
 // src/import/orbit.ts
-import { copyFileSync, existsSync as existsSync7, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
-import { join as join11 } from "node:path";
+import { copyFileSync, existsSync as existsSync7, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join8 } from "node:path";
 import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
 var PASSED = /^(?:passed|succeeded|success|completed|done)$/i;
 var TYPES2 = { practice: "convention", convention: "convention", hazard: "hazard", "failure-pattern": "failure-pattern", "repair-recipe": "repair-recipe" };
@@ -4503,13 +4066,13 @@ function orbitFindings(path) {
   let dir;
   let db;
   try {
-    dir = mkdtempSync2(join11(tmpdir2(), "memory-orbit-"));
-    const copy = join11(dir, "knowledge.sqlite");
+    dir = mkdtempSync(join8(tmpdir(), "memory-orbit-"));
+    const copy = join8(dir, "knowledge.sqlite");
     copyFileSync(path, copy);
     if (existsSync7(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
     db = new DatabaseSync3(copy);
   } catch (error) {
-    if (dir !== void 0) rmSync2(dir, { recursive: true, force: true });
+    if (dir !== void 0) rmSync(dir, { recursive: true, force: true });
     return { reason: `cannot be opened (${error.code ?? "error"})` };
   }
   try {
@@ -4592,7 +4155,7 @@ function orbitFindings(path) {
     return { reason: `is not an Orbit knowledge store this version reads (${error.message})` };
   } finally {
     db.close();
-    rmSync2(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -4606,7 +4169,7 @@ function readInside2(path, root) {
     const top = realpathSync4(root);
     if (!real.startsWith(top + sep3)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
     if (!statSync4(real).isFile()) return { reason: "not a file" };
-    return { text: readFileSync10(real, "utf8") };
+    return { text: readFileSync9(real, "utf8") };
   } catch (error) {
     return { reason: `cannot be read (${error.code ?? "error"})` };
   }
@@ -4642,16 +4205,16 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     return why !== null;
   };
   for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
-    const projects = join12(dir, "projects");
+    const projects = join9(dir, "projects");
     if (!existsSync8(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
-      const folder = join12(projects, project, "memory");
+      const folder = join9(projects, project, "memory");
       if (!existsSync8(folder) || !statSync4(folder).isDirectory()) continue;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
-        const path = join12(folder, name);
+        const path = join9(folder, name);
         const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link2 of parsed2.links) if (!existsSync8(join12(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
+        for (const link2 of parsed2.links) if (!existsSync8(join9(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line, text: text4 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -4677,7 +4240,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     }
   }
   const readOrbit = (checkout, rel, context) => {
-    const path = join12(checkout, rel);
+    const path = join9(checkout, rel);
     if (!inside3(rel)) {
       report.skippedFiles.push({ path: rel, reason: "not a path inside the repository" });
       return;
@@ -4731,7 +4294,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     for (const silo of SILOS) {
       const rel = silos[silo];
       if (rel === void 0 || silo === "orbit") continue;
-      const path = silo === "decisions" && isAbsolute7(rel) ? rel : join12(checkout, rel);
+      const path = silo === "decisions" && isAbsolute7(rel) ? rel : join9(checkout, rel);
       if (silo !== "decisions" && !inside3(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
@@ -4850,7 +4413,7 @@ function keepOrbit(db, id, f) {
 
 // src/report/report.ts
 var net = (r) => r.helped - r.wrong - r.stale;
-var byId = (a, b) => a.id < b.id ? -1 : 1;
+var byId2 = (a, b) => a.id < b.id ? -1 : 1;
 function tenantReport(db, tenant, now = Date.now()) {
   const rows = db.prepare(
     `SELECT id, type, scope, statement, quarantine, helped, wrong, stale_reports AS stale, coalesce(reinforced_at, valid_from) AS reinforced
@@ -4860,8 +4423,8 @@ function tenantReport(db, tenant, now = Date.now()) {
   const has = (r) => r.helped + r.wrong + r.stale > 0;
   return {
     // Ids are unique, so the order is total.
-    ranked: all.filter(has).sort((a, b) => net(b) - net(a) || b.confidence - a.confidence || byId(a, b)),
-    none: all.filter((r) => !has(r)).sort(byId)
+    ranked: all.filter(has).sort((a, b) => net(b) - net(a) || b.confidence - a.confidence || byId2(a, b)),
+    none: all.filter((r) => !has(r)).sort(byId2)
   };
 }
 var row2 = (r) => safe(
@@ -4882,8 +4445,8 @@ ${coverage === void 0 ? "" : `${coverage}
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync9, mkdirSync as mkdirSync9, readFileSync as readFileSync11, rmSync as rmSync3, writeFileSync as writeFileSync6 } from "node:fs";
-import { dirname as dirname10, join as join13, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync8, readFileSync as readFileSync10, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
   anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
@@ -4947,27 +4510,27 @@ function read(db, tenant, repository) {
 function writeIfChanged(path, content, mayExist) {
   if (mayExist) {
     try {
-      if (readFileSync11(path, "utf8") === content) return;
+      if (readFileSync10(path, "utf8") === content) return;
     } catch {
     }
   }
-  writeFileSync6(path, content);
+  writeFileSync5(path, content);
 }
 function exportMarkdown(stores2, dir, repository) {
   const all = stores2.flatMap(({ db, tenant }) => read(db, tenant, repository)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
   const successors = /* @__PURE__ */ new Map();
   for (const { row: row4 } of all) if (row4.supersedes !== null) successors.set(row4.supersedes, [...successors.get(row4.supersedes) ?? [], row4.id]);
-  const items = join13(dir, "items");
-  mkdirSync9(items, { recursive: true });
+  const items = join10(dir, "items");
+  mkdirSync8(items, { recursive: true });
   const current = new Set(all.map((a) => a.row.id));
   let previous = "";
   try {
-    previous = readFileSync11(join13(dir, "index.md"), "utf8");
+    previous = readFileSync10(join10(dir, "index.md"), "utf8");
   } catch {
   }
   const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
-  for (const id of listed) if (!current.has(id)) rmSync3(join13(items, `${id}.md`), { force: true });
-  for (const { row: row4, evidence } of all) writeIfChanged(join13(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
+  for (const id of listed) if (!current.has(id)) rmSync2(join10(items, `${id}.md`), { force: true });
+  for (const { row: row4, evidence } of all) writeIfChanged(join10(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
   const index = ["# Memory export", "", "Read only: editing these files changes nothing in memory.", ""];
   const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
   for (const status of statuses) {
@@ -4976,7 +4539,7 @@ function exportMarkdown(stores2, dir, repository) {
     for (const { row: row4 } of group) index.push(`- [${row4.id}](items/${row4.id}.md) ${span(row4.type)} ${span(where(row4))}`);
     index.push("");
   }
-  writeIfChanged(join13(dir, "index.md"), `${index.join("\n")}
+  writeIfChanged(join10(dir, "index.md"), `${index.join("\n")}
 `, previous !== "");
   return all.length;
 }
@@ -5134,11 +4697,11 @@ async function outcomes(client, fact) {
 async function importFromScf(db, tenant, client, remote, endpoint) {
   const result = { approved: 0, rejected: 0, held: 0, helped: 0, wrong: 0 };
   const links = db.prepare("SELECT l.item_id, l.proposal_id, l.fact_id, i.status, EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = i.id) AS has_evidence FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.endpoint = ? AND i.tenant = ? ORDER BY l.item_id").all(endpoint, tenant);
-  const byId2 = new Map(remote.map((p) => [p.id, p]));
+  const byId3 = new Map(remote.map((p) => [p.id, p]));
   const seen = db.prepare("SELECT 1 FROM scf_feedback WHERE item_id = ? AND run_id = ?");
   const plan2 = [];
   for (const l of links) {
-    const p = byId2.get(l.proposal_id);
+    const p = byId3.get(l.proposal_id);
     if (p === void 0) continue;
     const decided = p.status === "accepted" || p.status === "rejected";
     const fact = p.status === "accepted" ? l.fact_id ?? p.fact_id : null;
@@ -5242,12 +4805,12 @@ async function diffRecall(data, config, context, cwd, range) {
   const dependents = reach !== null && "dependents" in reach ? reach.dependents : [];
   const items = visibleItems(data, context, cwd, terms).filter((i) => TYPES3.has(i.type));
   const semantic = query === "" ? null : await similarities(data, context, config, query, items);
-  const note = (reach !== null && "note" in reach ? `${reach.note}
-` : "") + (semantic !== null && "note" in semantic ? `${semantic.note}
-` : "");
   const now = Date.now();
-  const ranked = (list2, similarity2) => rank(list2, changed, now, similarity2, void 0, dependents, context.repository);
-  const hits = semantic !== null && "similarity" in semantic ? fuse(items, semantic.similarity, ranked) : ranked(items);
+  const ranked = (list2, similarity2, near) => rank(list2, changed, now, similarity2, void 0, dependents, context.repository, near);
+  const fused = semantic !== null && "similarity" in semantic ? fuse(items, semantic.similarity, ranked) : ranked(items);
+  const { hits, note: reranked } = query === "" ? { hits: fused } : await rerank(config, context, query, fused);
+  const note = [reach !== null && "note" in reach ? reach.note : void 0, semantic !== null && "note" in semantic ? semantic.note : void 0, reranked].filter((n) => n !== void 0).map((n) => `${n}
+`).join("");
   const rows = [];
   const render = (list2) => (list2.length === 0 ? "No precedent or hazard matches this change.\n" : fence(ITEMS_LABEL, list2.join(""))) + note;
   for (const h of hits) {
@@ -5260,18 +4823,18 @@ async function diffRecall(data, config, context, cwd, range) {
 }
 
 // src/recall/orbit.ts
-import { existsSync as existsSync10, readFileSync as readFileSync12 } from "node:fs";
-import { join as join14 } from "node:path";
+import { existsSync as existsSync10, readFileSync as readFileSync11 } from "node:fs";
+import { join as join11 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
 function lessonsInPrompts(root) {
-  const file = join14(root, ".orbit", "config.yaml");
+  const file = join11(root, ".orbit", "config.yaml");
   if (!existsSync10(file)) return false;
   let sections = 0;
   let inKnowledge = false;
   let indent = 0;
   const seen = {};
-  for (const line of readFileSync12(file, "utf8").split(/\r?\n/)) {
+  for (const line of readFileSync11(file, "utf8").split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
     if (line.includes("	")) return false;
     const spaces = /^ */.exec(line)[0].length;
@@ -5411,7 +4974,7 @@ function declineSupersession(db, p) {
 
 // src/capture/transcripts.ts
 import { randomBytes as randomBytes5 } from "node:crypto";
-import { existsSync as existsSync11, readFileSync as readFileSync13 } from "node:fs";
+import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
 import { basename as basename3 } from "node:path";
 var TRANSCRIPT_DAYS = 30;
 var MAX_SUMMARY = 4e3;
@@ -5504,7 +5067,7 @@ function* writtenStrings(row4) {
   }
 }
 function ownerTurns(file) {
-  const raw = readFileSync13(file, "utf8");
+  const raw = readFileSync12(file, "utf8");
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
   const turns = [];
   const state = { depth: 0, held: "" };
@@ -6053,8 +5616,8 @@ function captureCi(data, config, cwd, limit = 100) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync12, readFileSync as readFileSync14, realpathSync as realpathSync5 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute8, join as join15, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync13, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname11, isAbsolute as isAbsolute8, join as join12, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
 var str4 = (v) => typeof v === "string" && v !== "" ? v : void 0;
@@ -6069,7 +5632,7 @@ function locate(abs) {
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root = realpathSync5(top);
-  const path = relative5(root, join15(realpathSync5(dir), relative5(dir, abs)));
+  const path = relative5(root, join12(realpathSync5(dir), relative5(dir, abs)));
   return path.startsWith("..") || isAbsolute8(path) ? null : { root, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
@@ -6125,7 +5688,7 @@ function anchored(items, root, t) {
   const read2 = () => {
     if (text4 === void 0) {
       try {
-        text4 = readFileSync14(resolve6(root, t.path), "utf8");
+        text4 = readFileSync13(resolve6(root, t.path), "utf8");
       } catch {
         text4 = null;
       }
@@ -6152,9 +5715,9 @@ function pointOfAction(data, input2, log) {
     try {
       const found = anchored(anchoredItems(db, context.tenant, context.repository, context.owner, hit.touch.path), hit.root, hit.touch);
       if (found.length === 0) return "";
-      const byId2 = new Map(found.map((i) => [i.id, i]));
+      const byId3 = new Map(found.map((i) => [i.id, i]));
       const result = claim(db, session, agent, found.map((i) => i.id), (unseen, left) => {
-        const slice = chooseSlice(unseen.map((id) => byId2.get(id)), Math.min(INJECTION_BUDGET, left));
+        const slice = chooseSlice(unseen.map((id) => byId3.get(id)), Math.min(INJECTION_BUDGET, left));
         const rows = slice.shown.map((i) => ({ id: i.id, tokens: estimate(row(i)) }));
         if (rows.length > 0) rows[0].tokens += estimate(slice.text) - rows.reduce((sum, r) => sum + r.tokens, 0);
         return { text: slice.text, shown: rows };
@@ -6240,8 +5803,8 @@ function orbitArm(version) {
 }
 
 // src/eval/false-recall.ts
-var isText2 = (v) => typeof v === "string" && v !== "";
-var isPaths = (v) => Array.isArray(v) && v.every(isText2);
+var isText = (v) => typeof v === "string" && v !== "";
+var isPaths = (v) => Array.isArray(v) && v.every(isText);
 function parseLog(text4) {
   const out = [];
   text4.split("\n").forEach((line, i) => {
@@ -6252,7 +5815,7 @@ function parseLog(text4) {
     } catch {
       throw new Error(`line ${i + 1} is not JSON`);
     }
-    const ok = e?.event === "injected" ? isText2(e.session) && isText2(e.item) && isText2(e.via) && isPaths(e.anchors) : e?.event === "touched" ? isText2(e.session) && isPaths(e.paths) : e?.event === "feedback" ? isText2(e.session) && isText2(e.item) && ["helped", "wrong", "stale"].includes(e.signal) : null;
+    const ok = e?.event === "injected" ? isText(e.session) && isText(e.item) && isText(e.via) && isPaths(e.anchors) : e?.event === "touched" ? isText(e.session) && isPaths(e.paths) : e?.event === "feedback" ? isText(e.session) && isText(e.item) && ["helped", "wrong", "stale"].includes(e.signal) : null;
     if (ok === false) throw new Error(`line ${i + 1}: a ${String(e.event)} event lacks a field it needs`);
     if (ok === true) out.push(e);
   });
@@ -6296,21 +5859,21 @@ function falseRecall(version, events) {
 }
 
 // src/eval/replay.ts
-import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
-import { join as join16 } from "node:path";
-var isText3 = (v) => typeof v === "string" && v.trim() !== "";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join13 } from "node:path";
+var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text4) {
   const doc = JSON.parse(text4);
   if (!Array.isArray(doc?.pulls)) throw new Error('expected {"pulls": [...]}');
   const ids = /* @__PURE__ */ new Set();
   const restates = [];
   for (const p of doc.pulls) {
-    if (!Number.isInteger(p?.number) || !isText3(p.reviewed_at) || Number.isNaN(Date.parse(p.reviewed_at)) || !Array.isArray(p.findings)) {
+    if (!Number.isInteger(p?.number) || !isText2(p.reviewed_at) || Number.isNaN(Date.parse(p.reviewed_at)) || !Array.isArray(p.findings)) {
       throw new Error(`pull ${JSON.stringify(p?.number)} needs a number, a reviewed_at date and a findings list`);
     }
     for (const f of p.findings) {
-      const bad2 = !isText3(f?.id) || ids.has(f.id) ? "a unique id" : !isText3(f.statement) ? "a statement" : f.path !== void 0 && !isText3(f.path) ? "a path that is text" : f.owner !== void 0 && f.owner !== "declined" && f.owner !== "accepted" ? "an owner of declined or accepted" : f.restates !== void 0 && !isText3(f.restates) ? "a restates id that is text" : null;
+      const bad2 = !isText2(f?.id) || ids.has(f.id) ? "a unique id" : !isText2(f.statement) ? "a statement" : f.path !== void 0 && !isText2(f.path) ? "a path that is text" : f.owner !== void 0 && f.owner !== "declined" && f.owner !== "accepted" ? "an owner of declined or accepted" : f.restates !== void 0 && !isText2(f.restates) ? "a restates id that is text" : null;
       if (bad2 !== null) throw new Error(`a finding in pull ${p.number} needs ${bad2}`);
       ids.add(f.id);
       if (f.restates !== void 0) restates.push(f);
@@ -6325,9 +5888,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync3(join16(tmpdir3(), "memory-replay-"));
+  const dir = mkdtempSync2(join13(tmpdir2(), "memory-replay-"));
   try {
-    const db = openStore(join16(dir, "replay.sqlite"), true);
+    const db = openStore(join13(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -6352,7 +5915,7 @@ function held(learned, repeats2) {
       db.close();
     }
   } finally {
-    rmSync4(dir, { recursive: true, force: true });
+    rmSync3(dir, { recursive: true, force: true });
   }
 }
 function replay(version, pulls, since) {
@@ -6379,9 +5942,9 @@ function replay(version, pulls, since) {
 }
 
 // src/eval/poison.ts
-import { mkdtempSync as mkdtempSync4, rmSync as rmSync5 } from "node:fs";
-import { tmpdir as tmpdir4 } from "node:os";
-import { join as join17 } from "node:path";
+import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join14 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -6507,16 +6070,16 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync4(join17(tmpdir4(), "memory-poison-"));
-  const db = openStore(join17(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync3(join14(tmpdir3(), "memory-poison-"));
+  const db = openStore(join14(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
     db.close();
-    rmSync5(dir, { recursive: true, force: true });
+    rmSync4(dir, { recursive: true, force: true });
   }
 }
-function measure2(f) {
+function measure(f) {
   return withStore((db) => {
     f.seed?.(db);
     const before = snapshot(db);
@@ -6557,7 +6120,7 @@ function benign() {
   });
 }
 function poison(version) {
-  const families = FAMILIES.map(measure2);
+  const families = FAMILIES.map(measure);
   const good = benign();
   const total = (k) => families.reduce((n, f) => n + f[k], 0);
   const meetsBar = total("active") + total("outside_fence") + total("raised_support") === 0 && good.accepted === good.of && good.recalled === good.of;
@@ -6585,19 +6148,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync10, mkdtempSync as mkdtempSync5, readFileSync as readFileSync15, readdirSync as readdirSync2, rmSync as rmSync6 } from "node:fs";
-import { tmpdir as tmpdir5 } from "node:os";
-import { dirname as dirname12, join as join18 } from "node:path";
+import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync14, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { tmpdir as tmpdir4 } from "node:os";
+import { dirname as dirname12, join as join15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
 var ROOT = dirname12(dirname12(fileURLToPath2(import.meta.url)));
-var TASKS = join18(ROOT, "lab", "tasks");
-var BUNDLE = join18(ROOT, "dist", "memory.mjs");
+var TASKS = join15(ROOT, "lab", "tasks");
+var BUNDLE = join15(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync13(join18(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync13(join15(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -6607,7 +6170,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join18(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join15(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -6626,7 +6189,7 @@ var jsonLines2 = (text4) => text4.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync13(file) ? jsonLines2(readFileSync15(file, "utf8")) : [];
+var readLines = (file) => existsSync13(file) ? jsonLines2(readFileSync14(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -6640,12 +6203,12 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync5(join18(base2, "run-"));
-  const repo = join18(dir, "repo");
-  const data = join18(dir, "data");
-  const out = join18(dir, "out");
-  mkdirSync10(data);
-  mkdirSync10(out);
+  const dir = mkdtempSync4(join15(base2, "run-"));
+  const repo = join15(dir, "repo");
+  const data = join15(dir, "data");
+  const out = join15(dir, "out");
+  mkdirSync9(data);
+  mkdirSync9(out);
   fixtureRepository(task, repo);
   if (arm === "on") seed(task, t, repo, data);
   const env = cleanEnv({
@@ -6668,8 +6231,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join18(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join18(hidden, f));
+  const hidden = join15(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join15(hidden, f));
   const grade2 = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -6677,14 +6240,14 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade2?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join18(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join15(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
     injected: { items: injected.length, tokens: injected.reduce((s, e) => s + num2(e.tokens), 0) }
   };
 }
-var mean2 = (xs) => xs.length === 0 ? null : Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
+var mean = (xs) => xs.length === 0 ? null : Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
 function hookMs(runs) {
   const by = /* @__PURE__ */ new Map();
   for (const h of runs.flatMap((r) => r.hooks)) by.set(h.event, [...by.get(h.event) ?? [], h.ms]);
@@ -6693,26 +6256,26 @@ function hookMs(runs) {
     return [event, { count: ms.length, p95: ms[Math.ceil(0.95 * ms.length) - 1] }];
   }));
 }
-function figures2(runs) {
+function figures(runs) {
   const used = runs.flatMap((r) => r.usage === null ? [] : [r.usage]);
   return {
     samples: { runs: runs.length, agent_failed: runs.filter((r) => r.agentFailed).length },
     pass_rate: Math.round(runs.filter((r) => r.passed).length / runs.length * 1e3) / 1e3,
-    input_tokens: mean2(used.map((u) => u.input)),
-    cache_read_tokens: mean2(used.map((u) => u.cacheRead)),
-    turns: mean2(used.map((u) => u.turns)),
+    input_tokens: mean(used.map((u) => u.input)),
+    cache_read_tokens: mean(used.map((u) => u.cacheRead)),
+    turns: mean(used.map((u) => u.turns)),
     hook_ms: hookMs(runs),
     injected: { items: runs.reduce((s, r) => s + r.injected.items, 0), tokens: runs.reduce((s, r) => s + r.injected.tokens, 0) }
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync5(join18(tmpdir5(), "memory-lab-"));
+  const base2 = mkdtempSync4(join15(tmpdir4(), "memory-lab-"));
   try {
-    const plugin = join18(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync13(join18(ROOT, part))) cpSync(join18(ROOT, part), join18(plugin, part), { recursive: true });
+    const plugin = join15(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync13(join15(ROOT, part))) cpSync(join15(ROOT, part), join15(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync15(join18(TASKS, task, "task.json"), "utf8"));
-      const arms = ["off", "on"].map((arm) => figures2(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
+      const t = JSON.parse(readFileSync14(join15(TASKS, task, "task.json"), "utf8"));
+      const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
         row3(version, LAB, "off", "measured", { task, model, ...off }),
@@ -6722,7 +6285,7 @@ function lab(version, agent, model, only) {
       ];
     });
   } finally {
-    rmSync6(base2, { recursive: true, force: true });
+    rmSync5(base2, { recursive: true, force: true });
   }
 }
 function parseRows(text4) {
@@ -6750,6 +6313,480 @@ function verdict(scorecard, labRows, configDir) {
   }
   return `auto memory may be switched off in ${configDir}`;
 }
+
+// src/eval/head-to-head/replay-set.ts
+var EVIDENCE_KINDS = ["decision", "correction", "lesson", "hazard", "failure", "code-change"];
+var EVENT_KINDS = ["correction", "decision", "failure"];
+var CATEGORIES = ["single-fact", "multi-source", "knowledge-update", "temporal", "abstention", "code-anchored-hazard", "stale-citation"];
+var isText3 = (v) => typeof v === "string" && v.trim() !== "";
+var isDate = (v) => isText3(v) && !Number.isNaN(Date.parse(v));
+function parseHistory(text4) {
+  const h = JSON.parse(text4);
+  if (typeof h?.tenant !== "string" || !TENANT_NAME.test(h.tenant)) throw new Error("tenant must be a tenant name: lower-case letters, digits and dashes");
+  if (!isText3(h.repository) || !Array.isArray(h.evidence) || !Array.isArray(h.events)) {
+    throw new Error('expected {"tenant", "repository", "evidence": [...], "events": [...]}');
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const e of h.evidence) {
+    const bad2 = !isText3(e?.id) || ids.has(e.id) ? "a unique id" : !isDate(e.at) ? "an at date" : !EVIDENCE_KINDS.includes(e.kind) ? `a kind of ${EVIDENCE_KINDS.join(", ")}` : !isText3(e.statement) ? "a statement" : e.kind === "code-change" ? isText3(e.path) ? null : "a path" : !isText3(e.key) ? "a key" : e.path !== void 0 && !isText3(e.path) ? "a path that is text" : null;
+    if (bad2 !== null) throw new Error(`evidence ${JSON.stringify(e?.id)} needs ${bad2}`);
+    ids.add(e.id);
+  }
+  const unknown = h.evidence.find((e) => e.supersedes !== void 0 && !ids.has(e.supersedes));
+  if (unknown !== void 0) throw new Error(`evidence ${unknown.id} supersedes ${String(unknown.supersedes)}, which the history does not hold`);
+  const events = /* @__PURE__ */ new Set();
+  for (const e of h.events) {
+    const bad2 = !isText3(e?.id) || events.has(e.id) ? "a unique id" : !isDate(e.at) ? "an at date" : !EVENT_KINDS.includes(e.kind) ? `a kind of ${EVENT_KINDS.join(", ")}` : !isText3(e.question) ? "a question" : !Array.isArray(e.answers) || !e.answers.every((a) => ids.has(a)) ? "answers naming evidence the history holds" : e.asOf !== void 0 && !isDate(e.asOf) ? "an asOf date" : e.path !== void 0 && !isText3(e.path) ? "a path that is text" : null;
+    if (bad2 !== null) throw new Error(`event ${JSON.stringify(e?.id)} needs ${bad2}`);
+    events.add(e.id);
+  }
+  return { ...h, client: h.client !== false };
+}
+function buildReplaySet(h, since) {
+  const cut2 = Date.parse(since);
+  const before = (at3) => Date.parse(at3) < cut2;
+  const ingest = h.evidence.filter((e) => before(e.at)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : 1));
+  const held2 = new Map(ingest.map((e) => [e.id, e]));
+  const rewritten = (e) => e.path !== void 0 && ingest.some((c) => c.kind === "code-change" && c.path === e.path && Date.parse(c.at) > Date.parse(e.at));
+  let dropped = 0;
+  const questions = [];
+  for (const ev of h.events.filter((e) => !before(e.at))) {
+    const answers = ev.answers.map((id) => held2.get(id));
+    if (answers.some((a) => a === void 0)) {
+      dropped++;
+      continue;
+    }
+    const found = answers;
+    const older = found.flatMap((a) => a.supersedes === void 0 ? [] : [held2.get(a.supersedes)]);
+    const q = (category, keys, mustNot = []) => ({
+      id: ev.id,
+      category,
+      question: ev.question,
+      ...ev.path !== void 0 ? { path: ev.path } : {},
+      ...ev.asOf !== void 0 ? { asOf: ev.asOf } : {},
+      keys: keys.map((e) => e.key),
+      statements: keys.map((e) => e.statement),
+      mustNot: mustNot.map((e) => e.key)
+    });
+    questions.push(
+      found.length === 0 ? q("abstention", []) : ev.asOf !== void 0 ? q("temporal", found) : found.some(rewritten) ? q("stale-citation", found.filter((a) => !rewritten(a)), found.filter(rewritten)) : older.length > 0 ? q("knowledge-update", found, older) : found.length > 1 ? q("multi-source", found) : found[0].kind === "hazard" && found[0].path !== void 0 ? q("code-anchored-hazard", found) : q("single-fact", found)
+    );
+  }
+  return { tenant: h.tenant, repository: h.repository, client: h.client, since, ingest, questions, dropped };
+}
+
+// src/eval/head-to-head/scorecard.ts
+import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join17 } from "node:path";
+import { performance } from "node:perf_hooks";
+
+// src/eval/head-to-head/arms.ts
+import { spawn } from "node:child_process";
+import { mkdtempSync as mkdtempSync5, rmSync as rmSync6 } from "node:fs";
+import { tmpdir as tmpdir5 } from "node:os";
+import { join as join16 } from "node:path";
+import { createInterface as createInterface2 } from "node:readline";
+var TYPE = { decision: "decision", correction: "convention", lesson: "precedent", hazard: "hazard", failure: "failure-pattern", "code-change": "" };
+function memoryArm() {
+  const dir = mkdtempSync5(join16(tmpdir5(), "memory-head-to-head-"));
+  const db = openStore(join16(dir, "arm.sqlite"), true);
+  let set;
+  const item = /* @__PURE__ */ new Map();
+  const evidence = /* @__PURE__ */ new Map();
+  return {
+    async ingest(s) {
+      set = s;
+      for (const e of s.ingest) {
+        if (e.kind === "code-change") {
+          for (const i of tenantItems(db, s.tenant, s.repository, s.repository.split("/")[0])) {
+            if (i.anchors.some((a) => a.path === e.path)) db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ?").run(`${e.path} changed`, i.id);
+          }
+          continue;
+        }
+        const c = {
+          tenant: s.tenant,
+          scope: "repository",
+          scopeKey: s.repository,
+          type: TYPE[e.kind],
+          statement: e.statement,
+          rationale: null,
+          anchors: e.path === void 0 ? [] : [{ path: e.path }],
+          source: `history ${e.id}`,
+          evidenceAt: e.at
+        };
+        const older = e.supersedes === void 0 ? void 0 : item.get(e.supersedes);
+        const id = (older === void 0 ? null : supersedeNow(db, c, older))?.id ?? insertItem(db, c);
+        item.set(e.id, id);
+        evidence.set(id, e.id);
+      }
+    },
+    async answer(q) {
+      const items = withTextRatio(tenantItems(db, set.tenant, set.repository, set.repository.split("/")[0]), textMatches(db, searchTerms(q.question))).map((i) => ({ ...i, id: evidence.get(i.id) }));
+      return rank(items, q.path === void 0 ? [] : [q.path], Date.now(), void 0, void 0, [], set.repository).map((h) => leanRow(h.item, h.why, LEAN_ROW_TOKENS));
+    },
+    close() {
+      db.close();
+      rmSync6(dir, { recursive: true, force: true });
+    }
+  };
+}
+var offArm = () => ({ async ingest() {
+}, async answer() {
+  return [];
+}, close() {
+} });
+var AUTO_MEMORY_LINES = 200;
+function autoMemoryArm() {
+  let text4 = "";
+  return {
+    async ingest(s) {
+      const lines2 = s.ingest.filter((e) => e.kind !== "code-change").map((e) => `- ${e.statement}${e.path === void 0 ? "" : ` (${e.path})`}`);
+      text4 = ["# Memory", ...lines2].slice(0, AUTO_MEMORY_LINES).join("\n");
+      if (lines2.length === 0) text4 = "";
+    },
+    async answer() {
+      return text4 === "" ? [] : [text4];
+    },
+    close() {
+    }
+  };
+}
+function wholeHistoryArm() {
+  let text4 = "";
+  return {
+    async ingest(s) {
+      text4 = s.ingest.map((e) => `${e.at} ${e.kind}: ${e.statement}${e.path === void 0 ? "" : ` (${e.path})`}`).join("\n");
+    },
+    async answer() {
+      return text4 === "" ? [] : [text4];
+    },
+    close() {
+    }
+  };
+}
+var EXTERNAL_ARMS = {
+  mem0: { MEM0_TELEMETRY: "False" },
+  graphiti: { GRAPHITI_TELEMETRY_ENABLED: "false" },
+  "basic-memory": {},
+  "community-plugin": {}
+};
+var ArmFailed = class extends Error {
+};
+var ANSWER_MS = 3e4;
+var INGEST_MS = 3e5;
+function externalArm(name, spec) {
+  let child;
+  let failed;
+  const replies = [];
+  let waiting;
+  const call2 = async (request, ms) => {
+    if (failed !== void 0) throw failed;
+    child.stdin.write(`${JSON.stringify(request)}
+`);
+    let timer;
+    while (replies.length === 0) {
+      if (failed !== void 0) throw failed;
+      await new Promise((ok) => {
+        waiting = ok;
+        timer = setTimeout(() => {
+          failed = new ArmFailed(`${name} crashed: no reply within ${ms / 1e3} s`);
+          ok();
+        }, ms);
+      });
+      clearTimeout(timer);
+    }
+    try {
+      const reply = JSON.parse(replies.shift());
+      if (typeof reply !== "object" || reply === null) throw new Error("not an object");
+      return reply;
+    } catch {
+      throw failed = new ArmFailed(`${name} crashed: a reply that is not a JSON object`);
+    }
+  };
+  return {
+    async ingest(set) {
+      const [program, ...args] = spec.command;
+      const c = spawn(program, args, {
+        env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", DO_NOT_TRACK: "1", ...EXTERNAL_ARMS[name] },
+        stdio: ["pipe", "pipe", "ignore"]
+      });
+      child = c;
+      c.on("error", (error) => {
+        failed = new ArmFailed(error.code === "ENOENT" ? `${name} is not installed: ${program} was not found` : `${name} crashed: ${error.message}`);
+        waiting?.();
+      });
+      c.on("exit", (code, signal) => {
+        failed ??= new ArmFailed(`${name} crashed: it exited (${signal ?? code})`);
+        waiting?.();
+      });
+      c.stdin.on("error", () => {
+      });
+      createInterface2({ input: c.stdout }).on("line", (line) => {
+        replies.push(line);
+        waiting?.();
+      });
+      const hello = await call2({ op: "hello", arm: name }, ANSWER_MS);
+      if (hello["telemetry"] !== "off") throw failed = new ArmFailed(`${name} did not confirm its telemetry is off, so it was sent no evidence`);
+      await call2({ op: "ingest", tenant: set.tenant, repository: set.repository, evidence: set.ingest }, INGEST_MS);
+    },
+    async answer(q) {
+      const reply = await call2({ op: "answer", question: q.question, ...q.path !== void 0 ? { path: q.path } : {} }, ANSWER_MS);
+      const hits = reply["hits"];
+      if (!Array.isArray(hits) || !hits.every((h) => typeof h === "string")) throw failed = new ArmFailed(`${name} crashed: an answer without a hits list of text`);
+      return hits;
+    },
+    close() {
+      child?.removeAllListeners("exit");
+      child?.kill();
+    }
+  };
+}
+
+// src/eval/head-to-head/grade.ts
+var norm = (s) => ` ${s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+var holds = (hit, key2) => norm(hit).includes(norm(key2));
+var at2 = (hits, key2, k) => hits.slice(0, k).findIndex((h) => holds(h, key2));
+function grade(arm, q, hits, tokens2, ms) {
+  const worst = Math.min(...q.mustNot.map((k) => at2(hits, k, 5)).filter((i) => i >= 0), Infinity);
+  const found = (k) => q.keys.filter((key2) => {
+    const i = at2(hits, key2, k);
+    return i >= 0 && i <= worst;
+  }).length;
+  const share = (n) => q.keys.length === 0 ? 0 : n / q.keys.length;
+  const top5 = found(5);
+  return {
+    arm,
+    question: q.id,
+    category: q.category,
+    at1: share(found(1)),
+    at5: share(top5),
+    abstained: hits.length === 0,
+    staleRecalled: worst !== Infinity,
+    correct: top5,
+    tokens: tokens2,
+    ms
+  };
+}
+var SAMPLE = 30;
+function sample(answers) {
+  const matches2 = [];
+  for (const { arm, q, hits } of answers) {
+    for (const key2 of [...q.keys, ...q.mustNot]) {
+      const line = hits.slice(0, 5).flatMap((h) => h.split("\n")).find((l) => holds(l, key2));
+      if (line !== void 0) matches2.push({ arm, question: q.id, key: key2, excerpt: line.slice(0, 400), correct: null });
+    }
+  }
+  const order = (s) => sha256(`${s.arm}
+${s.question}
+${s.key}`);
+  return matches2.sort((a, b) => order(a) < order(b) ? -1 : 1).slice(0, SAMPLE);
+}
+function precision(sampled, checked, where2) {
+  const mark = new Map(checked.filter((c) => typeof c.correct === "boolean").map((c) => [`${c.arm}
+${c.question}
+${c.key}`, c.correct]));
+  const marks = sampled.map((s) => mark.get(`${s.arm}
+${s.question}
+${s.key}`)).filter((m) => m !== void 0);
+  return {
+    sample: sampled.length,
+    checked: marks.length,
+    precision: marks.length === 0 ? null : marks.filter((m) => m).length / marks.length,
+    ...marks.length < sampled.length ? { note: `mark each grade in ${where2} correct true or false and pass it as --checked` } : {}
+  };
+}
+var sharesNoWord = (question, text4) => {
+  const words3 = new Set(searchTerms(text4, Infinity));
+  return !searchTerms(question, Infinity).some((w) => words3.has(w));
+};
+
+// src/eval/head-to-head/scorecard.ts
+var BARS = {
+  "knowledge-update": "memory at or above the best alternative on knowledge-update recall at 1",
+  abstention: "memory at or above the best alternative on abstention precision",
+  "stale-citation": "memory at or above the best alternative on stale citation: one minus stale recall",
+  "single-fact": "memory within 5 points of the best alternative on single-fact recall at 5",
+  "multi-source": "memory within 5 points of the best alternative on multi-source recall at 5",
+  "tokens-per-correct-item": "memory at most one fifth of the best alternative's tokens per correct item, the best alternative being the one with the highest recall at 5 over all questions",
+  latency: "memory p95 latency at most 150 ms"
+};
+var P95_MS = 150;
+var BUILT_IN = { memory: memoryArm, off: offArm, "auto-memory": autoMemoryArm, "whole-history": wholeHistoryArm };
+var MODEL_RUNS = 3;
+function parseArms(text4) {
+  const doc = JSON.parse(text4);
+  const arms = doc?.arms;
+  if (typeof arms !== "object" || arms === null || Array.isArray(arms)) throw new Error('expected {"arms": {"<name>": {"command": [...]}}}');
+  for (const [name, spec] of Object.entries(arms)) {
+    if (name in BUILT_IN) throw new Error(`${name} is a built-in arm and takes no command`);
+    if (!Array.isArray(spec?.command) || spec.command.length === 0 || !spec.command.every((c) => typeof c === "string" && c !== "")) {
+      throw new Error(`arm ${name} needs a command: a list of the program and its arguments`);
+    }
+    for (const flag of ["offMachine", "modelBacked"]) {
+      if (spec[flag] !== void 0 && typeof spec[flag] !== "boolean") throw new Error(`arm ${name}: ${flag} is true or false`);
+    }
+  }
+  return arms;
+}
+async function runArm(arm, set) {
+  try {
+    await arm.ingest(set);
+    const out = [];
+    for (const q of set.questions) {
+      const start = performance.now();
+      const hits = await arm.answer(q);
+      out.push({ q, hits, ms: performance.now() - start });
+    }
+    return out;
+  } finally {
+    arm.close();
+  }
+}
+var r3 = (n) => Math.round(n * 1e3) / 1e3;
+var mean2 = (xs) => xs.length === 0 ? null : r3(xs.reduce((a, b) => a + b, 0) / xs.length);
+var pct = (xs, p) => {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return Math.round(s[Math.min(s.length - 1, Math.ceil(p / 100 * s.length) - 1)] * 10) / 10;
+};
+function figures2(grades, all) {
+  const keyed = grades.filter((g) => g.category !== "abstention" && g.category !== "stale-citation");
+  const guarded = grades.filter((g) => g.category === "knowledge-update" || g.category === "stale-citation");
+  const correct = grades.reduce((a, g) => a + g.correct, 0);
+  const tokens2 = grades.reduce((a, g) => a + g.tokens, 0);
+  const silent = grades.filter((g) => g.abstained);
+  return {
+    samples: grades.length,
+    recall_at_1: mean2(keyed.map((g) => g.at1)),
+    recall_at_5: mean2(keyed.map((g) => g.at5)),
+    abstained: mean2(grades.map((g) => g.abstained ? 1 : 0)),
+    stale_recall: mean2(guarded.map((g) => g.staleRecalled ? 1 : 0)),
+    tokens_per_question: mean2(grades.map((g) => g.tokens)),
+    tokens_per_correct_item: correct === 0 ? null : Math.round(tokens2 / correct * 10) / 10,
+    ...all ? { abstention_precision: silent.length === 0 ? null : r3(silent.filter((g) => g.category === "abstention").length / silent.length) } : {}
+  };
+}
+async function measure2(name, make, set, runs) {
+  let first2 = [];
+  const perRun = {};
+  for (let i = 0; i < runs; i++) {
+    const answers = await runArm(make(), set);
+    if (i === 0) first2 = answers;
+    const grades = answers.map((a) => grade(name, a.q, a.hits, estimate(a.hits.join("\n")), a.ms));
+    for (const c of CATEGORIES) (perRun[c] ??= []).push(figures2(grades.filter((g) => g.category === c), false)["recall_at_5"] ?? 0);
+  }
+  return { arm: name, status: "measured", runs, answers: first2, grades: first2.map((a) => grade(name, a.q, a.hits, estimate(a.hits.join("\n")), a.ms)), perRun };
+}
+async function headToHead(version, set, external, checked, out) {
+  const bars = { measure: "head-to-head-bars", version, tenant: set.tenant, since: set.since, status: "set before the run", bars: BARS };
+  const results = [];
+  for (const [name, make] of Object.entries(BUILT_IN)) results.push(await measure2(name, make, set, 1));
+  for (const name of [.../* @__PURE__ */ new Set([...Object.keys(EXTERNAL_ARMS), ...Object.keys(external)])]) {
+    const spec = external[name];
+    const none = { arm: name, runs: 0, answers: [], grades: [], perRun: {} };
+    if (spec === void 0) results.push({ ...none, status: "failed", note: `${name} is not installed: no command for it in the arms file (README, Head to head)` });
+    else if (spec.offMachine === true && set.client) results.push({ ...none, status: "skipped", note: `${name} sends evidence off this machine, and ${set.tenant} is a client tenant` });
+    else {
+      try {
+        results.push(await measure2(name, () => externalArm(name, spec), set, spec.modelBacked === true ? MODEL_RUNS : 1));
+      } catch (error) {
+        results.push({ ...none, status: "failed", note: error instanceof ArmFailed ? error.message : `${name} crashed: ${error.message}` });
+      }
+    }
+  }
+  const rows = [bars];
+  const latency = [];
+  for (const r of results) {
+    const base2 = { measure: "head-to-head", arm: r.arm, version, status: r.status, runs: r.runs };
+    const note = r.note === void 0 ? {} : { note: r.note };
+    for (const c of [...CATEGORIES, "all"]) {
+      const fields = r.status === "measured" ? figures2(c === "all" ? r.grades : r.grades.filter((g) => g.category === c), c === "all") : { samples: set.questions.filter((q) => c === "all" || q.category === c).length, recall_at_1: 0, recall_at_5: 0, abstained: 0, stale_recall: null, tokens_per_question: null, tokens_per_correct_item: null, ...c === "all" ? { abstention_precision: null } : {} };
+      const spread = r.runs > 1 && c !== "all" ? { spread: { recall_at_5: [Math.min(...r.perRun[c]), Math.max(...r.perRun[c])] } } : {};
+      rows.push({ ...base2, category: c, ...fields, ...spread, ...note });
+    }
+    const ms = r.grades.map((g) => g.ms);
+    const p95 = pct(ms, 95);
+    latency.push({
+      measure: "head-to-head-latency",
+      arm: r.arm,
+      version,
+      status: r.status,
+      p50_ms: pct(ms, 50),
+      p95_ms: p95,
+      ...r.arm === "memory" ? { bar: BARS.latency, meets_bar: p95 !== null && p95 <= P95_MS } : {},
+      ...note
+    });
+  }
+  const score = (r, bar) => {
+    if (r.status !== "measured") return 0;
+    const of = (c) => figures2(c === "all" ? r.grades : r.grades.filter((g) => g.category === c), c === "all");
+    const n = (v) => typeof v === "number" ? v : 0;
+    if (bar === "knowledge-update") return n(of(bar)["recall_at_1"]);
+    if (bar === "abstention") return n(of("all")["abstention_precision"]);
+    if (bar === "stale-citation") return 1 - n(of(bar)["stale_recall"] ?? 1);
+    return n(of(bar)["recall_at_5"]);
+  };
+  const memory = results.find((r) => r.arm === "memory");
+  const alternatives = results.filter((r) => r.arm !== "memory" && r.arm !== "off" && r.status !== "skipped");
+  const checks = [];
+  for (const bar of ["knowledge-update", "abstention", "stale-citation", "single-fact", "multi-source"]) {
+    const best2 = alternatives.reduce((a, b) => score(b, bar) > score(a, bar) ? b : a);
+    const [mine2, theirs2] = [r3(score(memory, bar)), r3(score(best2, bar))];
+    const meets = bar === "single-fact" || bar === "multi-source" ? mine2 >= theirs2 - 0.05 : mine2 >= theirs2;
+    checks.push({ bar, memory: mine2, best_alternative: theirs2, best_arm: best2.arm, meets });
+  }
+  const tokens2 = (r) => r.status === "measured" ? figures2(r.grades, true)["tokens_per_correct_item"] : null;
+  const recall = (r) => r.status === "measured" ? figures2(r.grades, true)["recall_at_5"] ?? 0 : 0;
+  const best = alternatives.reduce((a, b) => recall(b) > recall(a) ? b : a);
+  const [mine, theirs] = [tokens2(memory), tokens2(best)];
+  checks.push({ bar: "tokens-per-correct-item", memory: mine, best_alternative: theirs, best_arm: best.arm, meets: mine !== null && (theirs === null || mine * 5 <= theirs) });
+  let elsewhere = 0;
+  let vocabulary = 0;
+  memory.answers.forEach((a, i) => {
+    a.q.keys.forEach((key2, k) => {
+      if (a.hits.slice(0, 5).some((h) => holds(h, key2))) return;
+      if (!results.some((r) => r !== memory && r.answers[i]?.hits.slice(0, 5).some((h) => holds(h, key2)))) return;
+      elsewhere++;
+      if (sharesNoWord(a.q.question, a.q.statements[k])) vocabulary++;
+    });
+  });
+  const sampled = sample(results.flatMap((r) => r.answers.map((a) => ({ arm: r.arm, q: a.q, hits: a.hits }))));
+  const share = elsewhere === 0 ? null : r3(vocabulary / elsewhere);
+  const misses = checks.filter((c) => !c.meets).map((c) => c.bar);
+  const verdict2 = {
+    measure: "head-to-head-verdict",
+    version,
+    tenant: set.tenant,
+    since: set.since,
+    replay_set: {
+      questions: set.questions.length,
+      ingested: set.ingest.length,
+      dropped: set.dropped,
+      by_category: Object.fromEntries(CATEGORIES.map((c) => [c, set.questions.filter((q) => q.category === c).length]))
+    },
+    checks,
+    misses,
+    vocabulary_misses: vocabulary,
+    memory_misses_found_elsewhere: elsewhere,
+    vocabulary_miss_share: share,
+    matcher_precision: precision(sampled, checked, join17(out, "sample.jsonl"))
+  };
+  rows.push(...latency, verdict2);
+  mkdirSync10(out, { recursive: true, mode: 448 });
+  const write = (file, text4) => writeFileSync6(join17(out, file), text4, { mode: 384 });
+  const lines2 = (xs) => xs.map((x) => `${JSON.stringify(x)}
+`).join("");
+  write("replay-set.json", `${JSON.stringify(set, null, 1)}
+`);
+  write("results.jsonl", lines2(results.flatMap((r) => r.grades)));
+  write("sample.jsonl", lines2(sampled));
+  write("scorecard.jsonl", lines2(rows));
+  const last = { tenant: set.tenant, since: set.since, version, vocabulary_misses: vocabulary, memory_misses_found_elsewhere: elsewhere, vocabulary_miss_share: share, misses };
+  write("last.json", `${JSON.stringify(last, null, 2)}
+`);
+  return { rows, last };
+}
+var headToHeadDir = (data, tenant) => join17(data, "eval", "head-to-head", tenant);
 
 // src/cli.ts
 suppressSqliteExperimentalWarning();
@@ -7644,7 +7681,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync16(0, "utf8"));
+    const v = JSON.parse(readFileSync15(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -7810,7 +7847,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync16(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync15(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -7865,7 +7902,7 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join19(data, "tenants");
+  const tenantsDir = join18(data, "tenants");
   const every = existsSync14(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
@@ -7917,7 +7954,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync16(file, "utf8"));
+    return parse(readFileSync15(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }

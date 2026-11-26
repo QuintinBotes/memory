@@ -38,6 +38,9 @@ export const RANKING = {
   /** Provisional, like the confidence constants: a vector match scores 0 at this cosine and `semantic` points at 1. */
   minSimilarity: 0.35,
   semantic: 4,
+  /** An item sharing an anchored path with one of the `graphTop` best keyword or semantic hits (fuse.ts). */
+  graph: 1,
+  graphTop: 3,
   /** An item anchored on a depth-1 dependent of a change (#16); `untested` is added when that dependent is neither changed nor tested. Provisional until the review replay shows dependent false recall under 10%. */
   dependent: 2,
   untested: 1,
@@ -48,7 +51,7 @@ export const RANKING = {
 export interface Hit {
   item: Visible;
   score: number;
-  /** Every point, in order: anchor, scope, this repository, text, semantic, confidence, contradictions; a fused row adds rrf. */
+  /** Every point, in order: anchor, scope, this repository, text, semantic, graph, confidence, contradictions; a fused row adds rrf. */
   why: string;
 }
 
@@ -60,8 +63,8 @@ const tenth = (n: number): number => Math.round(n * 10) / 10;
  * confidence and contradictions adjust it. Ties break on support, then id.
  *
  * With `similarity` (the cosine of each item's vector with the query's), an item whose
- * vector is close enough is a hit too and lists its semantic points; fuse.ts uses it for
- * a row's points. Without it the sum is the lexical one, exactly.
+ * vector is close enough is a hit too and lists its semantic points, and an item in `near`
+ * (fuse.ts's graph list) is a hit with its graph point. Without them the sum is the lexical one, exactly.
  */
 export function rank(
   items: Visible[],
@@ -71,6 +74,7 @@ export function rank(
   keyed?: ReadonlySet<string>,
   dependents: readonly { path: string; neither: boolean }[] = [],
   repository: string | null = null,
+  near?: ReadonlySet<string>,
 ): Hit[] {
   // The repository root, '.' or './', normalises to '' and holds every anchored path.
   const want = paths.map((p) => posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\/?$|^\.\//, '').replace(/\/+$/, ''));
@@ -95,11 +99,13 @@ export function rank(
     const text = ratio >= RANKING.minTextRatio ? tenth(RANKING.text * ratio) : 0;
     const cos = similarity?.get(item.id) ?? 0;
     const semantic = cos >= RANKING.minSimilarity ? tenth((RANKING.semantic * (cos - RANKING.minSimilarity)) / (1 - RANKING.minSimilarity)) : 0;
-    if (overlap === 0 && reached.length === 0 && text === 0 && semantic === 0 && !key) return null;
+    const graph = near?.has(item.id) === true;
+    if (overlap === 0 && reached.length === 0 && text === 0 && semantic === 0 && !graph && !key) return null;
     add(item.scope, RANKING.scope[item.scope] ?? 0);
     if (repository !== null && (item.scope === 'person' || item.scope === 'global') && item.origin === repository) add('this repository', RANKING.origin);
     if (text > 0) add('text', text);
     if (semantic > 0) add('semantic', semantic);
+    if (graph) add('graph', RANKING.graph);
     const c = confidence(item, now);
     add(`confidence ${band(c)}`, tenth(RANKING.confidence * c));
     if (item.contradictions > 0) add('contradicted', -item.contradictions * RANKING.contradiction);

@@ -28,6 +28,12 @@ export interface Config {
    * with an embedding model the owner installs, Voyage, or the offline test provider.
    */
   embeddings?: { provider: (typeof EMBEDDING_PROVIDERS)[number]; model?: string; url?: string };
+  /**
+   * The optional reranker (#28): a generative model on Ollama at `url` (http://127.0.0.1:11434 unless set; the server
+   * #80's model pass uses) that reorders memory_search's and diff recall's top rows. `model` is inkling-2-mini unless set,
+   * which the owner installs. Off when absent.
+   */
+  rerank?: { url?: string; model?: string };
   /** `version` is the consent plan's version agreed to; absent in a consent saved before plans had one. */
   consent?: { planHash: string; grantedAt: string; version?: number };
   /** Automatic capture at the end of a session; on unless `enabled` is false, and only once the owner has confirmed the plan that lists it. */
@@ -173,6 +179,17 @@ export function loadConfig(data: string): Config | null {
   ) {
     throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(' or ')}, "model"?: a name, "url"?: Ollama's http(s) address without credentials}`);
   }
+  const rr = c.rerank;
+  if (
+    rr !== undefined &&
+    !(
+      typeof rr === 'object' && rr !== null && !Array.isArray(rr) &&
+      (rr.url === undefined || (typeof rr.url === 'string' && plainHttp(rr.url))) &&
+      (rr.model === undefined || (typeof rr.model === 'string' && rr.model !== ''))
+    )
+  ) {
+    throw new ConfigError('rerank must be {"url"?: an http(s) address without credentials, "model"?: a name}');
+  }
   const capture = c.capture;
   if (capture !== undefined) {
     const ok = typeof capture === 'object' && capture !== null && !Array.isArray(capture);
@@ -218,6 +235,7 @@ export function loadConfig(data: string): Config | null {
     ...(types !== undefined ? { subagentTypes: types } : {}),
     ...(imports !== undefined ? { imports } : {}),
     ...(emb !== undefined ? { embeddings: emb } : {}),
+    ...(rr !== undefined ? { rerank: rr } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
     ...(capture !== undefined ? { capture } : {}),
     ...(c.automation !== undefined ? { automation: c.automation } : {}),

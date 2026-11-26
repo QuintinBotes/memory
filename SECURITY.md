@@ -99,7 +99,10 @@ no tenant, or in a Claude Code config not bound to that tenant.
   by default. A local Ollama (`"provider": "ollama"`, at a loopback address)
   keeps the text on this machine. A tenant's text is sent only to an embedder
   at `127.0.0.1`, `localhost` or `[::1]`; any other address, Voyage's
-  included, is refused for it and gets the person file's text only (#28).
+  included, is refused for it and gets the person file's text only (#28). The
+  optional reranker (`rerank` in `config.json`, off by default) sends the
+  query and the found rows' statements to a generative model under the same
+  rule: loopback only for a tenant.
   With Voyage AI (`voyage-4`) named and `VOYAGE_API_KEY` set, memory sends to
   `api.voyageai.com` over HTTPS: the statement of each active item when you
   `remember` or `approve` it or run `memory embed --backfill`, for the person

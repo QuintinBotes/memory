@@ -480,12 +480,10 @@ async function voyageStub() {
   return { requests, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => (server.closeAllConnections(), server.close(r))) };
 }
 
-/** Names voyage as the embedder and opens acme's semantic leg (#28), so only the query gate stands between a query and it. */
+/** Names voyage as the embedder (the leg is off by default, #28), so only the query gate stands between a query and it. */
 function voyageOn(s) {
   const cfg = join(s.data, 'config.json');
   writeFileSync(cfg, JSON.stringify({ ...JSON.parse(readFileSync(cfg, 'utf8')), embeddings: { provider: 'voyage' } }));
-  mkdirSync(join(s.data, 'eval', 'head-to-head', 'acme'), { recursive: true });
-  writeFileSync(join(s.data, 'eval', 'head-to-head', 'acme', 'last.json'), JSON.stringify({ vocabulary_miss_share: 0.4 }));
 }
 
 test('P14 a search query with a secret or an email, and a quarantined item, never reach the embedding provider', async () => {
