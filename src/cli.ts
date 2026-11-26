@@ -48,7 +48,7 @@ import { importSilos } from './import/import.ts';
 import { SYMBOL_KEY } from './import/silos.ts';
 import { renderReport, tenantReport, testCoverage } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
-import { ScfError, exportToScf, importFromScf, remoteProposals, scfClient, type Remote, type ScfClient } from './export/scf.ts';
+import { ScfError, exportToScf, heldInScf, importFromScf, remoteProposals, scfClient, type Remote, type ScfClient } from './export/scf.ts';
 import { withFileLockAsync } from './store/refresh-lock.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
@@ -655,12 +655,8 @@ async function scfExport(config: Config, data: string, cwd: string, reach: Reach
 /** `memory import --scf`: SCF's decisions and run outcomes, applied to the items this tenant sent. */
 async function scfImport(config: Config, data: string, cwd: string): Promise<void> {
   const set = scfSetUp(config, data, cwd);
-  const r = await scfRun(set, async (db, remote) => {
-    const result = await importFromScf(db, set.tenant, set.client, remote, set.endpoint);
-    if (result.approved > 0) await embedAfterWrite(db, config);
-    return result;
-  });
-  console.log(`from SCF for tenant ${set.tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.helped} helped, ${r.wrong} wrong`);
+  const r = await scfRun(set, (db, remote) => importFromScf(db, set.tenant, set.client, remote, set.endpoint));
+  console.log(`from SCF for tenant ${set.tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.held} held, ${r.helped} helped, ${r.wrong} wrong`);
 }
 
 /** `memory report [--tenant <name>]`: the owner's view of which items help and which mislead, one section per tenant bound to this config. */
@@ -718,12 +714,14 @@ function openEdits(data: string, context: Context): ReturnType<typeof edits> {
 
 function review(data: string, cwd: string): void {
   const all: Proposal[] = [];
+  const held: string[] = [];
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
       all.push(...proposals(db, tenant));
+      held.push(...heldInScf(db, tenant));
     } finally {
       db.close();
     }
@@ -736,7 +734,10 @@ function review(data: string, cwd: string): void {
         fence(PROPOSALS_LABEL, waiting.map((e) => renderEdit(ins, e)).join('')),
     );
   }
-  if (all.length === 0) return waiting.length > 0 ? undefined : void console.error('No proposals to review here.');
+  if (held.length > 0) {
+    process.stdout.write(`Accepted in SCF, but the evidence was purged here, so they stay proposed until you decide (memory purge --item <id> removes one): ${held.length}.\n${fence(PROPOSALS_LABEL, held.join(''))}`);
+  }
+  if (all.length === 0) return waiting.length > 0 || held.length > 0 ? undefined : void console.error('No proposals to review here.');
   const quarantined = all.filter((p) => p.quarantine !== null).length;
   const stale = all.filter((p) => p.status !== 'proposed').length;
   process.stdout.write(

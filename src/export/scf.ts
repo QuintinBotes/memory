@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { redact } from '../redact/redact.ts';
+import { safe } from '../render/rows.ts';
 import { recordAudit } from '../store/audit.ts';
 import { inTransaction } from '../store/transaction.ts';
 import { applySupersession } from '../consolidate.ts';
@@ -179,11 +180,23 @@ export async function exportToScf(db: DatabaseSync, tenant: string, client: ScfC
 export interface FeedbackResult {
   approved: number;
   rejected: number;
+  /** Accepted in SCF, but the evidence was purged here: the item stays proposed, for the owner. */
+  held: number;
   helped: number;
   wrong: number;
 }
 
 const FEEDBACK_PAGE = 500;
+const HELD = 'accepted in SCF, evidence purged here';
+
+/** Items SCF accepted whose evidence was purged here, as `memory review` lists them for the owner. */
+export function heldInScf(db: DatabaseSync, tenant: string): string[] {
+  if (tenant === '') return [];
+  const rows = db
+    .prepare("SELECT DISTINCT i.id, i.type, i.scope, i.scope_key, i.statement FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.held IS NOT NULL AND i.status = 'proposed' AND i.tenant = ? ORDER BY i.id")
+    .all(tenant) as { id: string; type: string; scope: string; scope_key: string; statement: string }[];
+  return rows.map((r) => `${safe(`- [${r.id}] ${r.type}, ${r.scope_key === '' ? r.scope : `${r.scope} ${r.scope_key}`}, ${HELD}: ${JSON.stringify(safe(r.statement))}`)}\n`);
+}
 
 /** Every run outcome SCF holds for a fact, a page at a time; one it does not know, or a listing it cuts short, is an error, never a count. */
 async function outcomes(client: ScfClient, fact: string): Promise<{ run: string; outcome: 'reinforced' | 'weakened' }[]> {
@@ -208,20 +221,22 @@ async function outcomes(client: ScfClient, fact: string): Promise<{ run: string;
  * are touched, looked up by their link, whatever SCF answers.
  */
 export async function importFromScf(db: DatabaseSync, tenant: string, client: ScfClient, remote: Remote[], endpoint: string): Promise<FeedbackResult> {
-  const result: FeedbackResult = { approved: 0, rejected: 0, helped: 0, wrong: 0 };
+  const result: FeedbackResult = { approved: 0, rejected: 0, held: 0, helped: 0, wrong: 0 };
   const links = db
-    .prepare('SELECT l.item_id, l.proposal_id, l.fact_id, i.status FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.endpoint = ? AND i.tenant = ? ORDER BY l.item_id')
-    .all(endpoint, tenant) as { item_id: string; proposal_id: string; fact_id: string | null; status: string }[];
+    .prepare('SELECT l.item_id, l.proposal_id, l.fact_id, i.status, EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = i.id) AS has_evidence FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.endpoint = ? AND i.tenant = ? ORDER BY l.item_id')
+    .all(endpoint, tenant) as { item_id: string; proposal_id: string; fact_id: string | null; status: string; has_evidence: number }[];
   const byId = new Map(remote.map((p) => [p.id, p]));
   const seen = db.prepare('SELECT 1 FROM scf_feedback WHERE item_id = ? AND run_id = ?');
-  const plan: { id: string; decision: 'accepted' | 'rejected' | null; fact: string | null; fresh: { run: string; outcome: 'reinforced' | 'weakened' }[] }[] = [];
+  const plan: { id: string; decision: 'accepted' | 'rejected' | 'held' | null; fact: string | null; fresh: { run: string; outcome: 'reinforced' | 'weakened' }[] }[] = [];
   for (const l of links) {
     const p = byId.get(l.proposal_id);
     if (p === undefined) continue;
     const decided = p.status === 'accepted' || p.status === 'rejected';
     const fact = p.status === 'accepted' ? (l.fact_id ?? p.fact_id) : null;
     const fresh = fact === null ? [] : (await outcomes(client, fact)).filter((o) => seen.get(l.item_id, o.run) === undefined);
-    plan.push({ id: l.item_id, decision: decided && l.status === 'proposed' ? (p.status as 'accepted' | 'rejected') : null, fact, fresh });
+    // A purge here is the owner's decision; SCF accepting does not undo it.
+    const decision = !decided || l.status !== 'proposed' ? null : p.status === 'accepted' && l.has_evidence === 0 ? 'held' : (p.status as 'accepted' | 'rejected');
+    plan.push({ id: l.item_id, decision, fact, fresh });
   }
   inTransaction(db, () => {
     const now = new Date().toISOString();
@@ -233,6 +248,8 @@ export async function importFromScf(db: DatabaseSync, tenant: string, client: Sc
           recordAudit(db, 'proposal_approved', { type: 'item', id }, { decision: 'approve', via: 'scf' });
           result.approved++;
         }
+      } else if (decision === 'held') {
+        if (db.prepare('UPDATE scf_links SET held = ? WHERE item_id = ? AND endpoint = ? AND held IS NULL').run(HELD, id, endpoint).changes === 1) result.held++;
       } else if (decision === 'rejected') {
         if (db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = 'rejected in SCF' WHERE id = ? AND tenant = ? AND status = 'proposed'").run(now, id, tenant).changes === 1) {
           recordAudit(db, 'proposal_rejected', { type: 'item', id }, { decision: 'reject', via: 'scf' });

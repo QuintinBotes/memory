@@ -373,7 +373,7 @@ test('F7 feedback that cannot be fetched leaves the accepted item as it was', as
   }
 });
 
-test('F8 an accepted item whose evidence was purged is still found by its link and activated', async () => {
+test('F8 an accepted item whose evidence was purged here stays proposed, and review lists it with the reason', async () => {
   const { s, acmeScf, betaScf } = await configured();
   try {
     propose(s, s.acmeApi, s.configA, 'The cache is cleared on deploy');
@@ -382,7 +382,12 @@ test('F8 an accepted item whose evidence was purged is still found by its link a
     acmeScf.accept(0, 'fact-1');
     const r = await importScf(s);
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(rows(s, 'SELECT status FROM items'), [{ status: 'active' }]);
+    assert.match(r.stdout, /1 held/);
+    assert.deepEqual(rows(s, 'SELECT status FROM items'), [{ status: 'proposed' }]);
+    const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+    assert.match(review.stdout, /accepted in SCF, evidence purged here/);
+    assert.match(review.stdout, /The cache is cleared on deploy/);
+    assert.match((await importScf(s)).stdout, /0 held/);
   } finally {
     await acmeScf.close();
     await betaScf.close();
@@ -393,13 +398,17 @@ test('F9 two overlapping exports post an item once', async () => {
   const { s, acmeScf, betaScf } = await configured();
   try {
     propose(s, s.acmeApi, s.configA, 'The cache is cleared on deploy');
+    const blocked = join(s.base, 'blocked.log');
+    writeFileSync(blocked, '');
+    const queued = () => readFileSync(blocked, 'utf8').length > 0;
+    const withLog = { ...at(s), env: { ...env, FILE_LOCK_LOG: blocked } };
     let open;
     acmeScf.gate = new Promise((ok) => (open = ok));
-    const first = exportScf(s);
+    const first = runAsync(['export', '--to', 'scf'], withLog);
     await until(() => acmeScf.arrived >= 1);
-    const second = exportScf(s);
-    // Without the lock the second run posts too, and arrives here; with it, it waits. The limit only ends the wait.
-    await until(() => acmeScf.arrived >= 2, 3000);
+    const second = runAsync(['export', '--to', 'scf'], withLog);
+    // The second run is either blocked on the lock (the line) or, with no lock, already posting (a second arrival): no clock decides.
+    await until(() => queued() || acmeScf.arrived >= 2);
     open();
     assert.equal((await first).status, 0);
     assert.equal((await second).status, 0);

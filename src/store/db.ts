@@ -282,6 +282,7 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     proposal_id TEXT NOT NULL,
     fact_id TEXT,
     exported_at TEXT NOT NULL,
+    held TEXT,
     PRIMARY KEY (item_id, endpoint)
   );
   CREATE TABLE IF NOT EXISTS scf_feedback (

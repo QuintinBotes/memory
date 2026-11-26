@@ -314,7 +314,7 @@ text redaction would change is withheld. Run twice it sends nothing new: each
 item is linked to its proposal, and SCF's own list is read first, so a lost
 local link adopts the existing proposal. An unreachable SCF leaves memory as it
 was. `memory import --scf` applies SCF's decisions (accepted makes the item
-active, rejected rejects it) and counts each run outcome on the accepted fact
+active, rejected rejects it; an accepted item whose evidence was purged here stays proposed and `memory review` lists it as accepted in SCF, evidence purged here, for you to decide) and counts each run outcome on the accepted fact
 once, `reinforced` as helped and `weakened` as wrong. It reads
 `GET /world/proposals` and `GET /world/facts/<id>/feedback`; SCF does not serve
 the second yet (its `world_fact_feedback` rows have no read route), so that route

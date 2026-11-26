@@ -2633,6 +2633,7 @@ var MIGRATIONS = [
     proposal_id TEXT NOT NULL,
     fact_id TEXT,
     exported_at TEXT NOT NULL,
+    held TEXT,
     PRIMARY KEY (item_id, endpoint)
   );
   CREATE TABLE IF NOT EXISTS scf_feedback (
@@ -4503,6 +4504,13 @@ async function exportToScf(db, tenant, client, remote, endpoint, repository) {
   return result;
 }
 var FEEDBACK_PAGE = 500;
+var HELD = "accepted in SCF, evidence purged here";
+function heldInScf(db, tenant) {
+  if (tenant === "") return [];
+  const rows = db.prepare("SELECT DISTINCT i.id, i.type, i.scope, i.scope_key, i.statement FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.held IS NOT NULL AND i.status = 'proposed' AND i.tenant = ? ORDER BY i.id").all(tenant);
+  return rows.map((r) => `${safe(`- [${r.id}] ${r.type}, ${r.scope_key === "" ? r.scope : `${r.scope} ${r.scope_key}`}, ${HELD}: ${JSON.stringify(safe(r.statement))}`)}
+`);
+}
 async function outcomes(client, fact) {
   const out = [];
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -4518,8 +4526,8 @@ async function outcomes(client, fact) {
   throw new ScfError("SCF holds more run outcomes for one fact than memory lists; nothing was applied");
 }
 async function importFromScf(db, tenant, client, remote, endpoint) {
-  const result = { approved: 0, rejected: 0, helped: 0, wrong: 0 };
-  const links = db.prepare("SELECT l.item_id, l.proposal_id, l.fact_id, i.status FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.endpoint = ? AND i.tenant = ? ORDER BY l.item_id").all(endpoint, tenant);
+  const result = { approved: 0, rejected: 0, held: 0, helped: 0, wrong: 0 };
+  const links = db.prepare("SELECT l.item_id, l.proposal_id, l.fact_id, i.status, EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = i.id) AS has_evidence FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.endpoint = ? AND i.tenant = ? ORDER BY l.item_id").all(endpoint, tenant);
   const byId2 = new Map(remote.map((p) => [p.id, p]));
   const seen = db.prepare("SELECT 1 FROM scf_feedback WHERE item_id = ? AND run_id = ?");
   const plan2 = [];
@@ -4529,7 +4537,8 @@ async function importFromScf(db, tenant, client, remote, endpoint) {
     const decided = p.status === "accepted" || p.status === "rejected";
     const fact = p.status === "accepted" ? l.fact_id ?? p.fact_id : null;
     const fresh = fact === null ? [] : (await outcomes(client, fact)).filter((o) => seen.get(l.item_id, o.run) === void 0);
-    plan2.push({ id: l.item_id, decision: decided && l.status === "proposed" ? p.status : null, fact, fresh });
+    const decision = !decided || l.status !== "proposed" ? null : p.status === "accepted" && l.has_evidence === 0 ? "held" : p.status;
+    plan2.push({ id: l.item_id, decision, fact, fresh });
   }
   inTransaction(db, () => {
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -4541,6 +4550,8 @@ async function importFromScf(db, tenant, client, remote, endpoint) {
           recordAudit(db, "proposal_approved", { type: "item", id }, { decision: "approve", via: "scf" });
           result.approved++;
         }
+      } else if (decision === "held") {
+        if (db.prepare("UPDATE scf_links SET held = ? WHERE item_id = ? AND endpoint = ? AND held IS NULL").run(HELD, id, endpoint).changes === 1) result.held++;
       } else if (decision === "rejected") {
         if (db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = 'rejected in SCF' WHERE id = ? AND tenant = ? AND status = 'proposed'").run(now, id, tenant).changes === 1) {
           recordAudit(db, "proposal_rejected", { type: "item", id }, { decision: "reject", via: "scf" });
@@ -6611,12 +6622,8 @@ async function scfExport(config, data, cwd, reach) {
 }
 async function scfImport(config, data, cwd) {
   const set = scfSetUp(config, data, cwd);
-  const r = await scfRun(set, async (db, remote) => {
-    const result = await importFromScf(db, set.tenant, set.client, remote, set.endpoint);
-    if (result.approved > 0) await embedAfterWrite(db, config);
-    return result;
-  });
-  console.log(`from SCF for tenant ${set.tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.helped} helped, ${r.wrong} wrong`);
+  const r = await scfRun(set, (db, remote) => importFromScf(db, set.tenant, set.client, remote, set.endpoint));
+  console.log(`from SCF for tenant ${set.tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.held} held, ${r.helped} helped, ${r.wrong} wrong`);
 }
 function reportCommand(args, data) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { tenant: { type: "string" } } });
@@ -6666,12 +6673,14 @@ function openEdits(data, context) {
 }
 function review(data, cwd) {
   const all = [];
+  const held2 = [];
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
   for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
       all.push(...proposals(db, tenant));
+      held2.push(...heldInScf(db, tenant));
     } finally {
       db.close();
     }
@@ -6684,7 +6693,11 @@ function review(data, cwd) {
 ` + fence(PROPOSALS_LABEL, waiting.map((e) => renderEdit(ins, e)).join(""))
     );
   }
-  if (all.length === 0) return waiting.length > 0 ? void 0 : void console.error("No proposals to review here.");
+  if (held2.length > 0) {
+    process.stdout.write(`Accepted in SCF, but the evidence was purged here, so they stay proposed until you decide (memory purge --item <id> removes one): ${held2.length}.
+${fence(PROPOSALS_LABEL, held2.join(""))}`);
+  }
+  if (all.length === 0) return waiting.length > 0 || held2.length > 0 ? void 0 : void console.error("No proposals to review here.");
   const quarantined = all.filter((p) => p.quarantine !== null).length;
   const stale = all.filter((p) => p.status !== "proposed").length;
   process.stdout.write(
