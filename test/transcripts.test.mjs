@@ -344,3 +344,44 @@ test('R6 every deletion by expiry is audited exactly once, with the opt-in on or
   sessionStart(s.acmeApi, s.data, s.configA);
   assert.deepEqual(audits(), [['transcripts_expired', 1], ['transcripts_expired', 1]], 'opted out');
 });
+
+// ---- #84: private spans opened in records the owner filter skips ---------------------------------------------------------
+
+const toolResult = (text) => JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: text }] } });
+const toolUse = (input) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'Bash', input }] } });
+const OWNER_A = 'No, use the other branch for the release.';
+const OWNER_B = 'Never push to main directly, please.';
+const mined = (s, name, ...lines) => {
+  end(s, write(s, `${name}.jsonl`, ...lines), name);
+  sessionStart(s.acmeApi, s.data, s.configA);
+  return proposals(s).map((p) => p.statement.replace(/^Owner correction: "|"$/g, ''));
+};
+
+test('#84.1 a private tag opened in a tool-result record hides an owner correction before its close, and only that one', () => {
+  const s = setup();
+  optIn(s);
+  assert.deepEqual(mined(s, 'tr', row('Deploy the service'), toolResult('output <private>secret'), row(OWNER_A), toolResult('end</private>'), row(OWNER_B)), [OWNER_B]);
+});
+
+test('#84.1b a tag opened in a tool call or a non-text block of an owner record hides the next correction too', () => {
+  const s = setup();
+  optIn(s);
+  const mixed = JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: [{ type: 'text', text: '<private>' }] }, { type: 'text', text: OWNER_A }] } });
+  assert.deepEqual(mined(s, 'mx', row('Deploy the service'), toolUse({ command: 'echo <private>' }), row(OWNER_A)), []);
+  assert.deepEqual(mined(s, 'mx2', row('Deploy the service'), mixed, row(OWNER_B)), []);
+});
+
+test('#84.2 a tag opened in a sidechain or a meta record hides a later owner correction', () => {
+  const s = setup();
+  optIn(s);
+  const side = JSON.stringify({ type: 'user', isSidechain: true, message: { role: 'user', content: 'sub <private>' } });
+  const meta = JSON.stringify({ type: 'user', isSidechain: false, isMeta: true, message: { role: 'user', content: 'meta <private>' } });
+  assert.deepEqual(mined(s, 'sc', row('Deploy the service'), side, row(OWNER_A)), []);
+  assert.deepEqual(mined(s, 'mt', row('Deploy the service'), meta, row(OWNER_B)), []);
+});
+
+test('#84.3 a span opened and closed inside a tool-result record leaves a later owner correction proposed', () => {
+  const s = setup();
+  optIn(s);
+  assert.deepEqual(mined(s, 'ok', row('Deploy the service'), toolResult('a <private>hidden</private> b'), row(OWNER_A)), [OWNER_A]);
+});

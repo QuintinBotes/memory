@@ -4583,6 +4583,11 @@ function hidePrivate(text4, state) {
   }
   return out + (state.open ? HIDDEN : text4.slice(last));
 }
+var leaves = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(leaves) : v !== null && typeof v === "object" ? Object.values(v).flatMap(leaves) : [];
+function scan(v, state) {
+  for (const t of leaves(v)) hidePrivate(t, state);
+  return "";
+}
 function ownerTurns(file) {
   const raw = readFileSync12(file, "utf8");
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
@@ -4593,13 +4598,16 @@ function ownerTurns(file) {
     try {
       o = JSON.parse(row4);
     } catch {
+      scan(row4, state);
       return;
     }
-    if (o.type !== "user" && o.type !== "assistant" || o.isSidechain === true || o.isMeta === true) return;
-    const c = o.message?.content;
-    const text4 = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b?.type === "text" ? b.text ?? "" : "").join(" ") : "";
-    const visible2 = hidePrivate(text4, state);
-    if (o.type !== "user") return;
+    const c = o?.message?.content;
+    if (o?.type !== "user" || o.isSidechain === true || o.isMeta === true || typeof c !== "string" && !Array.isArray(c)) return scan(o, state);
+    const visible2 = (typeof c === "string" ? [c] : c).map((b) => {
+      const t = typeof b === "string" ? b : b?.type === "text" ? String(b.text ?? "") : void 0;
+      if (t === void 0) return scan(b, state);
+      return hidePrivate(t, state);
+    }).join(" ");
     const flat = scrub(visible2).replace(/\s+/g, " ").trim();
     if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
@@ -5046,13 +5054,13 @@ function repairOpenEpisodes(db, repo, session, command, cwd) {
     }
   });
 }
-function revertMessage(data, config, scan) {
-  if (scan.pair !== null && config.recallOff === void 0) {
-    const reason = `two memory-linked reverts within seven days (${scan.pair[0].slice(0, 7)} and ${scan.pair[1].slice(0, 7)})`;
+function revertMessage(data, config, scan2) {
+  if (scan2.pair !== null && config.recallOff === void 0) {
+    const reason = `two memory-linked reverts within seven days (${scan2.pair[0].slice(0, 7)} and ${scan2.pair[1].slice(0, 7)})`;
     saveConfig(data, { ...config, recallOff: { reason, at: (/* @__PURE__ */ new Date()).toISOString() } });
     return JSON.stringify({ systemMessage: `memory turned recall off: ${reason}. Run memory init --recall on to turn it on again.` });
   }
-  return scan.counted > 0 ? JSON.stringify({ systemMessage: `memory: ${scan.counted} revert${scan.counted === 1 ? "" : "s"} counted against the items shown with the reverted change` }) : "";
+  return scan2.counted > 0 ? JSON.stringify({ systemMessage: `memory: ${scan2.counted} revert${scan2.counted === 1 ? "" : "s"} counted against the items shown with the reverted change` }) : "";
 }
 
 // src/capture/ci.ts

@@ -84,6 +84,15 @@ function hidePrivate(text: string, state: { open: boolean }): string {
   return out + (state.open ? HIDDEN : text.slice(last));
 }
 
+/** Every string inside a JSON value, in order. */
+const leaves = (v: unknown): string[] => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(leaves) : v !== null && typeof v === 'object' ? Object.values(v).flatMap(leaves) : []);
+
+/** Moves the span state through a record or block that is never mined; returns '' so a caller can use it as a hidden piece. */
+function scan(v: unknown, state: { open: boolean }): string {
+  for (const t of leaves(v)) hidePrivate(t, state);
+  return '';
+}
+
 /**
  * The owner's own turns of a Claude Code JSONL transcript, redacted (FR-005). Agent output, subagent (sidechain)
  * records, meta records and tool results are never returned, and text inside `<private>...</private>` is hidden
@@ -99,13 +108,17 @@ export function ownerTurns(file: string): Turn[] {
     try {
       o = JSON.parse(row);
     } catch {
+      scan(row, state);
       return;
     }
-    if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain === true || o.isMeta === true) return;
-    const c = o.message?.content;
-    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((b: { type?: string; text?: string }) => (b?.type === 'text' ? b.text ?? '' : '')).join(' ') : '';
-    const visible = hidePrivate(text, state);
-    if (o.type !== 'user') return;
+    // Every record and block is scanned for private tags, in order, before any filtering decides what is mined.
+    const c = o?.message?.content;
+    if (o?.type !== 'user' || o.isSidechain === true || o.isMeta === true || (typeof c !== 'string' && !Array.isArray(c))) return scan(o, state);
+    const visible = (typeof c === 'string' ? [c] : c).map((b: unknown) => {
+      const t = typeof b === 'string' ? b : (b as { type?: string; text?: unknown } | null)?.type === 'text' ? String((b as { text?: unknown }).text ?? '') : undefined;
+      if (t === undefined) return scan(b, state);
+      return hidePrivate(t, state);
+    }).join(' ');
     const flat = scrub(visible).replace(/\s+/g, ' ').trim();
     if (flat !== '' && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
