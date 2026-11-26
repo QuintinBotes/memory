@@ -73,6 +73,8 @@ import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
 import { poison } from './eval/poison.ts';
 import { LAB, lab, labTasks, parseRows, verdict } from './eval/lab.ts';
+import { buildReplaySet, parseHistory } from './eval/head-to-head/replay-set.ts';
+import { headToHead, headToHeadDir, parseArms } from './eval/head-to-head/scorecard.ts';
 
 suppressSqliteExperimentalWarning();
 
@@ -218,6 +220,13 @@ const USAGE = `usage: memory <command>
       throwaway store, one JSON line per family with attacks attempted, reached active, rendered outside the fence and
       raised support, then the owner's 50 benign items accepted and recalled, then a summary. Exit 1 when any attack got
       through. Not part of the no-measure run
+  eval head-to-head --since <date> --history <file> [--arms <file>] [--checked <file>]
+      the head-to-head replay (#25): questions built from the history's corrections, decisions and failures after
+      --since, in seven categories, answered by this plugin, memory off, Claude Code auto memory, the whole history in
+      context and each alternative --arms names (Mem0, Graphiti, Basic Memory, a community plugin; README, Head to head),
+      all from the evidence before --since. Prints the bars, then per arm and category recall at 1 and 5, abstention,
+      stale recall, tokens and latency, then the verdict and the vocabulary-miss share. The replay set, every
+      per-question result and 30 grades to check by hand (pass them back as --checked) stay in the data directory
   eval verdict --scorecard <file> --lab <file>
       whether auto memory may be switched off: only when both files of rows show memory no worse
   --version`;
@@ -1465,7 +1474,7 @@ function input<T>(file: string, parse: (text: string) => T): T {
 }
 
 /** `memory eval`: one named measure needs its inputs; with none named, a measure without them reports not run. */
-function evalCommand(args: string[]): void {
+async function evalCommand(args: string[], data: string): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -1473,9 +1482,20 @@ function evalCommand(args: string[]): void {
       since: { type: 'string' }, pulls: { type: 'string' }, log: { type: 'string' },
       agent: { type: 'string' }, model: { type: 'string' }, task: { type: 'string' },
       scorecard: { type: 'string' }, lab: { type: 'string' },
+      history: { type: 'string' }, arms: { type: 'string' }, checked: { type: 'string' },
     },
   });
   const only = positionals[0];
+  if (only === 'head-to-head' && positionals.length === 1) {
+    const { since, history, arms, checked } = values;
+    if (since === undefined || Number.isNaN(Date.parse(since))) throw new Refusal('head-to-head needs --since <date>, such as 2026-06-01', 2);
+    if (history === undefined) throw new Refusal('head-to-head needs --history <file>', 2);
+    const set = buildReplaySet(input(history, parseHistory), since);
+    const external = arms === undefined ? {} : input(arms, parseArms);
+    const marks = checked === undefined ? [] : input(checked, (t) => t.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as never));
+    const { rows } = await headToHead(pluginVersion(), set, external, marks, headToHeadDir(data, set.tenant));
+    return void process.stdout.write(rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+  }
   if (only === 'verdict' && positionals.length === 1) {
     if (values.scorecard === undefined || values.lab === undefined) throw new Refusal('verdict needs --scorecard <file> and --lab <file>', 2);
     return void console.log(verdict(input(values.scorecard, parseRows), input(values.lab, parseRows), currentConfigDir()));
@@ -1595,7 +1615,7 @@ async function main(argv: string[]): Promise<void> {
     case 'purge':
       return purge(rest, data, process.cwd());
     case 'eval':
-      return evalCommand(rest);
+      return evalCommand(rest, data);
     case undefined:
     case '--help':
     case 'help':

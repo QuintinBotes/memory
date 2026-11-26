@@ -606,6 +606,7 @@ const PATHS = {
   'src/import/import.ts': 'auto memory and silo import: P10, P11',
   'src/eval/poison.ts': 'eval poison replays every family above in its own throwaway store, never the owner store',
   'src/eval/replay.ts': 'eval replay builds a throwaway store from pull requests, never the owner store',
+  'src/eval/head-to-head/arms.ts': "eval head-to-head's memory arm builds a throwaway store from the history file, never the owner store",
 };
 
 test('P15 every source file that stores an item has a fixture family in this suite', () => {
