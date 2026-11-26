@@ -39,8 +39,9 @@ through which agents search, read, propose and give feedback. The plan is tracke
 - **Small and cache-friendly.** Every recall has a budget, whole items are
   dropped rather than cut, and the session slice is byte-identical for the
   same store, so it never breaks the prompt cache.
-- **Off until measured.** Each capability ships off and is turned on only when
-  its on/off measurement shows it is no worse.
+- **Measured before it is on.** Automatic capture and hybrid recall are on by
+  default (decision #43); every other capability ships off and is turned on
+  only when its on/off measurement shows it is no worse.
 - **Hybrid recall.** Recall is lexical, vector and graph, behind a provider
   interface; the default provider is voyage-4. Vectors are kept in the
   tenant's own file. Without a key or a network, recall falls back to words
