@@ -3514,7 +3514,7 @@ function get(args, data, context, cwd) {
     leanRow(item),
     ...row4.rationale === null ? [] : [safe(`because: ${row4.rationale}`)],
     safe(`status ${status}${row4.status_reason === null ? "" : ` (${row4.status_reason})`} \xB7 confidence ${level} \xB7 support ${row4.support} \xB7 helped ${row4.helped} \xB7 wrong ${row4.wrong} \xB7 contradicted ${row4.contradictions} \xB7 anchor ${anchorStatus}`),
-    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.taint === null ? "" : `, tainted by ${taintList(e.taint)}`}`))
+    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.agent === null ? "" : ` via ${e.agent}`}${e.taint === null ? "" : `, tainted by ${taintList(e.taint)}`}`))
   ].map((l) => `${l}
 `).join(""));
 }
@@ -3526,7 +3526,7 @@ function itemDetail(data, context, cwd, id) {
          WHERE id = ? AND ${store.where} AND status NOT IN ('proposed', 'rejected') AND statement != ''`
     ).get(id, ...store.params);
     if (row5 === void 0) return void 0;
-    const evidence2 = db.prepare("SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id").all(id);
+    const evidence2 = db.prepare("SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt, taint, CASE WHEN extractor LIKE 'mcp:%' THEN substr(extractor, 5) END AS agent FROM evidence WHERE item_id = ? ORDER BY captured_at, id").all(id);
     return { row: row5, evidence: evidence2, store, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
   });
   if (found === void 0) return void 0;
@@ -3740,7 +3740,7 @@ function proposals(db, tenant, id) {
          AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
        ORDER BY created_at, id`
   ).all(tenant, ...id === void 0 ? [] : [id]);
-  const evidence = db.prepare("SELECT source_ref, author_role, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
+  const evidence = db.prepare("SELECT source_ref, author_role, taint, CASE WHEN extractor LIKE 'mcp:%' THEN substr(extractor, 5) END AS agent FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
   const older = db.prepare("SELECT id, type, statement FROM items WHERE id = ? AND status = 'active'");
   for (const r of rows) {
     r.evidence = evidence.all(r.id);
@@ -3753,7 +3753,7 @@ var taintOf = (evidence) => {
   const all = [...new Set(evidence.flatMap((e) => e.taint === null ? [] : [e.taint]))];
   return all.length === 0 ? null : taintList(all.join(","));
 };
-var evidenceLine = (indent, e) => safe(`${indent}evidence: ${e.source_ref} (${e.author_role})${e.taint === null ? "" : `, tainted by ${taintList(e.taint)}`}`);
+var evidenceLine = (indent, e) => safe(`${indent}evidence: ${e.source_ref} (${e.author_role})${e.agent === null ? "" : ` via ${e.agent}`}${e.taint === null ? "" : `, tainted by ${taintList(e.taint)}`}`);
 function renderProposals(list2) {
   return list2.map((p) => {
     const g = shadow(p);
@@ -4038,7 +4038,7 @@ async function show(id) {
     box.append(el('h3', null, 'Anchors \xB7 ' + d.anchorStatus));
     box.append(el('ul', 'plain', ...d.anchors.map((a) => el('li', null, el('span', 'anchor mono', (a.symbol || a.path) + (a.start ? ':' + a.start + (a.end ? '-' + a.end : '') : '')), a.commit ? el('span', 'sub', '  at ' + a.commit.slice(0, 10)) : null))));
   }
-  box.append(el('h3', null, 'Evidence'), el('ul', 'plain', ...d.evidence.map((e) => el('li', null, el('span', 'mono', e.source), el('span', 'sub', '  ' + e.role + ' \xB7 ' + date(e.capturedAt)), e.taint ? chip('tainted: ' + e.taint, 'bad') : null))));
+  box.append(el('h3', null, 'Evidence'), el('ul', 'plain', ...d.evidence.map((e) => el('li', null, el('span', 'mono', e.source), el('span', 'sub', '  ' + e.role + ' \xB7 ' + date(e.capturedAt)), e.agent ? chip('via ' + e.agent, 'accent') : null, e.taint ? chip('tainted: ' + e.taint, 'bad') : null))));
   box.append(el('h3', null, 'History'));
   const tl = el('ol', 'timeline');
   for (const v of [...d.history].reverse()) {
@@ -4080,7 +4080,7 @@ async function review() {
       el('div', 'chips', chip('proposal', 'accent'), chip(p.type), chip(p.scope + (p.scope_key ? ' \xB7 ' + p.scope_key : '')), chip('trust ' + p.origin_trust), p.quarantine ? chip('quarantined: ' + p.quarantine, 'bad') : null, p.stale_reports ? chip('reported stale \xD7' + p.stale_reports, 'warn') : null),
       el('div', 'text', p.statement),
       p.older ? el('div', 'sub', 'Replaces: ' + p.older.statement) : null,
-      el('div', 'sub', ...p.evidence.map((e) => e.source_ref + ' (' + e.author_role + ')' + (e.taint ? ', tainted by ' + e.taint : '') + '  ')),
+      el('div', 'sub', ...p.evidence.map((e) => e.source_ref + ' (' + e.author_role + ')' + (e.agent ? ' via ' + e.agent : '') + (e.taint ? ', tainted by ' + e.taint : '') + '  ')),
       el('div', 'sub mono', p.id + ' \xB7 shadow gate ' + p.shadow),
       el('div', 'row', button('Approve', () => done(() => api('/api/decide', { id: p.id, decision: 'approve' })), 'btn ok'), reason, button('Reject', () => done(() => api('/api/decide', { id: p.id, decision: 'reject', reason: reason.value || undefined })), 'btn danger')),
     ));

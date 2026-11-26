@@ -456,3 +456,25 @@ test('#48 S2 an agent with no adapter that proposes through MCP is named, from i
   db.close();
   assert.deepEqual(evidence, [['run-7', 'mcp:muse']]);
 });
+
+// #100: the agent behind an MCP proposal is shown wherever its evidence is.
+test('#100 review, memory_get rows and JSON name the agent that proposed an item over MCP; other evidence shows no agent', () => {
+  const s = setup();
+  const msgs = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex', version: '1.0' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_propose', arguments: { statement: 'The ledger is rebuilt every night', scope: 'repository', type: 'convention', evidence: { source: 'run-7' } } } },
+  ];
+  assert.equal(run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: msgs.map((m) => JSON.stringify(m)).join('\n') + '\n' }).status, 0);
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.match(review.stdout, /evidence: run-7 \(agent\) via codex/);
+  const [{ id }] = items(s.data, 'tenants/acme.sqlite');
+  assert.equal(run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Builds run from the repository root', '--scope', 'repository').status, 0);
+  const [rows, json] = tools(s.acmeApi, s.data, s.configA, [['memory_get', { id }], ['memory_get', { id, format: 'json' }]]);
+  assert.match(rows.text, /evidence: run-7 \(agent\) \S+ via codex/);
+  assert.equal(JSON.parse(fenced(json.text).join('\n')).evidence[0].agent, 'codex');
+  const other = items(s.data, 'tenants/acme.sqlite').find((i) => i.id !== id);
+  const [plain] = tools(s.acmeApi, s.data, s.configA, [['memory_get', { id: other.id }]]);
+  assert.doesNotMatch(plain.text, /via /);
+});

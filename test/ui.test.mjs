@@ -299,3 +299,24 @@ test('approving and rejecting a proposal in the page records the same audit entr
   assert.deepEqual(entry(uiApprove, 'proposal_approved'), entry(cliApprove, 'proposal_approved'));
   assert.deepEqual(entry(uiReject, 'proposal_rejected'), entry(cliReject, 'proposal_rejected'));
 });
+
+// #100: the page names the agent that proposed an item over MCP.
+test('#100 the review list and item detail carry the MCP agent behind an item', async () => {
+  const s = fixture();
+  const msgs = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex', version: '1.0' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_propose', arguments: { statement: 'Notes are filed by week', scope: 'repository', type: 'convention', evidence: { source: 'run-9' } } } },
+  ];
+  ok(run(['mcp'], { cwd: s.notes, data: s.data, config: s.configA, input: msgs.map((m) => JSON.stringify(m)).join('\n') + '\n' }));
+  const id = idOf(s, 'Notes are filed by week', 'tenants/personal.sqlite');
+  const ui = await startUi(s.notes, s.data, s.configA, ['--port', '0']);
+  try {
+    const review = await call(ui, 'GET', '/api/review');
+    assert.equal(review.json.proposals.find((p) => p.id === id).evidence[0].agent, 'codex');
+    assert.equal((await call(ui, 'POST', '/api/decide', { body: { id, decision: 'approve' } })).status, 200);
+    assert.equal((await call(ui, 'GET', `/api/item?id=${id}`)).json.evidence[0].agent, 'codex');
+  } finally {
+    ui.stop();
+  }
+});

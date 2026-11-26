@@ -194,7 +194,7 @@ async function show(id) {
     box.append(el('h3', null, 'Anchors · ' + d.anchorStatus));
     box.append(el('ul', 'plain', ...d.anchors.map((a) => el('li', null, el('span', 'anchor mono', (a.symbol || a.path) + (a.start ? ':' + a.start + (a.end ? '-' + a.end : '') : '')), a.commit ? el('span', 'sub', '  at ' + a.commit.slice(0, 10)) : null))));
   }
-  box.append(el('h3', null, 'Evidence'), el('ul', 'plain', ...d.evidence.map((e) => el('li', null, el('span', 'mono', e.source), el('span', 'sub', '  ' + e.role + ' · ' + date(e.capturedAt)), e.taint ? chip('tainted: ' + e.taint, 'bad') : null))));
+  box.append(el('h3', null, 'Evidence'), el('ul', 'plain', ...d.evidence.map((e) => el('li', null, el('span', 'mono', e.source), el('span', 'sub', '  ' + e.role + ' · ' + date(e.capturedAt)), e.agent ? chip('via ' + e.agent, 'accent') : null, e.taint ? chip('tainted: ' + e.taint, 'bad') : null))));
   box.append(el('h3', null, 'History'));
   const tl = el('ol', 'timeline');
   for (const v of [...d.history].reverse()) {
@@ -236,7 +236,7 @@ async function review() {
       el('div', 'chips', chip('proposal', 'accent'), chip(p.type), chip(p.scope + (p.scope_key ? ' · ' + p.scope_key : '')), chip('trust ' + p.origin_trust), p.quarantine ? chip('quarantined: ' + p.quarantine, 'bad') : null, p.stale_reports ? chip('reported stale ×' + p.stale_reports, 'warn') : null),
       el('div', 'text', p.statement),
       p.older ? el('div', 'sub', 'Replaces: ' + p.older.statement) : null,
-      el('div', 'sub', ...p.evidence.map((e) => e.source_ref + ' (' + e.author_role + ')' + (e.taint ? ', tainted by ' + e.taint : '') + '  ')),
+      el('div', 'sub', ...p.evidence.map((e) => e.source_ref + ' (' + e.author_role + ')' + (e.agent ? ' via ' + e.agent : '') + (e.taint ? ', tainted by ' + e.taint : '') + '  ')),
       el('div', 'sub mono', p.id + ' · shadow gate ' + p.shadow),
       el('div', 'row', button('Approve', () => done(() => api('/api/decide', { id: p.id, decision: 'approve' })), 'btn ok'), reason, button('Reject', () => done(() => api('/api/decide', { id: p.id, decision: 'reject', reason: reason.value || undefined })), 'btn danger')),
     ));

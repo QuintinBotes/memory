@@ -34,7 +34,7 @@ export interface Proposal {
   quarantine: string | null;
   contradictions: number;
   anchors_json: string;
-  evidence: { source_ref: string; author_role: string; taint: string | null }[];
+  evidence: { source_ref: string; author_role: string; taint: string | null; agent: string | null }[];
   /** The active item this one would replace, when the owner has not yet decided. */
   supersedes: string | null;
   older: { id: string; type: string; statement: string; evidence: Proposal['evidence'] } | null;
@@ -68,7 +68,7 @@ export function proposals(db: DatabaseSync, tenant: string, id?: string): Propos
        ORDER BY created_at, id`,
     )
     .all(tenant, ...(id === undefined ? [] : [id])) as unknown as Proposal[];
-  const evidence = db.prepare('SELECT source_ref, author_role, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id');
+  const evidence = db.prepare("SELECT source_ref, author_role, taint, CASE WHEN extractor LIKE 'mcp:%' THEN substr(extractor, 5) END AS agent FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
   const older = db.prepare("SELECT id, type, statement FROM items WHERE id = ? AND status = 'active'");
   for (const r of rows) {
     r.evidence = evidence.all(r.id) as Proposal['evidence'];
@@ -84,7 +84,7 @@ const taintOf = (evidence: Proposal['evidence']): string | null => {
   return all.length === 0 ? null : taintList(all.join(','));
 };
 const evidenceLine = (indent: string, e: Proposal['evidence'][number]): string =>
-  safe(`${indent}evidence: ${e.source_ref} (${e.author_role})${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`);
+  safe(`${indent}evidence: ${e.source_ref} (${e.author_role})${e.agent === null ? '' : ` via ${e.agent}`}${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`);
 
 export function renderProposals(list: Proposal[]): string {
   return list

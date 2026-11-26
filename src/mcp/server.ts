@@ -242,7 +242,7 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
     leanRow(item),
     ...(row.rationale === null ? [] : [safe(`because: ${row.rationale}`)]),
     safe(`status ${status}${row.status_reason === null ? '' : ` (${row.status_reason})`} · confidence ${level} · support ${row.support} · helped ${row.helped} · wrong ${row.wrong} · contradicted ${row.contradictions} · anchor ${anchorStatus}`),
-    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`)),
+    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.agent === null ? '' : ` via ${e.agent}`}${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`)),
   ].map((l) => `${l}\n`).join(''));
 }
 
@@ -259,8 +259,8 @@ export function itemDetail(data: string, context: Context, cwd: string, id: stri
       .get(id, ...store.params) as ItemRow | undefined;
     if (row === undefined) return undefined;
     const evidence = db
-      .prepare('SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id')
-      .all(id) as { source: string; role: string; capturedAt: string; taint: string | null }[];
+      .prepare("SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt, taint, CASE WHEN extractor LIKE 'mcp:%' THEN substr(extractor, 5) END AS agent FROM evidence WHERE item_id = ? ORDER BY captured_at, id")
+      .all(id) as { source: string; role: string; capturedAt: string; taint: string | null; agent: string | null }[];
     return { row, evidence, store, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
   });
   if (found === undefined) return undefined;
