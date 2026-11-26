@@ -456,3 +456,44 @@ test('#48 S2 an agent with no adapter that proposes through MCP is named, from i
   db.close();
   assert.deepEqual(evidence, [['run-7', 'mcp:muse']]);
 });
+
+test('memory_search as_of returns the version valid then, says when it was replaced, and refuses a date it cannot read (#102)', () => {
+  const s = setup();
+  const ok = (r) => assert.equal(r.status, 0, r.stderr);
+  const OLD = 'The payments client pins API version 2024-01';
+  const NEW = 'The payments client pins API version 2025-06';
+  const REJECTED = 'The payments client pins API version 2023-09';
+  ok(remember(s.acmeApi, s.data, s.configA, OLD, '--scope', 'repository', '--type', 'decision'));
+  ok(remember(s.acmeApi, s.data, s.configA, NEW, '--scope', 'repository', '--type', 'decision', '--supersedes', idOf(s, OLD)));
+  ok(remember(s.acmeApi, s.data, s.configA, REJECTED, '--scope', 'repository', '--type', 'decision'));
+  // The history as it happened: the older version from January, replaced on 2026-03-01; a rejected item over the same months.
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  const set = db.prepare('UPDATE items SET reinforced_at = coalesce(reinforced_at, valid_from), valid_from = ?, valid_to = ? WHERE statement = ?');
+  set.run('2026-01-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', OLD);
+  set.run('2026-03-01T00:00:00.000Z', null, NEW);
+  db.prepare("UPDATE items SET status = 'rejected', valid_from = ?, valid_to = ? WHERE statement = ?").run('2026-01-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', REJECTED);
+  db.close();
+  const query = 'payments client API version';
+  const [then, now, later, bad] = tools(s.acmeApi, s.data, s.configA, [
+    ['memory_search', { query, as_of: '2026-02-01' }],
+    ['memory_search', { query }],
+    ['memory_search', { query, as_of: '2026-04-01T12:00:00Z' }],
+    ['memory_search', { query, as_of: 'last spring' }],
+  ]);
+  assert.equal(then.isError, false, then.text);
+  const thenRows = rowsOf(then.text);
+  assert.equal(thenRows.length, 1, then.text);
+  assert.ok(thenRows[0].includes(OLD), then.text);
+  assert.match(thenRows[0], /valid 2026-01-01 to 2026-03-01/, 'the row says which version it is and when it was replaced');
+  assert.doesNotMatch(then.text, /2025-06|2023-09/, 'neither the newer version nor the rejected item');
+  // Without as_of, only the active version, and no validity text.
+  const nowRows = rowsOf(now.text);
+  assert.equal(nowRows.length, 1, now.text);
+  assert.ok(nowRows[0].includes(NEW));
+  assert.doesNotMatch(nowRows[0], /valid /);
+  const laterRows = rowsOf(later.text);
+  assert.equal(laterRows.length, 1, later.text);
+  assert.match(laterRows[0], /2025-06 .*valid 2026-03-01 to now/);
+  assert.equal(bad.isError, true);
+  assert.match(bad.text, /as_of is an ISO date/);
+});

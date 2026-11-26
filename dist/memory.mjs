@@ -1031,12 +1031,21 @@ function insertItem(db, item) {
   });
   return id;
 }
-var SELECT = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
+var COLUMNS = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
   coalesce(reinforced_at, valid_from) AS reinforced, anchors_json,
   (SELECT source_ref FROM evidence e WHERE e.item_id = items.id ORDER BY captured_at, id LIMIT 1) AS source,
   (SELECT group_concat(DISTINCT taint) FROM evidence e WHERE e.item_id = items.id AND taint IS NOT NULL) AS taint,
-  origin_repository AS origin
-  FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`;
+  origin_repository AS origin`;
+var SELECT = `${COLUMNS} FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`;
+function versions(asOf) {
+  if (asOf === void 0) return { select: SELECT, at: [] };
+  const at3 = new Date(asOf).toISOString();
+  return {
+    select: `${COLUMNS}, valid_from, valid_to FROM items WHERE status IN ('active', 'superseded') AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)
+      AND coalesce(reinforced_at, valid_from) >= strftime('%Y-%m-%dT%H:%M:%fZ', ?, '-${EXPIRY_DAYS} days')`,
+    at: [at3, at3, at3]
+  };
+}
 var visible = (rows) => rows.map((r) => ({
   id: r.id,
   scope: r.scope,
@@ -1050,12 +1059,14 @@ var visible = (rows) => rows.map((r) => ({
   anchors: JSON.parse(r.anchors_json),
   source: r.source ?? "",
   ...r.taint === null ? {} : { taint: r.taint },
-  origin: r.origin
+  origin: r.origin,
+  ...r.valid_from === void 0 ? {} : { valid: { from: r.valid_from, to: r.valid_to ?? null } }
 }));
 var TENANT_SCOPE = "tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))";
 var PERSON_SCOPE = "tenant = '' AND scope IN ('person', 'global')";
-function tenantItems(db, tenant, repository, owner) {
-  return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE}`).all(tenant, repository, owner));
+function tenantItems(db, tenant, repository, owner, asOf) {
+  const { select, at: at3 } = versions(asOf);
+  return visible(db.prepare(`${select} AND ${TENANT_SCOPE}`).all(...at3, tenant, repository, owner));
 }
 var anchorPaths = (path) => path.split("/").map((_, i, parts2) => parts2.slice(0, i + 1).join("/"));
 function anchoredItems(db, tenant, repository, owner, path) {
@@ -1077,11 +1088,13 @@ function failureStatements(db, tenant, repository, owner) {
   return db.prepare(`SELECT id, statement FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED} AND type IN ('failure-pattern', 'repair-recipe') AND ${TENANT_SCOPE}`).all(tenant, repository, owner);
 }
 var itemsById = (db, ids) => ids.length === 0 ? [] : visible(db.prepare(`${SELECT} AND id IN (${ids.map(() => "?").join(", ")})`).all(...ids));
-function personItems(db, origin) {
-  return origin === void 0 ? visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all()) : visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE} AND origin_repository = ?`).all(origin));
+function personItems(db, origin, asOf) {
+  const { select, at: at3 } = versions(asOf);
+  return origin === void 0 ? visible(db.prepare(`${select} AND ${PERSON_SCOPE}`).all(...at3)) : visible(db.prepare(`${select} AND ${PERSON_SCOPE} AND origin_repository = ?`).all(...at3, origin));
 }
-function allTenantItems(db, tenant) {
-  return visible(db.prepare(`${SELECT} AND tenant = ?`).all(tenant));
+function allTenantItems(db, tenant, asOf) {
+  const { select, at: at3 } = versions(asOf);
+  return visible(db.prepare(`${select} AND tenant = ?`).all(...at3, tenant));
 }
 function closeQuestion(db, id) {
   return inTransaction(db, () => {
@@ -1148,7 +1161,8 @@ function leanRow(item, why = "", maxTokens = Infinity) {
   const statement = safe(item.statement);
   const taintText = item.taint === void 0 ? "" : safe(taintList(item.taint));
   const proof = safe(provingTest(item.anchors));
-  const build = (s, src, loc, tst, taint, w) => `[${item.id}] ${item.type}${loc === "" ? "" : ` \xB7 ${loc}`} \xB7 ${s}${src === "" ? "" : ` (${src})`}${taint === "" ? "" : ` \xB7 tainted: ${taint}`}${w === "" ? "" : ` \xB7 why: ${w}`}${tst === "" ? "" : ` \xB7 test: ${tst}`}`;
+  const valid = item.valid === void 0 ? "" : ` \xB7 valid ${item.valid.from.slice(0, 10)} to ${item.valid.to?.slice(0, 10) ?? "now"}`;
+  const build = (s, src, loc, tst, taint, w) => `[${item.id}] ${item.type}${loc === "" ? "" : ` \xB7 ${loc}`} \xB7 ${s}${src === "" ? "" : ` (${src})`}${valid}${taint === "" ? "" : ` \xB7 tainted: ${taint}`}${w === "" ? "" : ` \xB7 why: ${w}`}${tst === "" ? "" : ` \xB7 test: ${tst}`}`;
   const row4 = build(statement, source, where2, proof, taintText, why);
   const room = maxTokens * 4;
   if (row4.length <= room) return row4;
@@ -3306,7 +3320,7 @@ function withTextRatio(items, matches2) {
     return bm25 === void 0 || best === 0 ? item : { ...item, textRatio: bm25 / best };
   });
 }
-function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = [], reach) {
+function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = [], reach, asOf) {
   const out = [];
   const other = reach !== void 0 && reach !== "all" && reach.repository !== context.repository;
   const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
@@ -3318,7 +3332,7 @@ function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, wi
       try {
         if (!other) withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
         const named = reach !== void 0 && reach !== "all" ? reach.repository : void 0;
-        const items = reach === "all" ? allTenantItems(db, context.tenant) : tenantItems(db, context.tenant, named ?? context.repository, named === void 0 ? context.owner : named.split("/")[0]);
+        const items = reach === "all" ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === void 0 ? context.owner : named.split("/")[0], asOf);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld), textMatches(db, terms));
       } finally {
         db.close();
@@ -3328,7 +3342,7 @@ function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, wi
   const person = openStore(personFile(data), false, busyMs);
   if (person !== null) {
     try {
-      const items = personItems(person, reach !== void 0 && reach !== "all" ? reach.repository : void 0);
+      const items = personItems(person, reach !== void 0 && reach !== "all" ? reach.repository : void 0, asOf);
       add(instructions === null ? items : screen(person, items, instructions, true, withheld), textMatches(person, terms));
     } finally {
       person.close();
@@ -3358,7 +3372,8 @@ var TOOLS = [
       properties: {
         query: { type: "string", description: "Words of the task." },
         paths: { type: "array", items: { type: "string" }, description: "Files or directories in play, relative to the repository root." },
-        repository: { type: "string", description: "owner/repo of another repository of the same tenant, to search its items instead of this checkout's. Paths then do not match anchors. Refused for a repository of any other tenant." }
+        repository: { type: "string", description: "owner/repo of another repository of the same tenant, to search its items instead of this checkout's. Paths then do not match anchors. Refused for a repository of any other tenant." },
+        as_of: { type: "string", description: "An ISO date, such as 2026-03-01, to search the versions that applied then instead of the current ones. Each row then says when its version was valid." }
       },
       required: ["query"],
       additionalProperties: false
@@ -3459,6 +3474,7 @@ function first(data, context, use) {
   }
   return void 0;
 }
+var ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
 async function search(args, data, config, context, cwd) {
   const query = text2(args, "query");
   const paths = args["paths"] ?? [];
@@ -3473,17 +3489,21 @@ async function search(args, data, config, context, cwd) {
     if ("reason" in found2) throw new ToolError(`not searched: ${found2.reason}`);
     reach = found2;
   }
+  const asOf = args["as_of"];
+  if (asOf !== void 0 && (typeof asOf !== "string" || !ISO_DATE.test(asOf) || Number.isNaN(Date.parse(asOf)))) {
+    throw new ToolError("as_of is an ISO date, such as 2026-03-01 or 2026-03-01T12:00:00Z");
+  }
   const elsewhere = reach !== void 0 && reach.repository !== context.repository;
-  const found = await searchHits(query, elsewhere ? [] : relativePaths, data, config, context, cwd, "mcp", reach);
+  const found = await searchHits(query, elsewhere ? [] : relativePaths, data, config, context, cwd, "mcp", reach, asOf);
   const note = found.note + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach.repository} is not this checkout.
 ` : "");
   if (found.hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, found.hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}
 `).join(""));
 }
-async function searchHits(query, paths, data, config, context, cwd, session, reach) {
+async function searchHits(query, paths, data, config, context, cwd, session, reach, asOf) {
   const withheld = [];
-  const items = visibleItems(data, context, cwd, searchTerms(query), void 0, withheld, reach);
+  const items = visibleItems(data, context, cwd, searchTerms(query), void 0, withheld, reach, asOf);
   logWithheld(data, config, "memory_search", session, withheld);
   const semantic = await similarities(data, context, config, query, items);
   const now = Date.now();
@@ -5190,7 +5210,7 @@ ${coverage === void 0 ? "" : `${coverage}
 import { existsSync as existsSync9, mkdirSync as mkdirSync8, readFileSync as readFileSync10, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
-var COLUMNS = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
+var COLUMNS2 = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
   anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
 function span(text5) {
   const s = safe(text5);
@@ -5243,7 +5263,7 @@ function itemFile(r, evidence, supersededBy) {
 }
 function read(db, tenant, repository) {
   const [where2, params] = repository === void 0 ? ["tenant = ?", [tenant]] : tenant === "" ? ["tenant = ? AND scope IN ('person', 'global') AND origin_repository = ?", [tenant, repository]] : ["tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))", [tenant, repository, repository.split("/")[0]]];
-  const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE ${where2} ORDER BY id`).all(...params);
+  const rows = db.prepare(`SELECT ${COLUMNS2} FROM items WHERE ${where2} ORDER BY id`).all(...params);
   const evidence = db.prepare(`SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where2}) ORDER BY item_id, captured_at, source_ref, author_role, taint, id`).all(...params);
   const byItem = /* @__PURE__ */ new Map();
   for (const e of evidence) byItem.set(e.item_id, [...byItem.get(e.item_id) ?? [], e]);
@@ -7168,12 +7188,15 @@ function memoryArm() {
         };
         const older = e.supersedes === void 0 ? void 0 : item.get(e.supersedes);
         const id = (older === void 0 ? null : supersedeNow(db, c, older))?.id ?? insertItem(db, c);
+        const at3 = new Date(e.at).toISOString();
+        db.prepare("UPDATE items SET reinforced_at = coalesce(reinforced_at, valid_from), valid_from = ? WHERE id = ?").run(at3, id);
+        if (older !== void 0) db.prepare("UPDATE items SET valid_to = ? WHERE id = ? AND status = 'superseded'").run(at3, older);
         item.set(e.id, id);
         evidence.set(id, e.id);
       }
     },
     async answer(q) {
-      const items = withTextRatio(tenantItems(db, set.tenant, set.repository, set.repository.split("/")[0]), textMatches(db, searchTerms(q.question))).map((i) => ({ ...i, id: evidence.get(i.id) }));
+      const items = withTextRatio(tenantItems(db, set.tenant, set.repository, set.repository.split("/")[0], q.asOf), textMatches(db, searchTerms(q.question))).map((i) => ({ ...i, id: evidence.get(i.id) }));
       return rank(items, q.path === void 0 ? [] : [q.path], Date.now(), void 0, void 0, [], set.repository).map((h) => leanRow(h.item, h.why, LEAN_ROW_TOKENS));
     },
     close() {

@@ -55,6 +55,7 @@ const TOOLS = [
         query: { type: 'string', description: 'Words of the task.' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Files or directories in play, relative to the repository root.' },
         repository: { type: 'string', description: 'owner/repo of another repository of the same tenant, to search its items instead of this checkout\'s. Paths then do not match anchors. Refused for a repository of any other tenant.' },
+        as_of: { type: 'string', description: 'An ISO date, such as 2026-03-01, to search the versions that applied then instead of the current ones. Each row then says when its version was valid.' },
       },
       required: ['query'],
       additionalProperties: false,
@@ -166,6 +167,8 @@ function first<T>(data: string, context: Context, use: (db: DatabaseSync, store:
   return undefined;
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
 async function search(args: Args, data: string, config: Config, context: Context, cwd: string): Promise<string> {
   const query = text(args, 'query');
   const paths = args['paths'] ?? [];
@@ -180,18 +183,25 @@ async function search(args: Args, data: string, config: Config, context: Context
     if ('reason' in found) throw new ToolError(`not searched: ${found.reason}`);
     reach = found;
   }
+  const asOf = args['as_of'];
+  if (asOf !== undefined && (typeof asOf !== 'string' || !ISO_DATE.test(asOf) || Number.isNaN(Date.parse(asOf)))) {
+    throw new ToolError('as_of is an ISO date, such as 2026-03-01 or 2026-03-01T12:00:00Z');
+  }
   const elsewhere = reach !== undefined && reach.repository !== context.repository;
-  const found = await searchHits(query, elsewhere ? [] : relativePaths, data, config, context, cwd, 'mcp', reach);
+  const found = await searchHits(query, elsewhere ? [] : relativePaths, data, config, context, cwd, 'mcp', reach, asOf);
   // The notes sit outside the fence: they are memory's own sentences, not items.
   const note = found.note + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach!.repository} is not this checkout.\n` : '');
   if (found.hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, found.hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
 }
 
-/** memory_search's ranking, for it and the page: the hits for `query` and `paths`, best first, and a note line when embeddings were not used. */
-export async function searchHits(query: string, paths: string[], data: string, config: Config, context: Context, cwd: string, session: string, reach?: Reach): Promise<{ hits: Hit[]; note: string }> {
+/**
+ * memory_search's ranking, for it and the page: the hits for `query` and `paths`, best first, and a note line when embeddings
+ * were not used. `asOf` only changes which versions are candidates (#102).
+ */
+export async function searchHits(query: string, paths: string[], data: string, config: Config, context: Context, cwd: string, session: string, reach?: Reach, asOf?: string): Promise<{ hits: Hit[]; note: string }> {
   const withheld: Withheld[] = [];
-  const items = visibleItems(data, context, cwd, searchTerms(query), undefined, withheld, reach);
+  const items = visibleItems(data, context, cwd, searchTerms(query), undefined, withheld, reach, asOf);
   logWithheld(data, config, 'memory_search', session, withheld);
   const semantic = await similarities(data, context, config, query, items);
   const now = Date.now();
