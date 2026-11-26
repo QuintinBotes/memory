@@ -12,7 +12,7 @@ const KEY = 'scf-test-key';
 
 /** A stand-in for SCF's /world routes: proposals live in `proposals`, run outcomes per fact in `feedback`. */
 async function scf({ redirectTo = null } = {}) {
-  const state = { proposals: [], feedback: {}, posts: 0, arrived: 0, calls: 0, auths: [], gate: null, failPostAt: 0, feedbackFail: false, endless: false };
+  const state = { proposals: [], feedback: {}, posts: 0, arrived: 0, calls: 0, auths: [], gate: null, failPostAt: 0, feedbackFail: false, endless: false, huge: false, sent: 0, blankAnswer: false };
   const server = createServer((req, res) => {
     state.calls++;
     state.auths.push(req.headers.authorization);
@@ -29,6 +29,21 @@ async function scf({ redirectTo = null } = {}) {
     req.on('data', (d) => (body += d));
     req.on('end', async () => {
       if (req.method === 'GET' && url.pathname === '/world/proposals') {
+        // 64 MB of JSON whitespace, chunked with no length; `sent` counts what the client let through.
+        if (state.huge) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          const chunk = Buffer.alloc(1 << 20, 32);
+          let n = 0;
+          const pump = () => {
+            while (n < 64 && !res.destroyed) {
+              n++;
+              state.sent += chunk.length;
+              if (!res.write(chunk)) return void res.once('drain', pump);
+            }
+            if (!res.destroyed) res.end();
+          };
+          return pump();
+        }
         if (state.endless) return send(200, { items: Array.from({ length: 200 }, (_, i) => ({ id: `x-${i}`, status: 'proposed', fact_id: null, payload: {} })) });
         const offset = Number(url.searchParams.get('offset'));
         const limit = Number(url.searchParams.get('limit'));
@@ -42,7 +57,7 @@ async function scf({ redirectTo = null } = {}) {
         const payload = JSON.parse(body);
         const proposal = { id: `p-${state.proposals.length + 1}`, status: 'proposed', fact_id: null, payload };
         state.proposals.push(proposal);
-        return send(201, proposal);
+        return send(201, state.blankAnswer ? { ...proposal, id: ' ' } : proposal);
       }
       const m = /^\/world\/facts\/([^/]+)\/feedback$/.exec(url.pathname);
       if (req.method === 'GET' && m) return state.feedbackFail ? send(500, {}) : send(200, { items: (state.feedback[m[1]] ?? []).slice(Number(url.searchParams.get('offset')), Number(url.searchParams.get('offset')) + Number(url.searchParams.get('limit'))) });
@@ -518,5 +533,75 @@ test('F14 a store made by main v15 (transcripts) upgrades to v16 with its transc
   } finally {
     await acmeScf.close();
     await betaScf.close();
+  }
+});
+
+// #86: an oversized answer is cut off at the cap, and a blank proposal id is never linked.
+test('#86 sc1 an SCF answer over the cap, chunked with no length, fails the export at the cap without reading the rest', async () => {
+  const { s, acmeScf, betaScf } = await configured();
+  try {
+    propose(s, s.acmeApi, s.configA, 'The cache is cleared on deploy');
+    const before = sha(s);
+    acmeScf.huge = true;
+    const r = await exportScf(s);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /answered too much/);
+    // The cap is 5 MB; socket buffers may hold a few more, but never the whole 64 MB.
+    assert.ok(acmeScf.sent < 24 << 20, `the server got ${acmeScf.sent} bytes through`);
+    assert.equal(acmeScf.posts, 0);
+    assert.equal(sha(s), before);
+  } finally {
+    await acmeScf.close();
+    await betaScf.close();
+  }
+});
+
+test('#86 sc2 a blank proposal id is rejected and nothing linked, and the next export adopts the valid proposal', async () => {
+  const { s, acmeScf, betaScf } = await configured();
+  try {
+    propose(s, s.acmeApi, s.configA, 'The cache is cleared on deploy');
+    acmeScf.blankAnswer = true;
+    const r = await exportScf(s);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /without an id/);
+    assert.deepEqual(rows(s, 'SELECT * FROM scf_links'), []);
+    acmeScf.blankAnswer = false;
+    assert.equal((await exportScf(s)).status, 0);
+    assert.deepEqual(rows(s, 'SELECT proposal_id FROM scf_links'), [{ proposal_id: 'p-1' }]);
+    assert.equal(acmeScf.posts, 1, 'adopted, not sent again');
+  } finally {
+    await acmeScf.close();
+    await betaScf.close();
+  }
+});
+
+test('#86 sc2 a listed proposal with a blank id is never adopted: the item is sent again and linked to a real id', async () => {
+  const { s, acmeScf, betaScf } = await configured();
+  try {
+    propose(s, s.acmeApi, s.configA, 'The cache is cleared on deploy');
+    assert.equal((await exportScf(s)).status, 0);
+    withDb(s, (d) => d.exec('DELETE FROM scf_links'));
+    acmeScf.proposals[0].id = '';
+    assert.equal((await exportScf(s)).status, 0);
+    assert.deepEqual(rows(s, 'SELECT proposal_id FROM scf_links'), [{ proposal_id: 'p-2' }]);
+  } finally {
+    await acmeScf.close();
+    await betaScf.close();
+  }
+});
+
+test('#86 sc3 the README, SECURITY.md and the consent plan each name SCF export, what it sends and where', () => {
+  const s = setup();
+  const plan = JSON.parse(run(['init'], { cwd: s.base, data: s.data, config: s.configA }).stdout);
+  const root = new URL('..', import.meta.url);
+  const texts = {
+    README: readFileSync(new URL('README.md', root), 'utf8'),
+    SECURITY: readFileSync(new URL('SECURITY.md', root), 'utf8'),
+    plan: plan.retention.join('\n'),
+  };
+  for (const [name, text] of Object.entries(texts)) {
+    assert.match(text, /export --to scf/, `${name} names the command`);
+    assert.match(text, /proposals/, `${name} says what is sent`);
+    assert.match(text, /SCF address/, `${name} says where`);
   }
 });

@@ -60,10 +60,18 @@ export function scfClient(base: URL, key: string, timeoutMs = SCF_TIMEOUT_MS): S
     }
     if (!res.ok) return fail(`SCF at ${base.host} answered ${res.status}`);
     try {
-      const text = await res.text();
-      if (text.length > MAX_ANSWER) return fail(`SCF at ${base.host} answered too much`);
-      return JSON.parse(text) as unknown;
-    } catch {
+      // Read a chunk at a time and stop at the cap, so an oversized answer is never held whole.
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for await (const chunk of res.body ?? []) {
+        size += chunk.byteLength;
+        // Leaving the loop cancels the stream.
+        if (size > MAX_ANSWER) return fail(`SCF at ${base.host} answered too much`);
+        chunks.push(chunk);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+    } catch (error) {
+      if (error === failed) throw error;
       return fail(`SCF at ${base.host} sent an answer memory cannot read`);
     }
   };
@@ -89,6 +97,8 @@ export async function remoteProposals(client: ScfClient): Promise<Remote[]> {
       const p = obj(raw);
       const item = obj(obj(p['payload'])['qualifiers'])['memory_item_id'];
       if (typeof p['id'] !== 'string' || typeof p['status'] !== 'string') throw new ScfError('SCF sent a proposal in a shape memory does not know');
+      // A blank id names no proposal: never adopted, so the item is sent again and gets a real one.
+      if (p['id'].trim() === '') continue;
       out.push({ id: p['id'], status: p['status'], fact_id: typeof p['fact_id'] === 'string' ? p['fact_id'] : null, item: typeof item === 'string' ? item : null });
     }
     if (items.length < PAGE) return out;
@@ -163,7 +173,7 @@ export async function exportToScf(db: DatabaseSync, tenant: string, client: ScfC
       if (error instanceof ScfError && result.posted > 0) throw new ScfError(`${error.message}; ${result.posted} proposals were already sent and the next run adopts them`);
       throw error;
     }
-    if (typeof answer['id'] !== 'string') throw new ScfError('SCF answered a proposal without an id');
+    if (typeof answer['id'] !== 'string' || answer['id'].trim() === '') throw new ScfError('SCF answered a proposal without an id');
     links.push({ id: row.id, proposal: answer['id'] });
     result.posted++;
   }

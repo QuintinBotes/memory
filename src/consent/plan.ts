@@ -69,7 +69,7 @@ export function buildConsentPlan(config: Config, storageLocation: string): Conse
       'A rejected item is kept as a tombstone, reduced to a hash of its statement, its type and its scope 30 days after rejection, so the statement is never proposed again',
       'memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown',
       'Each tenant has its own file; a session opens only the tenant its repository and config allow',
-      'The store never leaves this machine; the only text that does is what the embeddings category above lists, and only when a provider key is set',
+      'The store never leaves this machine; the only text that does is what the embeddings, capture and scf categories above list: item and query text to the embedding provider when a provider key is set, the redacted transcript to the capture model, and, when you run memory export --to scf, a tenant\'s proposals with their evidence to the SCF address set for it',
     ],
   };
 }

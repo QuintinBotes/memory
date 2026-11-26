@@ -122,3 +122,14 @@ no tenant, or in a Claude Code config not bound to that tenant.
   items with agent trust; text that reads as an instruction is quarantined.
   A model's output is data, never a command: it is refused if it carries a
   credential, an email or a handle, and it is shown as a cited fact in the fence.
+- **SCF export sends proposals out.** `memory export --to scf` sends a tenant's
+  proposed repository and organisation items to the SCF address configured for
+  that tenant (`memory init --scf <tenant>=<url>`, https only, or http to this
+  machine), with `SCF_API_KEY` as a bearer token: each item's statement, type,
+  scope, repository name, rationale, anchored paths and symbols, and each
+  evidence's source reference, role and time. An item holding text redaction
+  would change is not sent. Person-file items and other tenants' items never
+  leave. `memory import --scf` reads decisions and run outcomes back from the
+  same address. Redirects are refused, so the key reaches no other host, and
+  answers are read up to 5 MB. Nothing is sent without an address, a key and
+  your consent to the plan's scf category.
