@@ -4617,18 +4617,19 @@ function findCorrections(turns) {
 }
 var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
 function expireTranscripts(db) {
-  return Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
+  const expired = Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
+  if (expired > 0) recordAudit(db, "transcripts_expired", null, { expired });
+  return expired;
 }
 function processTranscripts(db, tenant, config, extract = findCorrections) {
-  const done = { read: 0, proposed: 0, missing: 0, expired: 0 };
-  done.expired = expireTranscripts(db);
+  const done = { read: 0, proposed: 0, missing: 0 };
   const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all();
   for (const r of rows) {
     let outcome = "read";
     if (!existsSync11(r.path)) {
       outcome = "missing";
       done.missing++;
-    } else if (automationRefusal(config, process.env, r.path) !== null) {
+    } else if (automationRefusal(config, {}, r.path) !== null) {
       outcome = "automation";
     } else {
       done.read++;
@@ -4643,7 +4644,7 @@ function processTranscripts(db, tenant, config, extract = findCorrections) {
     }
     db.prepare("UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), outcome, r.id);
   }
-  if (rows.length > 0 || done.expired > 0) recordAudit(db, "transcripts_processed", null, { ...done });
+  if (rows.length > 0) recordAudit(db, "transcripts_processed", null, { ...done });
   return done;
 }
 

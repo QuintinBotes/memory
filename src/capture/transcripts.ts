@@ -136,30 +136,30 @@ export interface Processed {
   read: number;
   proposed: number;
   missing: number;
-  expired: number;
 }
 
 /** Deletes records and episodes past their 30 days; runs on every sweep, whatever the opt-in says. */
 export function expireTranscripts(db: DatabaseSync): number {
-  return Number(db.prepare('DELETE FROM transcripts WHERE at < ?').run(cutoff()).changes);
+  const expired = Number(db.prepare('DELETE FROM transcripts WHERE at < ?').run(cutoff()).changes);
+  if (expired > 0) recordAudit(db, 'transcripts_expired', null, { expired });
+  return expired;
 }
 
 /**
  * Finds the owner's corrections in every recorded transcript of this tenant's store, once each (FR-004): one proposal
  * per correction, owner trust, the session and line as evidence, nothing but the quote and that reference kept. A
- * transcript that is gone is skipped and counted; records past 30 days are deleted unread. The store belongs to one
+ * transcript that is gone is skipped and counted; records past 30 days are deleted unread by `expireTranscripts`, which the sweep runs first. The store belongs to one
  * tenant, so what is read here can only reach that tenant.
  */
 export function processTranscripts(db: DatabaseSync, tenant: string, config: Config, extract: Extract = findCorrections): Processed {
-  const done: Processed = { read: 0, proposed: 0, missing: 0, expired: 0 };
-  done.expired = expireTranscripts(db);
+  const done: Processed = { read: 0, proposed: 0, missing: 0 };
   const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all() as { id: string; session: string; repository: string; path: string }[];
   for (const r of rows) {
     let outcome = 'read';
     if (!existsSync(r.path)) {
       outcome = 'missing';
       done.missing++;
-    } else if (automationRefusal(config, process.env, r.path) !== null) {
+    } else if (automationRefusal(config, {}, r.path) !== null) {
       outcome = 'automation';
     } else {
       done.read++;
@@ -174,6 +174,6 @@ export function processTranscripts(db: DatabaseSync, tenant: string, config: Con
     }
     db.prepare('UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?').run(new Date().toISOString(), outcome, r.id);
   }
-  if (rows.length > 0 || done.expired > 0) recordAudit(db, 'transcripts_processed', null, { ...done });
+  if (rows.length > 0) recordAudit(db, 'transcripts_processed', null, { ...done });
   return done;
 }

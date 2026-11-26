@@ -310,3 +310,37 @@ test('R4 expiry runs on every sweep and session start even with the opt-in off, 
   run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA });
   assert.equal(sql(s, 'SELECT count(*) AS n FROM transcripts')[0].n, 0, 'sweep');
 });
+
+// ---- second review corrections ------------------------------------------------------------------------------------------
+
+test('R5 a human transcript swept from a process that reads as automation stays eligible: the decision rests on the record and the transcript, not the sweeper', () => {
+  const s = setup();
+  optIn(s);
+  end(s, fixture(s, 'correction'));
+  const r = run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA, env: { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', GITHUB_ACTIONS: 'true' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(proposals(s).length, 1);
+  assert.equal(records(s)[0].outcome, 'read');
+});
+
+test('R6 every deletion by expiry is audited exactly once, with the opt-in on or off, and a later sweep adds nothing', () => {
+  const s = setup();
+  const old = () => {
+    const db = storeOf(s, 'acme');
+    db.prepare("UPDATE transcripts SET at = '2020-01-01T00:00:00.000Z'").run();
+    db.close();
+  };
+  const audits = () => sql(s, "SELECT action, metadata_json FROM audit_events WHERE action LIKE 'transcripts_%' ORDER BY created_at").map((a) => [a.action, JSON.parse(a.metadata_json).expired]);
+  optIn(s);
+  end(s, fixture(s, 'correction'));
+  old();
+  run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.deepEqual(audits(), [['transcripts_expired', 1]], 'opted in, only an expired record');
+  run(['sweep'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.deepEqual(audits(), [['transcripts_expired', 1]], 'nothing deleted, nothing audited');
+  end(s, fixture(s, 'correction'), 'two');
+  optIn(s, 'off');
+  old();
+  sessionStart(s.acmeApi, s.data, s.configA);
+  assert.deepEqual(audits(), [['transcripts_expired', 1], ['transcripts_expired', 1]], 'opted out');
+});
