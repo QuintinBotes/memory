@@ -35,7 +35,7 @@ import { adoptCandidate, atHead, logAnchors, managedBy, providerConfig, refreshA
 import { networkFilesystem } from './store/filesystem.ts';
 import { withFileLock, withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
-import { EmbedError, WRITE_TIMEOUT_MS, providerFor } from './embed/provider.ts';
+import { EmbedError, WRITE_TIMEOUT_MS, notOnThisMachine, providerFor } from './embed/provider.ts';
 import { embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
 import { DEFAULT_STANDARDS, applyPromotion, insidePath, promotions, propose as proposePromotions, rejectPromotion, renderPromotion } from './promote/promote.ts';
@@ -133,8 +133,9 @@ const USAGE = `usage: memory <command>
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
   embed --backfill
-      embed every active item here that has no vector from the configured provider (voyage-4 unless config.json says
-      otherwise; needs VOYAGE_API_KEY). Remember and approve embed the item they make active
+      embed every active item here that has no vector from the provider embeddings in config.json names (none by
+      default; a local Ollama, or voyage-4 with VOYAGE_API_KEY). A tenant's items go only to a provider on this machine.
+      Remember and approve embed the item they make active
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -312,11 +313,18 @@ function init(args: string[], data: string): void {
 /**
  * After a write: embeds what is now active here and has no vector. A failure never undoes the write; it is said, and
  * `memory embed --backfill` fills the gap. No key is the normal state of a machine that does not use embeddings, so it is not said.
+ * `tenant` is the file's tenant, '' for the person file: a tenant's text goes only to an embedder on this machine (#28).
  */
-async function embedAfterWrite(db: DatabaseSync, config: Config): Promise<void> {
+async function embedAfterWrite(db: DatabaseSync, config: Config, tenant: string): Promise<void> {
   if (!covers(config, 'embeddings')) return;
+  const provider = providerFor(config, WRITE_TIMEOUT_MS);
+  if (provider === null) return;
+  if (tenant !== '' && !provider.local) {
+    console.error(`memory: not embedded (${notOnThisMachine(provider, tenant)})`);
+    return;
+  }
   try {
-    await embedPending(db, providerFor(config, WRITE_TIMEOUT_MS));
+    await embedPending(db, provider);
   } catch (error) {
     if (!(error instanceof EmbedError)) throw error;
     if (!error.noKey) console.error(`memory: not embedded (${error.message}); memory embed --backfill fills it later`);
@@ -330,8 +338,13 @@ async function embedCommand(args: string[], data: string, cwd: string): Promise<
   const config = setUp(data);
   if (!covers(config, 'embeddings')) throw new Refusal('your consent does not cover embeddings yet; run memory init and confirm');
   const provider = providerFor(config, WRITE_TIMEOUT_MS);
+  if (provider === null) throw new Refusal('no embedder is configured: embeddings in config.json names one (README, Semantic search)');
   let total = 0;
-  for (const { file } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+  for (const { file, tenant } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+    if (tenant !== '' && !provider.local) {
+      console.error(`not embedded: ${notOnThisMachine(provider, tenant)}`);
+      continue;
+    }
     const db = openStore(file, false);
     if (db === null) continue;
     try {
@@ -544,7 +557,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, 'item_remembered', { type: 'item', id: done.id }, { scope });
       console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
-      await embedAfterWrite(db, config);
+      await embedAfterWrite(db, config, tenant);
       return;
     }
     const stored = addItem(db, { ...candidate, status: 'active' });
@@ -558,7 +571,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
     } else {
       throw new Refusal('this statement was already placed as superseded');
     }
-    await embedAfterWrite(db, config);
+    await embedAfterWrite(db, config, tenant);
   } finally {
     db.close();
   }
@@ -919,7 +932,7 @@ async function decideCommand(args: string[], data: string, cwd: string, decision
       const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
       const replaced = superseded === null ? '' : `; it supersedes ${p.older!.id}, which stays on record; undo with memory undo ${superseded}`;
       console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}${replaced}`);
-      await embedAfterWrite(db, config);
+      await embedAfterWrite(db, config, tenant);
       return;
     } finally {
       db.close();
@@ -997,7 +1010,7 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
 }
 
 /** `memory recall --diff <range>`: what an owner decided about findings under the paths a change touches. */
-function recallCommand(args: string[], data: string, cwd: string): void {
+async function recallCommand(args: string[], data: string, cwd: string): Promise<void> {
   const { values } = parseArgs({
     args,
     options: { diff: { type: 'string' }, orbit: { type: 'boolean' }, path: { type: 'string', multiple: true }, fingerprint: { type: 'string', multiple: true }, check: { type: 'string', multiple: true }, 'max-tokens': { type: 'string' } },
@@ -1012,7 +1025,7 @@ function recallCommand(args: string[], data: string, cwd: string): void {
     return void process.stdout.write(orbitRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === undefined) throw new Refusal('recall needs --diff <base>..<head>', 2);
-  const found = diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
+  const found = await diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ('reason' in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }

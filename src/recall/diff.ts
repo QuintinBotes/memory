@@ -5,7 +5,9 @@ import { git } from '../context.ts';
 import { estimate } from '../slice.ts';
 import { ITEMS_LABEL, LEAN_ROW_TOKENS, fence, leanRow } from '../render/rows.ts';
 import { impact } from './impact.ts';
+import { fuse, type Ranker } from './fuse.ts';
 import { rank, searchTerms } from './rank.ts';
+import { similarities } from './semantic.ts';
 import { visibleItems } from './visible.ts';
 
 /** What `memory recall --diff` prints at most, fence included. */
@@ -18,17 +20,23 @@ const TYPES = new Set(['precedent', 'hazard']);
  * The precedents and hazards for the paths `range` (`<base>..<head>`) changes, and with a configured impact provider for
  * the dependents those paths reach (#16), ranked as a search ranks them, their
  * citations re-checked first, whole rows only within `DIFF_BUDGET` estimated tokens. `reason` when the range does not resolve.
+ * With the semantic leg on (#28), the changed files' names are its query, fused with the keyword ranking.
  */
-export function diffRecall(data: string, config: Config, context: Context, cwd: string, range: string): { text: string } | { reason: string } {
+export async function diffRecall(data: string, config: Config, context: Context, cwd: string, range: string): Promise<{ text: string } | { reason: string }> {
   if (!range.includes('..') || range.startsWith('-')) return { reason: `--diff takes a range <base>..<head>, not "${range}"` };
   const out = git(cwd, 'diff', '--name-only', '--no-renames', '-z', range, '--');
   if (out === null) return { reason: `the range ${range} does not resolve to two commits here` };
   const changed = out.split('\0').filter((p) => p !== '');
-  const terms = searchTerms(changed.map((p) => posix.basename(p, posix.extname(p))).join(' '));
+  const query = changed.map((p) => posix.basename(p, posix.extname(p))).join(' ');
+  const terms = searchTerms(query);
   const reach = impact(config, context, cwd, range, changed);
   const dependents = reach !== null && 'dependents' in reach ? reach.dependents : [];
-  const note = reach !== null && 'note' in reach ? `${reach.note}\n` : '';
-  const hits = rank(visibleItems(data, context, cwd, terms).filter((i) => TYPES.has(i.type)), changed, Date.now(), undefined, undefined, dependents, context.repository);
+  const items = visibleItems(data, context, cwd, terms).filter((i) => TYPES.has(i.type));
+  const semantic = query === '' ? null : await similarities(data, context, config, query, items);
+  const note = (reach !== null && 'note' in reach ? `${reach.note}\n` : '') + (semantic !== null && 'note' in semantic ? `${semantic.note}\n` : '');
+  const now = Date.now();
+  const ranked: Ranker = (list, similarity) => rank(list, changed, now, similarity, undefined, dependents, context.repository);
+  const hits = semantic !== null && 'similarity' in semantic ? fuse(items, semantic.similarity, ranked) : ranked(items);
   const rows: string[] = [];
   const render = (list: string[]): string => (list.length === 0 ? 'No precedent or hazard matches this change.\n' : fence(ITEMS_LABEL, list.join(''))) + note;
   for (const h of hits) {
