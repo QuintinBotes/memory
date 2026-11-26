@@ -40,6 +40,8 @@ type LogRecord = any;
 const blocks = (c: unknown, kinds: string[]): string =>
   typeof c === 'string' ? c : Array.isArray(c) ? c.map((b: { type?: string; text?: string }) => (kinds.includes(b?.type ?? '') ? b.text ?? '' : '')).join(' ') : '';
 const said = (role: unknown, text: string): [string, string] | null => (role === 'user' || role === 'assistant' ? [role, text] : null);
+/** A user-role message Codex writes itself: its environment context, user instructions, or the AGENTS.md block. */
+const CODEX_INJECTED = /^\s*(?:<|#\s*AGENTS\.md instructions\b)/;
 
 /**
  * One adapter per agent whose session log capture reads (#48): the name provenance gives it, a record only its log
@@ -48,14 +50,19 @@ const said = (role: unknown, text: string): [string, string] | null => (role ===
 const ADAPTERS: { agent: string; owns: (o: LogRecord) => boolean; turn: (o: LogRecord) => [string, string] | null }[] = [
   {
     agent: 'claude-code',
-    owns: (o) => (o.type === 'user' || o.type === 'assistant') && typeof o.message === 'object',
+    // Every Claude Code record carries its session id, so a transcript with no message yet is still known.
+    owns: (o) => typeof o.type === 'string' && (typeof o.sessionId === 'string' || ((o.type === 'user' || o.type === 'assistant') && typeof o.message === 'object')),
     turn: (o) => said(o.type, blocks(o.message?.content, ['text'])),
   },
   {
     // A Codex rollout log, ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl: a session_meta record, then response items and events.
     agent: 'codex',
     owns: (o) => o.type === 'session_meta' && typeof o.payload === 'object',
-    turn: (o) => (o.type === 'response_item' && o.payload?.type === 'message' ? said(o.payload.role, blocks(o.payload.content, ['input_text', 'output_text'])) : null),
+    turn: (o) => {
+      if (o.type !== 'response_item' || o.payload?.type !== 'message') return null;
+      const text = blocks(o.payload.content, ['input_text', 'output_text']);
+      return o.payload.role === 'user' && CODEX_INJECTED.test(text) ? null : said(o.payload.role, text);
+    },
   },
 ];
 

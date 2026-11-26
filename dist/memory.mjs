@@ -2780,17 +2780,23 @@ function scrub(text4) {
 }
 var blocks = (c, kinds) => typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => kinds.includes(b?.type ?? "") ? b.text ?? "" : "").join(" ") : "";
 var said = (role, text4) => role === "user" || role === "assistant" ? [role, text4] : null;
+var CODEX_INJECTED = /^\s*(?:<|#\s*AGENTS\.md instructions\b)/;
 var ADAPTERS = [
   {
     agent: "claude-code",
-    owns: (o) => (o.type === "user" || o.type === "assistant") && typeof o.message === "object",
+    // Every Claude Code record carries its session id, so a transcript with no message yet is still known.
+    owns: (o) => typeof o.type === "string" && (typeof o.sessionId === "string" || (o.type === "user" || o.type === "assistant") && typeof o.message === "object"),
     turn: (o) => said(o.type, blocks(o.message?.content, ["text"]))
   },
   {
     // A Codex rollout log, ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl: a session_meta record, then response items and events.
     agent: "codex",
     owns: (o) => o.type === "session_meta" && typeof o.payload === "object",
-    turn: (o) => o.type === "response_item" && o.payload?.type === "message" ? said(o.payload.role, blocks(o.payload.content, ["input_text", "output_text"])) : null
+    turn: (o) => {
+      if (o.type !== "response_item" || o.payload?.type !== "message") return null;
+      const text4 = blocks(o.payload.content, ["input_text", "output_text"]);
+      return o.payload.role === "user" && CODEX_INJECTED.test(text4) ? null : said(o.payload.role, text4);
+    }
   }
 ];
 function readLog(file) {

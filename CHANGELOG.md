@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Capture from other agents (#48). `memory capture` reads a Codex session log as it reads a Claude Code transcript, and the source of what it keeps names the agent (`capture:codex:<session>:<file>`). A log in a format no adapter knows is skipped, reported in the run's summary and recorded as `skipped` in `logs/capture.jsonl`; nothing is saved from it. A proposal made through the MCP tools records the client's name from `initialize` on its evidence (`extractor` `mcp:<name>`), so an agent with no adapter is still named. No schema change.
+- Capture from other agents (#48). `memory capture` reads a Codex session log as it reads a Claude Code transcript, and the source of what it keeps names the agent (`capture:codex:<session>:<file>`). Codex's own injected user-role text (environment context, user instructions, the AGENTS.md block) is never read. A log in a format no adapter knows is skipped, reported in the run's summary and recorded as `skipped` in `logs/capture.jsonl`; nothing is saved from it. A proposal made through the MCP tools records the client's name from `initialize` on its evidence (`extractor` `mcp:<name>`), so an agent with no adapter is still named. No schema change.
 
 ### Fixed
 

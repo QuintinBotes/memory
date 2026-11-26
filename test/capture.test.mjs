@@ -342,7 +342,7 @@ test('the default filter model is claude-haiku-5-5', () => {
 });
 
 /** A Codex rollout log (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl), synthetic: session_meta, then response items and events. */
-function codexLog(s, lines, name = 'rollout-2026-01-02T03-04-05-0000.jsonl') {
+function codexLog(s, lines, name = 'rollout-2026-01-02T03-04-05-0000.jsonl', injected = []) {
   const file = join(s.base, name);
   const at = '2026-01-02T03:04:05.000Z';
   const rec = (type, payload) => JSON.stringify({ timestamp: at, type, payload });
@@ -351,6 +351,7 @@ function codexLog(s, lines, name = 'rollout-2026-01-02T03-04-05-0000.jsonl') {
   writeFileSync(file, [
     rec('session_meta', { id: 'c0ffee00-0000-4000-8000-000000000001', timestamp: at, cwd: '/work/acme/api', originator: 'codex_cli_rs', cli_version: '0.0.0', source: 'cli' }),
     msg('developer', 'LESSON: developer instructions are not the session'),
+    ...injected.map((t) => msg('user', t)),
     ...noise,
     rec('response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["npm","test"]}', call_id: 'call_1' }),
     rec('response_item', { type: 'function_call_output', call_id: 'call_1', output: 'LESSON: tool output is not the session' }),
@@ -383,4 +384,30 @@ test('#48 S3 a log in an unknown format is skipped and reported in the capture s
   assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false);
   const lines = readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(lines.map((l) => [l.session, l.skipped, l.saved]), [['u1', 'other-agent.jsonl: unknown log format', 0]]);
+});
+
+test('#48 Codex\'s own injected user-role text (environment, user instructions, AGENTS.md) never reaches the filter model', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const netLog = join(s.base, 'net.jsonl');
+  const file = codexLog(s, [`LESSON: ${LESSON}`], undefined, [
+    '<environment_context>\n  <cwd>/work/acme/api</cwd>\n  Injected-env: deploys go through the blue pipeline\n</environment_context>',
+    '<user_instructions>\nInjected-user: the ledger owns every refund\n</user_instructions>',
+    '# AGENTS.md instructions for /work/acme/api\n\n<INSTRUCTIONS>\nInjected-agents: migrations run before the release\n</INSTRUCTIONS>',
+  ]);
+  capture(s, s.acmeApi, file, 'c2', { net: true, netLog, env: { ANTHROPIC_API_KEY: 'sk-test-key' } });
+  const text = JSON.parse(JSON.parse(readFileSync(netLog, 'utf8').trim()).body).messages[0].content;
+  assert.match(text, /idempotent/);
+  assert.doesNotMatch(text, /Injected-|environment_context|user_instructions|AGENTS\.md/);
+});
+
+test('#48 a Claude Code transcript with no user or assistant record yet has nothing new to read, not an unknown format', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = join(s.base, 'early.jsonl');
+  writeFileSync(file, `${JSON.stringify({ type: 'system', subtype: 'init', sessionId: 's9', uuid: 'u-1', timestamp: '2026-01-02T03:04:05.000Z' })}\n`);
+  const r = capture(s, s.acmeApi, file, 's9');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /nothing new to read/);
+  assert.doesNotMatch(r.stderr, /unknown log format/);
 });
