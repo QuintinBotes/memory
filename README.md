@@ -373,7 +373,20 @@ memory review                          # proposals for this repository's tenant 
 memory report [--tenant <name>]        # which items help and which mislead, per bound tenant
 memory approve m-1a2b3c4d5e            # add --scope organisation to widen it
 memory reject m-1a2b3c4d5e --reason 'too broad'
+memory ui [--port <n>]                 # the same, and browse, search and edit, in a local page
 ```
+
+`memory ui` serves one page on `127.0.0.1` only (any other `--host`, `0.0.0.0`
+and `::` included, is refused before a socket opens) and prints its address
+with a token made for that run. It answers only a loopback peer that sends
+that token and names `127.0.0.1:<port>` as its Host, and takes a write only
+from the page's own origin. It reads and writes through the code the commands
+use: search ranks as `memory_search` does, an edit is a supersession (the
+prior version stays in the item's history), and approve and reject record the
+audit entry `memory approve` and `memory reject` record. Applying an
+instruction-file edit there writes the file as `memory conflicts apply
+--confirm` does. It shows only this repository's bound tenant and the person
+file.
 
 A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal

@@ -77,7 +77,7 @@ function assertNoNetwork({ net, netLog }) {
  * (test/no-network.mjs): a call to a host but this machine is refused, and fails the test unless `net` says the test
  * is about exactly that attempt, when `netLog` names the file that receives each request's URL and body.
  */
-function childEnv({ data, config, path, env: extra, netLog }) {
+export function childEnv({ data, config, path, env: extra, netLog }) {
   const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv, MEMORY_TEST_HARNESS: '1', ...extra };
   env.NODE_OPTIONS = `--import ${pathToFileURL(join(root, 'test', 'no-network.mjs')).href}`;
   // WORK_LOG names the file that receives this run's SQLite work (test/work-count.mjs).

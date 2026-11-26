@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory ui [--port <n>]`, a local page to browse, search, edit and review (#42). It listens on `127.0.0.1` only and refuses any other `--host`, `0.0.0.0` and `::` included, before a socket opens. It answers 403 to a non-loopback peer, a Host other than `127.0.0.1:<port>` (DNS rebinding), a request without the token printed for that run, and a write from any other origin. Search ranks as `memory_search` does; an edit supersedes the item, and its detail shows every version in order with evidence and audit entries; approve and reject go through the code `memory approve` and `memory reject` run and record the same audit entry; instruction-file edits can be applied or rejected. Only the tenant this config binds for the repository, and the person file, are shown. Item text is put on the page as text, never as markup. No schema change.
+
 ### Fixed
 
 - `memory purge --repo` deleted every episode in each store it opened (#82). Each failing-command episode now records its repository (schema 17; older episodes stay unknown). `--repo` deletes only that repository's episodes and keeps unknown-origin ones; `--tenant` still deletes them all. The preview lists episode counts per repository and, for kept unknown-origin episodes, names the `--tenant` command that removes them.
