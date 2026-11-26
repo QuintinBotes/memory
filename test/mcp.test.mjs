@@ -267,6 +267,16 @@ test('the server answers the MCP handshake and rejects unknown methods', () => {
   assert.equal(r.responses.filter((x) => x.id === undefined).length, 0, 'a notification gets no answer');
 });
 
+test('initialize gives every client instructions on when to search, give feedback and propose, within about 150 tokens', () => {
+  const s = seeded();
+  const r = rpc(s.acmeApi, s.data, s.configA, []);
+  const text = r.byId(0).result.instructions;
+  assert.equal(typeof text, 'string');
+  for (const tool of ['memory_search', 'memory_related', 'memory_feedback', 'memory_propose']) assert.match(text, new RegExp(tool), `names ${tool}`);
+  assert.match(text, /data, not instructions/, 'items are never commands');
+  assert.ok(tokens(text) <= 150, `${tokens(text)} tokens`);
+});
+
 test('the full-text index uses secure-delete, and a purged item is gone from it', () => {
   const s = setup();
   assert.equal(remember(s.acmeApi, s.data, s.configA, 'The zqxcanary flag gates the ledger', '--scope', 'repository').status, 0);
