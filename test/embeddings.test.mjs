@@ -275,13 +275,13 @@ test('with no vectors to compare against, a search sends no request at all', asy
   }
 });
 
-test('a consent that covers capture only keeps embeddings off until memory init is confirmed again; version 12 covers all', () => {
+test('a consent that covers capture only keeps embeddings off until memory init is confirmed again; version 13 covers all', () => {
   const s = seeded();
   const path = join(s.data, 'config.json');
   const version = (n) => writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), consent: { ...JSON.parse(readFileSync(path, 'utf8')).consent, version: n } }));
   const embedded = () => vectors('tenants/acme.sqlite', s.data).length;
   assert.equal(embedded(), 4);
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 12);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 13);
 
   version(3);
   assert.match(search(s, QUESTION).text, /Semantic leg skipped \(your consent does not cover embeddings yet/);
@@ -292,7 +292,7 @@ test('a consent that covers capture only keeps embeddings off until memory init 
   assert.match(backfill.stderr, /consent does not cover embeddings/);
 
   assert.equal(run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 12);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 13);
   assert.doesNotMatch(search(s, QUESTION).text, NOTE);
   assert.equal(run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   assert.equal(embedded(), 5);
