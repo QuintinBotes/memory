@@ -3682,7 +3682,6 @@ button.link{background:none;border:0;padding:0;color:inherit;text-decoration:und
 <section><h2>Review</h2><div id="review"></div></section>
 <script nonce="${nonce}">
 const TOKEN = document.querySelector('meta[name="memory-token"]').content;
-history.replaceState(null, '', '/');
 const $ = (id) => document.getElementById(id);
 function el(tag, text, cls) {
   const e = document.createElement(tag);
