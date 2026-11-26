@@ -344,3 +344,111 @@ test('R6 every deletion by expiry is audited exactly once, with the opt-in on or
   sessionStart(s.acmeApi, s.data, s.configA);
   assert.deepEqual(audits(), [['transcripts_expired', 1], ['transcripts_expired', 1]], 'opted out');
 });
+
+// ---- #84: private spans opened in records the owner filter skips ---------------------------------------------------------
+
+const toolResult = (text) => JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: text }] } });
+const toolUse = (input) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'Bash', input }] } });
+const OWNER_A = 'No, use the other branch for the release.';
+const OWNER_B = 'Never push to main directly, please.';
+const mined = (s, name, ...lines) => {
+  end(s, write(s, `${name}.jsonl`, ...lines), name);
+  sessionStart(s.acmeApi, s.data, s.configA);
+  return proposals(s).map((p) => p.statement.replace(/^Owner correction: "|"$/g, ''));
+};
+
+test('#84.1 a private tag opened in a tool-result record hides an owner correction before its close, and only that one', () => {
+  const s = setup();
+  optIn(s);
+  assert.deepEqual(mined(s, 'tr', row('Deploy the service'), toolResult('output <private>secret'), row(OWNER_A), toolResult('end</private>'), row(OWNER_B)), [OWNER_B]);
+});
+
+test('#84.1b a tag opened in a tool call or a non-text block of an owner record hides the next correction too', () => {
+  const s = setup();
+  optIn(s);
+  const mixed = JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: [{ type: 'text', text: '<private>' }] }, { type: 'text', text: OWNER_A }] } });
+  assert.deepEqual(mined(s, 'mx', row('Deploy the service'), toolUse({ command: 'echo <private>' }), row(OWNER_A)), []);
+  assert.deepEqual(mined(s, 'mx2', row('Deploy the service'), mixed, row(OWNER_B)), []);
+});
+
+test('#84.2 a tag opened in a sidechain or a meta record hides a later owner correction', () => {
+  const s = setup();
+  optIn(s);
+  const side = JSON.stringify({ type: 'user', isSidechain: true, message: { role: 'user', content: 'sub <private>' } });
+  const meta = JSON.stringify({ type: 'user', isSidechain: false, isMeta: true, message: { role: 'user', content: 'meta <private>' } });
+  assert.deepEqual(mined(s, 'sc', row('Deploy the service'), side, row(OWNER_A)), []);
+  assert.deepEqual(mined(s, 'mt', row('Deploy the service'), meta, row(OWNER_B)), []);
+});
+
+test('#84.3 a span opened and closed inside a tool-result record leaves a later owner correction proposed', () => {
+  const s = setup();
+  optIn(s);
+  assert.deepEqual(mined(s, 'ok', row('Deploy the service'), toolResult('a <private>hidden</private> b'), row(OWNER_A)), [OWNER_A]);
+});
+
+// ---- #85 review: tags are read from one stream, with nesting --------------------------------------------------------------
+
+const textBlocks = (...texts) => JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: texts.map((text) => ({ type: 'text', text })) } });
+
+const fresh = () => {
+  const s = setup();
+  optIn(s);
+  return s;
+};
+
+test('#85.a an open tag split across two blocks or two records still opens the span', () => {
+  assert.deepEqual(mined(fresh(), 'sa', row('Deploy the service'), toolResult('out <pri'), toolResult('vate> secret'), row(OWNER_A)), []);
+  assert.deepEqual(mined(fresh(), 'sb', row('Deploy the service'), toolResult('out <'), toolResult('private> secret'), row(OWNER_B)), []);
+  assert.deepEqual(mined(fresh(), 'sc2', row('Deploy the service'), textBlocks('<priv', 'ate> x'), row(OWNER_A)), []);
+});
+
+test('#85.b a close tag split across blocks or records closes the span, and what follows is proposed', () => {
+  assert.deepEqual(mined(fresh(), 'ca', row('Deploy the service'), toolResult('<private> secret </pri'), toolResult('vate>'), row(OWNER_A)), [OWNER_A]);
+});
+
+test('#85.c nested spans stay private until the outer one closes', () => {
+  assert.deepEqual(mined(fresh(), 'n1', row('Deploy the service'), toolResult('<private> a <private> b </private> c'), row(OWNER_A), toolResult('</private>'), row(OWNER_B)), [OWNER_B]);
+  assert.deepEqual(mined(fresh(), 'n2', row('Deploy the service'), row(`<private> a <private> b </private> ${OWNER_A} </private> done.`), row(OWNER_B)), [OWNER_B]);
+});
+
+test('#85.d a close tag with no open span is ignored and hides nothing, and never cancels a later open', () => {
+  assert.deepEqual(mined(fresh(), 'um', row('Deploy the service'), toolResult('stray </private> tag'), row(OWNER_A), row(`${OWNER_B} </private>`)).sort(), [OWNER_A, OWNER_B].sort());
+  assert.deepEqual(mined(fresh(), 'um2', row('Deploy the service'), toolResult('</private><private>'), row(OWNER_A)), []);
+});
+
+// ---- #85 last pass: every string moves the private depth, whichever field it is in ----------------------------------------
+
+const textBlock = (extra) => JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'text', ...extra }] } });
+
+test('#85.e a private tag in a sibling field before the text, in a nested field, or in an array of strings hides the owner text that follows', () => {
+  assert.deepEqual(mined(fresh(), 'e1', row('Deploy the service'), textBlock({ title: '<private>', text: OWNER_A })), []);
+  assert.deepEqual(mined(fresh(), 'e2', row('Deploy the service'), textBlock({ annotation: { note: { body: 'x <private>' } }, text: OWNER_A })), []);
+  assert.deepEqual(mined(fresh(), 'e3', row('Deploy the service'), textBlock({ citations: ['a', 'b <private>'], text: OWNER_A })), []);
+  assert.deepEqual(mined(fresh(), 'e4', row('Deploy the service'), JSON.stringify({ type: 'user', isSidechain: false, extra: { pre: '<private>' }, message: { role: 'user', content: OWNER_A } })), []);
+});
+
+test('#85.f a closed private span in a sibling field leaves the text proposed, and a tag after the text does not hide it', () => {
+  assert.deepEqual(mined(fresh(), 'f1', row('Deploy the service'), textBlock({ title: 'a <private>b</private>', text: OWNER_A })), [OWNER_A]);
+  assert.deepEqual(mined(fresh(), 'f2', row('Deploy the service'), textBlock({ text: OWNER_A, title: '<private>' })), [OWNER_A]);
+});
+
+// ---- #85 owner decision: records are read in their written order ----------------------------------------------------------
+
+test('#85.g an integer-like key written after message with a close tag does not close a span before the correction is read', () => {
+  const late = `{"type":"user","isSidechain":false,"message":{"role":"user","content":${JSON.stringify(OWNER_A)}},"0":"</private>"}`;
+  assert.deepEqual(mined(fresh(), 'g1', row('Deploy the service'), toolResult('<private>'), late), []);
+  const lateNested = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":${JSON.stringify(OWNER_A)}}]},"1":{"0":"</private>"}}`;
+  assert.deepEqual(mined(fresh(), 'g2', row('Deploy the service'), toolResult('<private>'), lateNested), []);
+});
+
+test('#85.h an integer-like key written before message with an open tag still hides the text, and one written after does not hide it', () => {
+  const early = `{"0":"<private>","type":"user","isSidechain":false,"message":{"role":"user","content":${JSON.stringify(OWNER_A)}}}`;
+  assert.deepEqual(mined(fresh(), 'h1', row('Deploy the service'), early), []);
+  const after = `{"type":"user","isSidechain":false,"message":{"role":"user","content":${JSON.stringify(OWNER_A)}},"0":"<private>"}`;
+  assert.deepEqual(mined(fresh(), 'h2', row('Deploy the service'), after), [OWNER_A]);
+});
+
+test('#85.i a malformed line is handled as before: its raw text moves the depth, and the next valid record is read normally', () => {
+  assert.deepEqual(mined(fresh(), 'i1', row('Deploy the service'), '{"type":"user","message":{"content":"<private> cut off', row(OWNER_A)), []);
+  assert.deepEqual(mined(fresh(), 'i2', row('Deploy the service'), '{"type":"user","message":{"content":"cut off', row(OWNER_A)), [OWNER_A]);
+});

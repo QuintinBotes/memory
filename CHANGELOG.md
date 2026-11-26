@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A `<private>` span that opens in a transcript record the owner-turn filter skips (a tool result, a tool call, a sidechain or meta record, a non-text block) now hides a later owner correction, as one opened in an owner turn does (#84). Every record and block is scanned for the tags in order before anything is filtered.
+
 ### Added
 
 - Transcripts, opt-in (#12). `memory init --transcripts on --confirm` is a separate opt-in, off by

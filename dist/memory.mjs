@@ -4840,34 +4840,87 @@ function recordTranscript(data, input2) {
 }
 var NOT_TYPED = /^</;
 var HIDDEN = "\uE000";
+var TAGS = ["<private>", "</private>"];
 function hidePrivate(text4, state) {
+  const s = state.held + text4;
   let out = "";
   let last = 0;
-  for (const m of text4.matchAll(/<(\/?)private>/g)) {
-    out += state.open ? HIDDEN : text4.slice(last, m.index);
-    state.open = m[1] === "";
+  for (const m of s.matchAll(/<(\/?)private>/gi)) {
+    if (state.depth === 0) out += s.slice(last, m.index);
+    if (m[1] === "") {
+      if (state.depth === 0) out += HIDDEN;
+      state.depth++;
+    } else if (state.depth > 0 && --state.depth === 0) out += HIDDEN;
     last = m.index + m[0].length;
   }
-  return out + (state.open ? HIDDEN : text4.slice(last));
+  const rest = s.slice(last);
+  let keep = 0;
+  for (let n = Math.min(rest.length, TAGS[1].length - 1); n > 0 && keep === 0; n--) {
+    if (TAGS.some((t) => t.startsWith(rest.slice(rest.length - n).toLowerCase()))) keep = n;
+  }
+  state.held = rest.slice(rest.length - keep);
+  const shown = rest.slice(0, rest.length - keep);
+  return out + (state.depth > 0 ? HIDDEN : shown);
+}
+var NEVER_TEXT = /* @__PURE__ */ new Set(["type", "id", "tool_use_id", "role", "uuid", "parentUuid", "messageId", "sessionId", "timestamp", "cwd", "version", "gitBranch", "userType", "entrypoint", "requestId"]);
+function* writtenStrings(row4) {
+  const stack = [];
+  const pathOf = () => stack.map((f) => f.array ? f.index : f.key);
+  let i = 0;
+  while (i < row4.length) {
+    const c = row4[i];
+    const top = stack[stack.length - 1];
+    if (c === "{" || c === "[") {
+      stack.push({ array: c === "[", index: 0, key: "", expectKey: c === "{", skip: false });
+      i++;
+    } else if (c === "}" || c === "]") {
+      stack.pop();
+      i++;
+    } else if (c === ",") {
+      if (top?.array) top.index++;
+      else if (top) {
+        top.expectKey = true;
+        top.skip = false;
+      }
+      i++;
+    } else if (c === ":") {
+      if (top) top.expectKey = false;
+      i++;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < row4.length && row4[j] !== '"') j += row4[j] === "\\" ? 2 : 1;
+      const text4 = JSON.parse(row4.slice(i, j + 1));
+      i = j + 1;
+      if (top !== void 0 && !top.array && top.expectKey) {
+        top.key = text4;
+        top.skip = NEVER_TEXT.has(text4);
+        if (!stack.some((f) => f.skip) && /[<>]/.test(text4)) yield { path: pathOf().slice(0, -1), text: text4, key: true };
+      } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text: text4, key: false };
+    } else i++;
+  }
 }
 function ownerTurns(file) {
   const raw = readFileSync12(file, "utf8");
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
   const turns = [];
-  const state = { open: false };
+  const state = { depth: 0, held: "" };
   raw.split("\n").forEach((row4, i) => {
     let o;
     try {
       o = JSON.parse(row4);
     } catch {
+      hidePrivate(row4, state);
       return;
     }
-    if (o.type !== "user" && o.type !== "assistant" || o.isSidechain === true || o.isMeta === true) return;
-    const c = o.message?.content;
-    const text4 = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b?.type === "text" ? b.text ?? "" : "").join(" ") : "";
-    const visible2 = hidePrivate(text4, state);
-    if (o.type !== "user") return;
-    const flat = scrub(visible2).replace(/\s+/g, " ").trim();
+    const eligible2 = o?.type === "user" && o.isSidechain !== true && o.isMeta !== true;
+    const content = o?.message?.content;
+    const mine = (path) => eligible2 && path[0] === "message" && path[1] === "content" && (path.length === 2 || path.length === 4 && path[3] === "text" && content?.[path[2]]?.type === "text");
+    const pieces = [];
+    for (const t of writtenStrings(row4)) {
+      const visible2 = hidePrivate(t.text, state);
+      if (!t.key && mine(t.path)) pieces.push(visible2);
+    }
+    const flat = scrub(pieces.join(" ")).replace(/\s+/g, " ").trim();
     if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
   return turns;
