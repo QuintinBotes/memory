@@ -272,6 +272,26 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_transcripts_open ON transcripts (kind, processed_at);
   `,
+
+  // v16 - SCF export (#13): the proposal an item was sent as, and the run outcomes already counted from SCF, so an export
+  // run twice posts nothing new and a feedback import run twice counts nothing twice. A link names the SCF it went to, so a changed address starts afresh. Deleted with the item.
+  `
+  CREATE TABLE IF NOT EXISTS scf_links (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL,
+    proposal_id TEXT NOT NULL,
+    fact_id TEXT,
+    exported_at TEXT NOT NULL,
+    held TEXT,
+    PRIMARY KEY (item_id, endpoint)
+  );
+  CREATE TABLE IF NOT EXISTS scf_feedback (
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('reinforced', 'weakened')),
+    PRIMARY KEY (item_id, run_id)
+  );
+  `,
 ];
 const SECURE_DELETE = 6;
 

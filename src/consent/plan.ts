@@ -21,6 +21,7 @@ export const DATA_CATEGORIES = [
   { id: 'impact', since: 8, text: "When impactProvider is set in config.json, memory recall --diff runs that command, without a shell, once per call and sends it on standard input the repository's owner/name, the range and the paths the range changes; what it answers (dependents' paths and symbol keys) is used to rank items and is not stored. A provider backed by a code graph may start an index job of its own to answer, and a graph that has no snapshot yet answers pending, which memory reads as no snapshot. Without impactProvider, or before you agree to this plan, nothing is run" },
   { id: 'symbols', since: 9, text: "When impactProvider is set in config.json, the anchor refresh (#10) runs that command, which you chose, without a shell and with only PATH and HOME in its environment, once per question: at session start in a detached job, and when you remember an anchor at a symbol key or run memory anchors. It sends on standard input the repository's owner/name, the symbol keys, file paths, line numbers and snapshot ids of the checkout's anchored items; it answers with symbols' keys, signatures, line ranges and content hashes. memory sends nothing elsewhere and what the command does with what it receives is outside memory. Each automatic move of an anchor is logged in the tenant's file and can be undone with memory anchors undo. Without impactProvider, or before you agree to this plan, anchors are checked by path and hash only" },
   { id: 'transcripts', since: 10, text: "When you turn on the separate opt-in for transcripts (memory init --transcripts on), in a repository that matches a tenant: at the end of a session only the path of the session's transcript file, with the session id, the repository and the time, is recorded in the tenant's file; at the next session start or in the daily sweep memory reads that file on this machine, never sending it anywhere, takes only your own messages, replaces credentials, emails and handles in them, and keeps each correction you gave the agent (a sentence such as 'no, use the other branch') as a proposal that quotes your words verbatim, with the session id and line as its source, waiting for your approval. Nothing of the transcript is kept besides those quotes; agent output, subagent reports and tool results are never read as corrections, text between <private> and </private> and a transcript containing DO NOT INDEX THIS CHAT are skipped. After a compaction the compaction summary, redacted, is kept as an episode. The path records and episodes are deleted after 30 days; memory purge removes them with the tenant and --older-than removes those before its cut-off. With the opt-in off, or before you agree to this plan, nothing is recorded" },
+  { id: 'scf', since: 11, text: "When you run memory export --to scf, or memory import --scf, for a tenant that has an SCF address in config.json (memory init --scf <tenant>=<url>, https only, or http to this machine), with the key in SCF_API_KEY: that tenant's proposed repository and organisation items are sent to that address as proposals: the statement, type, scope, repository name, rationale, anchored paths and symbols, and each evidence's source reference, role and time, with credentials replaced; an item that holds one is not sent. The tenant's person-file items and every other tenant's items are never sent. memory import --scf asks the same address for the decisions on those proposals and for the run outcomes on accepted ones, and applies them to the items it sent. Nothing is sent for a tenant without an address, or before you agree to this plan" },
 ] as const;
 export const PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 
@@ -41,6 +42,8 @@ export interface ConsentPlan {
   optIns: { transcripts: boolean; failingCommands: boolean };
   /** Whether sessions started by automation (headless runs, CI jobs) may capture and propose; off unless you turn it on. */
   automationSessions: boolean;
+  /** Where each tenant's proposals go when the owner runs memory export --to scf; empty when none does. */
+  scfDestinations: Record<string, string>;
   storageLocation: string;
   retention: string[];
 }
@@ -57,6 +60,7 @@ export function buildConsentPlan(config: Config, storageLocation: string): Conse
     dataCategories: DATA_CATEGORIES.map((c) => c.text),
     optIns: { ...config.optIns },
     automationSessions: config.automation === true,
+    scfDestinations: Object.fromEntries(Object.entries(config.scf ?? {}).map(([tenant, { url }]) => [tenant, url])),
     storageLocation,
     retention: [
       'Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored',

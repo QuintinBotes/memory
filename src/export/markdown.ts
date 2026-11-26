@@ -12,7 +12,7 @@ import { taintList, type Anchor } from '../items.ts';
  * text of a quarantined item or a tombstone is never written. Deterministic: sorted, no clock, no random.
  */
 
-interface ItemRow {
+export interface ItemRow {
   id: string;
   scope: string;
   scope_key: string;
@@ -36,7 +36,7 @@ interface ItemRow {
   promoted_to: string | null;
 }
 
-interface EvidenceRow {
+export interface EvidenceRow {
   source_ref: string;
   author_role: string;
   captured_at: string;
@@ -103,7 +103,7 @@ function itemFile(r: ItemRow, evidence: EvidenceRow[], supersededBy: string[]): 
  * `repository`: a tenant file's items of that repository and its owner's organisation items, the person file's items
  * learned in it.
  */
-function read(db: DatabaseSync, tenant: string, repository?: string): { row: ItemRow; evidence: EvidenceRow[] }[] {
+export function read(db: DatabaseSync, tenant: string, repository?: string): { row: ItemRow; evidence: EvidenceRow[] }[] {
   const [where, params] =
     repository === undefined
       ? ['tenant = ?', [tenant]]
