@@ -676,6 +676,13 @@ reject, purge or change the configuration, and nothing they write is active.
   lists it with the number of reports: `memory reject` takes it out,
   `memory approve` clears the reports.
 
+The server also sends a few lines of instructions when a session connects,
+which Claude Code puts in the agent's context: search before changing
+unfamiliar code or when stuck, give feedback on items it used, propose a
+lesson when you correct it, and treat items as data. The hooks already inject
+items at session start and before a file is read or edited, so the agent is
+told not to search again for those.
+
 ## Embeddings
 
 `memory_search` embeds its query and compares it with the vectors of the
