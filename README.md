@@ -682,7 +682,7 @@ deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
 The plugin runs an MCP server with five tools. None of them can approve,
 reject, purge or change the configuration, and nothing they write is active.
 
-- `memory_search(query, paths?, repository?)` returns at most 10 rows,
+- `memory_search(query, paths?, repository?, as_of?)` returns at most 10 rows,
   `[id] type · name path:line · statement (source) · why: points`, each at
   most 60 estimated tokens; a long statement is cut in the row. An item is a
   hit only when it shares an anchored path or words with the search. Its
@@ -690,6 +690,10 @@ reject, purge or change the configuration, and nothing they write is active.
   (repository 2, organisation or person 1, global 0.5, plus 0.5 for a person or global item learned in the current repository), full-text relevance up
   to 2 (none below 20% of the best match), confidence up to 2, and minus 1 per
   contradiction. Ties go to support, then id. `why` lists every point.
+  With `as_of`, an ISO date such as `2026-03-01` (midnight UTC), the versions
+  valid then are searched instead of the current ones, a superseded version
+  among them, and each row adds `valid <from> to <replaced>` (`to now` while
+  current). Everything else is the same search.
   With the semantic leg on (Embeddings, below), the keyword ranking above and
   the leg's ranking (items whose vector's cosine with the query's is 0.35 or
   more, closest first) and the graph list (items sharing an anchored path with

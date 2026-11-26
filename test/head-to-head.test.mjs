@@ -165,6 +165,22 @@ test("on the synthetic fixture memory's stale recall is 0% and its knowledge-upd
   assert.ok(r.row('memory', 'knowledge-update').recall_at_1 >= 0.95, String(r.row('memory', 'knowledge-update').recall_at_1));
 });
 
+test('memory answers a temporal question with the version valid at its time, and no other category falls (#102)', () => {
+  const r = headToHead(['--since', '2026-06-01']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.row('memory', 'temporal').recall_at_5 > 0, String(r.row('memory', 'temporal').recall_at_5));
+  // Recall at 5 of every other category before #102, on this fixture.
+  const before = { 'single-fact': 0.822, 'multi-source': 1, 'knowledge-update': 1, 'code-anchored-hazard': 1 };
+  for (const [c, at5] of Object.entries(before)) assert.ok(r.row('memory', c).recall_at_5 >= at5, `${c} ${r.row('memory', c).recall_at_5}`);
+  assert.ok(r.row('memory', 'abstention').abstained >= 0.667);
+  assert.equal(r.row('memory', 'stale-citation').stale_recall, 0);
+  const { base } = sandbox();
+  const small = headToHead(['--since', '2026-03-01'], { history: smallHistory(base) });
+  assert.equal(small.status, 0, small.stderr);
+  // q4 asks how amounts were stored on 2026-01-20: as floats, superseded by integer cents on 2026-02-05.
+  assert.ok(small.lines('results.jsonl').some((x) => x.arm === 'memory' && x.question === 'q4' && x.at1 === 1), 'the older version ranks first');
+});
+
 test('grading is deterministic: two runs print the same rows but latency, and 30 sampled grades report the matcher precision once hand-checked', () => {
   const first = headToHead(['--since', '2026-06-01', '--checked', checked]);
   const second = headToHead(['--since', '2026-06-01', '--checked', checked]);

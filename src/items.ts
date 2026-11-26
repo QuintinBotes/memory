@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { authorityViolations } from './authority.ts';
 import { visibleText } from './codefree.ts';
-import { READS_EXPIRED } from './recall/rank.ts';
+import { EXPIRY_DAYS, READS_EXPIRED } from './recall/rank.ts';
 import { recordAudit } from './store/audit.ts';
 import { inTransaction } from './store/transaction.ts';
 
@@ -83,6 +83,8 @@ export interface Visible {
   origin?: string | null;
   /** A search's full-text match, against the best match in the same store: 1 is the best. */
   textRatio?: number;
+  /** On a search as of a date: when this version became valid and when it was replaced, null while it is current. */
+  valid?: { from: string; to: string | null };
 }
 
 /**
@@ -141,13 +143,27 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
   return id;
 }
 
-/** Active items that do not read as expired: the only ones any recall shows. */
-const SELECT = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
+const COLUMNS = `SELECT id, scope, type, statement, support, helped, wrong, contradictions,
   coalesce(reinforced_at, valid_from) AS reinforced, anchors_json,
   (SELECT source_ref FROM evidence e WHERE e.item_id = items.id ORDER BY captured_at, id LIMIT 1) AS source,
   (SELECT group_concat(DISTINCT taint) FROM evidence e WHERE e.item_id = items.id AND taint IS NOT NULL) AS taint,
-  origin_repository AS origin
-  FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`;
+  origin_repository AS origin`;
+/** Active items that do not read as expired: the only ones any recall shows. */
+const SELECT = `${COLUMNS} FROM items WHERE status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}`;
+
+/**
+ * The versions a recall reads: the active ones, or with `asOf` (an ISO date) the active or superseded ones valid then
+ * that had not expired then (#102), each with its validity. Rejected, stale and proposed items are never among them.
+ */
+function versions(asOf?: string): { select: string; at: string[] } {
+  if (asOf === undefined) return { select: SELECT, at: [] };
+  const at = new Date(asOf).toISOString();
+  return {
+    select: `${COLUMNS}, valid_from, valid_to FROM items WHERE status IN ('active', 'superseded') AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)
+      AND coalesce(reinforced_at, valid_from) >= strftime('%Y-%m-%dT%H:%M:%fZ', ?, '-${EXPIRY_DAYS} days')`,
+    at: [at, at, at],
+  };
+}
 
 interface Row {
   id: string;
@@ -163,6 +179,8 @@ interface Row {
   source: string | null;
   taint: string | null;
   origin: string | null;
+  valid_from?: string;
+  valid_to?: string | null;
 }
 
 const visible = (rows: Row[]): Visible[] =>
@@ -180,15 +198,17 @@ const visible = (rows: Row[]): Visible[] =>
     source: r.source ?? '',
     ...(r.taint === null ? {} : { taint: r.taint }),
     origin: r.origin,
+    ...(r.valid_from === undefined ? {} : { valid: { from: r.valid_from, to: r.valid_to ?? null } }),
   }));
 
 /** The items of a tenant file one repository may see, given tenant, repository and owner. The tenant column is checked as well as the file. */
 export const TENANT_SCOPE = "tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))";
 export const PERSON_SCOPE = "tenant = '' AND scope IN ('person', 'global')";
 
-/** Active items of `tenant` for this repository and its owner. */
-export function tenantItems(db: DatabaseSync, tenant: string, repository: string, owner: string): Visible[] {
-  return visible(db.prepare(`${SELECT} AND ${TENANT_SCOPE}`).all(tenant, repository, owner) as unknown as Row[]);
+/** Active items of `tenant` for this repository and its owner; with `asOf`, the versions valid then. */
+export function tenantItems(db: DatabaseSync, tenant: string, repository: string, owner: string, asOf?: string): Visible[] {
+  const { select, at } = versions(asOf);
+  return visible(db.prepare(`${select} AND ${TENANT_SCOPE}`).all(...at, tenant, repository, owner) as unknown as Row[]);
 }
 
 /** The anchor paths a touch of `path` can hit: the path itself and each directory above it. */
@@ -236,16 +256,18 @@ export function failureStatements(db: DatabaseSync, tenant: string, repository: 
 export const itemsById = (db: DatabaseSync, ids: string[]): Visible[] =>
   ids.length === 0 ? [] : visible(db.prepare(`${SELECT} AND id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as unknown as Row[]);
 
-/** Active items of the person file; with `origin`, only those learned in that repository. */
-export function personItems(db: DatabaseSync, origin?: string): Visible[] {
+/** Active items of the person file; with `origin`, only those learned in that repository; with `asOf`, the versions valid then. */
+export function personItems(db: DatabaseSync, origin?: string, asOf?: string): Visible[] {
+  const { select, at } = versions(asOf);
   return origin === undefined
-    ? visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE}`).all() as unknown as Row[])
-    : visible(db.prepare(`${SELECT} AND ${PERSON_SCOPE} AND origin_repository = ?`).all(origin) as unknown as Row[]);
+    ? visible(db.prepare(`${select} AND ${PERSON_SCOPE}`).all(...at) as unknown as Row[])
+    : visible(db.prepare(`${select} AND ${PERSON_SCOPE} AND origin_repository = ?`).all(...at, origin) as unknown as Row[]);
 }
 
-/** Every active item of `tenant`'s file, whatever repository it belongs to. */
-export function allTenantItems(db: DatabaseSync, tenant: string): Visible[] {
-  return visible(db.prepare(`${SELECT} AND tenant = ?`).all(tenant) as unknown as Row[]);
+/** Every active item of `tenant`'s file, whatever repository it belongs to; with `asOf`, the versions valid then. */
+export function allTenantItems(db: DatabaseSync, tenant: string, asOf?: string): Visible[] {
+  const { select, at } = versions(asOf);
+  return visible(db.prepare(`${select} AND tenant = ?`).all(...at, tenant) as unknown as Row[]);
 }
 
 /**

@@ -27,7 +27,7 @@ const TYPE: Record<Evidence['kind'], string> = { decision: 'decision', correctio
 
 /**
  * This plugin, as `memory_search` answers: a throwaway store holding the evidence as active items, a supersession applied
- * as the owner's approval applies it, and the question's words and path ranked as the tool ranks them.
+ * as the owner's approval applies it, and the question's words, path and as-of date ranked as the tool ranks them.
  * shortcut: a code change marks the items anchored at its path stale, as `memory recheck` does once the cited lines are
  * gone, without a git checkout to check against; replay real commits when the history carries them.
  */
@@ -53,13 +53,19 @@ export function memoryArm(): Arm {
         };
         const older = e.supersedes === undefined ? undefined : item.get(e.supersedes);
         const id = (older === undefined ? null : supersedeNow(db, c, older))?.id ?? insertItem(db, c);
+        // The replay cannot set the clock, so each version is dated by its evidence, as if captured then; reinforced_at keeps
+        // the capture time, so confidence and expiry read as before.
+        const at = new Date(e.at).toISOString();
+        db.prepare('UPDATE items SET reinforced_at = coalesce(reinforced_at, valid_from), valid_from = ? WHERE id = ?').run(at, id);
+        if (older !== undefined) db.prepare("UPDATE items SET valid_to = ? WHERE id = ? AND status = 'superseded'").run(at, older);
         item.set(e.id, id);
         evidence.set(id, e.id);
       }
     },
     async answer(q) {
       // Evidence ids, not random store ids, so a tie breaks the same way every run.
-      const items = withTextRatio(tenantItems(db, set.tenant, set.repository, set.repository.split('/')[0]!), textMatches(db, searchTerms(q.question)))
+      // A temporal question carries its time, and asks memory_search as of it (#102).
+      const items = withTextRatio(tenantItems(db, set.tenant, set.repository, set.repository.split('/')[0]!, q.asOf), textMatches(db, searchTerms(q.question)))
         .map((i) => ({ ...i, id: evidence.get(i.id)! }));
       return rank(items, q.path === undefined ? [] : [q.path], Date.now(), undefined, undefined, [], set.repository).map((h) => leanRow(h.item, h.why, LEAN_ROW_TOKENS));
     },

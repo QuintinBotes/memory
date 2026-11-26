@@ -65,8 +65,10 @@ export function leanRow(item: Visible, why = '', maxTokens = Infinity): string {
   const statement = safe(item.statement);
   const taintText = item.taint === undefined ? '' : safe(taintList(item.taint));
   const proof = safe(provingTest(item.anchors));
+  // A search as of a date says which version this is and when it was replaced (#102).
+  const valid = item.valid === undefined ? '' : ` · valid ${item.valid.from.slice(0, 10)} to ${item.valid.to?.slice(0, 10) ?? 'now'}`;
   const build = (s: string, src: string, loc: string, tst: string, taint: string, w: string): string =>
-    `[${item.id}] ${item.type}${loc === '' ? '' : ` · ${loc}`} · ${s}${src === '' ? '' : ` (${src})`}${taint === '' ? '' : ` · tainted: ${taint}`}${w === '' ? '' : ` · why: ${w}`}${tst === '' ? '' : ` · test: ${tst}`}`;
+    `[${item.id}] ${item.type}${loc === '' ? '' : ` · ${loc}`} · ${s}${src === '' ? '' : ` (${src})`}${valid}${taint === '' ? '' : ` · tainted: ${taint}`}${w === '' ? '' : ` · why: ${w}`}${tst === '' ? '' : ` · test: ${tst}`}`;
   const row = build(statement, source, where, proof, taintText, why);
   const room = maxTokens * 4;
   if (row.length <= room) return row;

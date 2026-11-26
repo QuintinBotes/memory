@@ -30,8 +30,9 @@ export function withTextRatio(items: Visible[], matches: Map<string, number>): V
  * file, and nowhere else: a repository names rows, never a file. For another repository the person file gives only its items
  * learned there; `all` gives the whole tenant file and the whole person file. Anchors of another repository cannot be
  * checked against this checkout, and this checkout's instruction files say nothing about it, so neither runs for it.
+ * `asOf`, an ISO date, reads the versions valid then instead of the active ones; nothing else changes (#102).
  */
-export function visibleItems(data: string, context: Context, cwd: string, terms: readonly string[] = [], busyMs = WRITE_BUSY_MS, withheld: Withheld[] | null = [], reach?: Reach): Visible[] {
+export function visibleItems(data: string, context: Context, cwd: string, terms: readonly string[] = [], busyMs = WRITE_BUSY_MS, withheld: Withheld[] | null = [], reach?: Reach, asOf?: string): Visible[] {
   const out: Visible[] = [];
   const other = reach !== undefined && reach !== 'all' && reach.repository !== context.repository;
   const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
@@ -44,7 +45,7 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
         // A refresh already running elsewhere does the work; this hook goes on without waiting for it.
         if (!other) withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { managed: managedBy(data, context.repository) }));
         const named = reach !== undefined && reach !== 'all' ? reach.repository : undefined;
-        const items = reach === 'all' ? allTenantItems(db, context.tenant) : tenantItems(db, context.tenant, named ?? context.repository, named === undefined ? context.owner : named.split('/')[0]!);
+        const items = reach === 'all' ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === undefined ? context.owner : named.split('/')[0]!, asOf);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld!), textMatches(db, terms));
       } finally {
         db.close();
@@ -54,7 +55,7 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
   const person = openStore(personFile(data), false, busyMs);
   if (person !== null) {
     try {
-      const items = personItems(person, reach !== undefined && reach !== 'all' ? reach.repository : undefined);
+      const items = personItems(person, reach !== undefined && reach !== 'all' ? reach.repository : undefined, asOf);
       add(instructions === null ? items : screen(person, items, instructions, true, withheld!), textMatches(person, terms));
     } finally {
       person.close();
