@@ -486,6 +486,24 @@ or a failing one, recall is path overlap as before; when a provider could not he
 (no snapshot yet, it failed, or you have not agreed to plan version 8 with `memory
 init`), one line after the rows says why.
 
+### Choosing a toolset
+
+A toolset item describes a tool an agent can use for a kind of task, and keeps
+its record. It is always global and names no repository:
+
+```bash
+memory remember --scope global --type toolset -- "review toolset: reviews a pull request diff and reports defects"
+memory outcome <id> accepted --source run-12
+memory outcome <id> rejected --cost 1.5 --source run-13
+memory route -- "review the open pull request"
+```
+
+`memory outcome` records one run's outcome as evidence on the toolset: its
+accepted or rejected count rises by one and the cost is added. `memory route`
+ranks the toolsets against the task with the points `memory_search` uses; equal
+points go to more accepted outcomes. Each row carries the accepted and rejected
+counts and the total cost. Agents do not propose toolsets.
+
 ## Repeats and conflicts
 
 Nothing is stored twice, and nothing is rewritten or deleted. When a statement

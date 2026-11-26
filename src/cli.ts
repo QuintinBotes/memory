@@ -54,6 +54,7 @@ import { withFileLockAsync } from './store/refresh-lock.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
+import { OUTCOMES, recordOutcome, routeToolsets, type Outcome } from './recall/toolsets.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, reanchorCandidates, renderProposals, type Proposal } from './review/review.ts';
 import { MODEL_DEFAULTS, expireTranscripts, modelIsLocal, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
 import { modelTimeoutMs, runProvider } from './provider/run.ts';
@@ -155,6 +156,12 @@ const USAGE = `usage: memory <command>
   related <path-or-symbol> [--depth <n>]
       the active items anchored at or under that path (or symbol key, path#name#kind) in this repository, as the session
       slice prints them, within its budget: whole rows only. --depth limits the path segments matched below it
+  route -- <task>
+      the toolsets (items of type toolset, global) ranked against the task by the search's own points, equal points going
+      to more accepted outcomes; each row carries its accepted and rejected counts and total cost. Read only
+  outcome <id> accepted|rejected [--cost <n>] [--source <run>]
+      record one run's outcome with a toolset as evidence on it: its accepted or rejected count rises by one and the cost
+      is added; an accepted one reinforces it
   close <id>
       close an open question, an owner action: it leaves recall at once and stays on record as closed. Only an approved
       (active) open_question can be closed; an agent proposes one with memory_propose and it waits for memory approve
@@ -493,6 +500,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
   const scope = values.scope as Scope;
   if (!SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(', ')}`, 2);
   if (!(TYPES as readonly string[]).includes(values.type)) throw new Refusal(`--type is one of ${TYPES.join(', ')}`, 2);
+  if (values.type === 'toolset' && scope !== 'global') throw new Refusal('a toolset is global and names no repository: give --scope global', 2);
   if (positionals.length !== 1) throw new Refusal('give exactly one statement, after --', 2);
   const statement = positionals[0]!.trim();
 
@@ -533,7 +541,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       rationale: values.rationale?.trim() ?? null,
       anchors,
       source: values.source?.trim() || 'remember',
-      originRepository: context.repository,
+      originRepository: values.type === 'toolset' ? null : context.repository,
     };
     const where = `${scope}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''}`;
     if (values.supersedes !== undefined) {
@@ -937,6 +945,38 @@ function relatedCommand(args: string[], data: string, cwd: string): void {
   const out = related(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, target, values.depth === undefined ? undefined : Number(values.depth));
   if (out === '') console.error(`No memory item is anchored at or under ${target}.`);
   else process.stdout.write(out);
+}
+
+/** `memory route -- <task>`: the toolsets ranked against a task, with their outcomes. */
+function routeCommand(args: string[], data: string): void {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length === 0) throw new Refusal('give the task, after --', 2);
+  const config = setUp(data);
+  if (config.recallOff !== undefined) return void console.error(`Recall is off: ${config.recallOff.reason}. Run memory init --recall on to turn it on.`);
+  const db = openStore(personFile(data), false);
+  const out = db === null ? '' : routeToolsets(db, positionals.join(' '));
+  db?.close();
+  if (out === '') console.error('No toolset matches.');
+  else process.stdout.write(out);
+}
+
+/** `memory outcome <id> accepted|rejected [--cost <n>] [--source <run>]`: one run's outcome with a toolset. */
+function outcomeCommand(args: string[], data: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { cost: { type: 'string', default: '0' }, source: { type: 'string', default: 'run' } } });
+  const [id, outcome] = positionals as [string, Outcome];
+  if (positionals.length !== 2 || !OUTCOMES.includes(outcome)) throw new Refusal(`usage: memory outcome <id> ${OUTCOMES.join('|')} [--cost <n>] [--source <run>]`, 2);
+  const cost = Number(values.cost);
+  if (!Number.isFinite(cost) || cost < 0 || values.cost.trim() === '') throw new Refusal('--cost takes a number, 0 or more', 2);
+  const why = refusal(values.source, undefined, true);
+  if (why !== null) throw new Refusal(`not recorded: the source is refused because ${why}`);
+  setUp(data);
+  const db = openStore(personFile(data), false);
+  try {
+    if (db === null || !recordOutcome(db, id, outcome, cost, values.source.trim() || 'run')) throw new Refusal(`no active toolset ${id}; remember one with --scope global --type toolset`);
+  } finally {
+    db?.close();
+  }
+  console.log(`recorded ${outcome} for ${id}${cost > 0 ? `, cost ${cost}` : ''}`);
 }
 
 /** `memory close <id>`: the owner closes an approved open question. */
@@ -1522,6 +1562,10 @@ async function main(argv: string[]): Promise<void> {
       return anchorsCommand(rest, data, process.cwd());
     case 'related':
       return relatedCommand(rest, data, process.cwd());
+    case 'route':
+      return routeCommand(rest, data);
+    case 'outcome':
+      return outcomeCommand(rest, data);
     case 'close':
       return closeCommand(rest, data, process.cwd());
     case 'recall':

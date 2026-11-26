@@ -22,6 +22,7 @@ export type AuditAction =
   | 'question_closed'
   | 'proposal_received'
   | 'feedback'
+  | 'toolset_outcome'
   | 'tombstones_reduced'
   | 'evidence_merged'
   | 'merge_proposed'
