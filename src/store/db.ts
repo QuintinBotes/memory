@@ -256,13 +256,15 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   },
 
   // v15 - SCF export (#13): the proposal an item was sent as, and the run outcomes already counted from SCF, so an export
-  // run twice posts nothing new and a feedback import run twice counts nothing twice. Deleted with the item.
+  // run twice posts nothing new and a feedback import run twice counts nothing twice. A link names the SCF it went to, so a changed address starts afresh. Deleted with the item.
   `
   CREATE TABLE IF NOT EXISTS scf_links (
-    item_id TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL,
     proposal_id TEXT NOT NULL,
     fact_id TEXT,
-    exported_at TEXT NOT NULL
+    exported_at TEXT NOT NULL,
+    PRIMARY KEY (item_id, endpoint)
   );
   CREATE TABLE IF NOT EXISTS scf_feedback (
     item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,

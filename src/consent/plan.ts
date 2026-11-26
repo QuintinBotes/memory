@@ -41,6 +41,8 @@ export interface ConsentPlan {
   optIns: { transcripts: boolean; failingCommands: boolean };
   /** Whether sessions started by automation (headless runs, CI jobs) may capture and propose; off unless you turn it on. */
   automationSessions: boolean;
+  /** Where each tenant's proposals go when the owner runs memory export --to scf; empty when none does. */
+  scfDestinations: Record<string, string>;
   storageLocation: string;
   retention: string[];
 }
@@ -57,6 +59,7 @@ export function buildConsentPlan(config: Config, storageLocation: string): Conse
     dataCategories: DATA_CATEGORIES.map((c) => c.text),
     optIns: { ...config.optIns },
     automationSessions: config.automation === true,
+    scfDestinations: Object.fromEntries(Object.entries(config.scf ?? {}).map(([tenant, { url }]) => [tenant, url])),
     storageLocation,
     retention: [
       'Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored',

@@ -56,8 +56,10 @@ function scfUrl(text4) {
   const local = ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);
   if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) return "an SCF address must be https (http only to this machine)";
   if (u.username !== "" || u.password !== "" || u.search !== "" || u.hash !== "") return "an SCF address carries no credentials, query or fragment";
+  if (!/^(\/[A-Za-z0-9._~-]+)*\/?$/.test(u.pathname) || u.pathname.split("/").some((seg) => seg === "." || seg === "..")) return "an SCF address path holds only plain segments";
   return u;
 }
+var scfEndpoint = (u) => `${u.origin}${u.pathname.replace(/\/$/, "")}`;
 var TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
 var ConfigError = class extends Error {
@@ -183,16 +185,47 @@ function organisationTerms(config, repository) {
   return [...terms];
 }
 
-// src/context.ts
+// src/provider/run.ts
 import { spawnSync } from "node:child_process";
+var PROVIDER_TIMEOUT_MS = 5e3;
+var PROVIDER_MAX_OUTPUT = 4 * 1024 * 1024;
+function runProvider(command, cwd, request) {
+  const [program, ...args] = command;
+  const r = spawnSync(program, args, {
+    cwd,
+    env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" },
+    input: `${JSON.stringify(request)}
+`,
+    encoding: "utf8",
+    timeout: PROVIDER_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    maxBuffer: PROVIDER_MAX_OUTPUT,
+    stdio: ["pipe", "pipe", "ignore"]
+  });
+  if (r.error !== void 0) return { ok: false, reason: `${program} ${r.error.code === "ETIMEDOUT" ? `did not answer within ${PROVIDER_TIMEOUT_MS} ms` : `failed: ${r.error.message}`}` };
+  if (r.status !== 0) return { ok: false, reason: `${program} exited ${r.status ?? "by signal"}` };
+  return { ok: true, stdout: r.stdout };
+}
+var PASS_THROUGH = ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"];
+var PROGRAM_MAX_OUTPUT = 64 * 1024 * 1024;
+var programTimeoutMs = (env = process.env) => {
+  const n = Number(env["MEMORY_PROGRAM_TIMEOUT_MS"]);
+  return Number.isInteger(n) && n > 0 ? n : 15e3;
+};
+function runProgram(program, args, cwd, extra = {}) {
+  const env = { ...extra };
+  for (const k of PASS_THROUGH) if (process.env[k] !== void 0) env[k] = process.env[k];
+  const r = spawnSync(program, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: programTimeoutMs(), killSignal: "SIGKILL", maxBuffer: PROGRAM_MAX_OUTPUT });
+  if (r.error !== void 0) return { stdout: null, error: r.error, missing: r.error.code === "ENOENT" };
+  return { stdout: r.status === 0 ? r.stdout : null };
+}
+
+// src/context.ts
 var REPOSITORY_VARIABLES = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE"];
 function git(cwd, ...args) {
-  const env = { ...process.env };
-  for (const k of REPOSITORY_VARIABLES) delete env[k];
-  env["GIT_TERMINAL_PROMPT"] = "0";
-  const r = spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-  if (r.error !== void 0 && r.error.code !== "ENOENT") throw r.error;
-  return r.status === 0 ? r.stdout : null;
+  const r = runProgram("git", args, cwd, { GIT_TERMINAL_PROMPT: "0" });
+  if (r.error !== void 0 && r.missing !== true) throw r.error;
+  return r.stdout;
 }
 function parseGitHubRemote(url) {
   const m = /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/.exec(
@@ -1251,28 +1284,6 @@ function recheck(db, tenant, repository, cwd, { id, window = WINDOW, managed = f
   return result;
 }
 
-// src/provider/run.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
-var PROVIDER_TIMEOUT_MS = 5e3;
-var PROVIDER_MAX_OUTPUT = 4 * 1024 * 1024;
-function runProvider(command, cwd, request) {
-  const [program, ...args] = command;
-  const r = spawnSync2(program, args, {
-    cwd,
-    env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "" },
-    input: `${JSON.stringify(request)}
-`,
-    encoding: "utf8",
-    timeout: PROVIDER_TIMEOUT_MS,
-    killSignal: "SIGKILL",
-    maxBuffer: PROVIDER_MAX_OUTPUT,
-    stdio: ["pipe", "pipe", "ignore"]
-  });
-  if (r.error !== void 0) return { ok: false, reason: `${program} ${r.error.code === "ETIMEDOUT" ? `did not answer within ${PROVIDER_TIMEOUT_MS} ms` : `failed: ${r.error.message}`}` };
-  if (r.status !== 0) return { ok: false, reason: `${program} exited ${r.status ?? "by signal"}` };
-  return { ok: true, stdout: r.stdout };
-}
-
 // src/anchors/provider.ts
 var ProviderError = class extends Error {
 };
@@ -1406,6 +1417,7 @@ function buildConsentPlan(config, storageLocation) {
     dataCategories: DATA_CATEGORIES.map((c) => c.text),
     optIns: { ...config.optIns },
     automationSessions: config.automation === true,
+    scfDestinations: Object.fromEntries(Object.entries(config.scf ?? {}).map(([tenant, { url }]) => [tenant, url])),
     storageLocation,
     retention: [
       "Statements matching a known credential pattern, or carrying an email address, a handle or a webhook URL, are refused and never stored",
@@ -1790,7 +1802,7 @@ function networkFilesystem(dir) {
 import { closeSync, mkdirSync as mkdirSync3, openSync, statSync, unlinkSync as unlinkSync2, writeSync } from "node:fs";
 import { dirname as dirname4 } from "node:path";
 var STALE_MS = 3e4;
-function withFileLock(lock, work, waitMs = 0) {
+function acquire(lock, waitMs) {
   mkdirSync3(dirname4(lock), { recursive: true, mode: 448 });
   const deadline = Date.now() + waitMs;
   let fd;
@@ -1810,15 +1822,32 @@ function withFileLock(lock, work, waitMs = 0) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
   }
-  try {
-    writeSync(fd, String(process.pid));
-    return work();
-  } finally {
-    closeSync(fd);
+  writeSync(fd, String(process.pid));
+  const held2 = fd;
+  return () => {
+    closeSync(held2);
     try {
       unlinkSync2(lock);
     } catch {
     }
+  };
+}
+function withFileLock(lock, work, waitMs = 0) {
+  const release = acquire(lock, waitMs);
+  if (release === void 0) return void 0;
+  try {
+    return work();
+  } finally {
+    release();
+  }
+}
+async function withFileLockAsync(lock, work, waitMs = 0) {
+  const release = acquire(lock, waitMs);
+  if (release === void 0) return void 0;
+  try {
+    return await work();
+  } finally {
+    release();
   }
 }
 var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lock`, work);
@@ -2578,13 +2607,15 @@ var MIGRATIONS = [
     db.exec("UPDATE items SET origin_repository = scope_key WHERE scope = 'repository' AND origin_repository IS NULL;");
   },
   // v15 - SCF export (#13): the proposal an item was sent as, and the run outcomes already counted from SCF, so an export
-  // run twice posts nothing new and a feedback import run twice counts nothing twice. Deleted with the item.
+  // run twice posts nothing new and a feedback import run twice counts nothing twice. A link names the SCF it went to, so a changed address starts afresh. Deleted with the item.
   `
   CREATE TABLE IF NOT EXISTS scf_links (
-    item_id TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL,
     proposal_id TEXT NOT NULL,
     fact_id TEXT,
-    exported_at TEXT NOT NULL
+    exported_at TEXT NOT NULL,
+    PRIMARY KEY (item_id, endpoint)
   );
   CREATE TABLE IF NOT EXISTS scf_feedback (
     item_id TEXT NOT NULL REFERENCES items (id) ON DELETE CASCADE,
@@ -4333,87 +4364,6 @@ function foreignRepository(dir, config, tenant) {
   return other.length === 0 ? null : `${top} is a repository of tenant ${other[0]}`;
 }
 
-// src/review/review.ts
-var reanchorCandidates = (p) => p.status === "stale" && p.status_reason === "key gone" ? JSON.parse(p.anchors_json).flatMap((a) => a.candidates ?? []) : [];
-function shadow(p) {
-  const signals = new Set(p.evidence.map((e) => e.source_ref)).size;
-  const owner = new Set(p.evidence.filter((e) => e.author_role === "owner").map((e) => e.source_ref)).size;
-  return { decision: signals >= 3 && owner >= 1 && p.contradictions === 0 ? "approve" : "hold", signals, owner };
-}
-function proposals(db, tenant, id) {
-  const rows = db.prepare(
-    `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports, status_reason, supersedes FROM items
-       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0)
-              OR (status = 'active' AND EXISTS (SELECT 1 FROM items o WHERE o.id = items.supersedes AND o.status = 'active')) OR (status = 'stale' AND status_reason = 'reported stale')
-              OR (status = 'stale' AND status_reason = 'key gone' AND anchors_json LIKE '%"candidates"%')) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
-         AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
-       ORDER BY created_at, id`
-  ).all(tenant, ...id === void 0 ? [] : [id]);
-  const evidence = db.prepare("SELECT source_ref, author_role, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
-  const older = db.prepare("SELECT id, type, statement FROM items WHERE id = ? AND status = 'active'");
-  for (const r of rows) {
-    r.evidence = evidence.all(r.id);
-    const o = r.supersedes === null ? void 0 : older.get(r.supersedes);
-    r.older = o === void 0 ? null : { ...o, evidence: evidence.all(o.id) };
-  }
-  return rows;
-}
-var taintOf = (evidence) => {
-  const all = [...new Set(evidence.flatMap((e) => e.taint === null ? [] : [e.taint]))];
-  return all.length === 0 ? null : taintList(all.join(","));
-};
-var evidenceLine = (indent, e) => safe(`${indent}evidence: ${e.source_ref} (${e.author_role})${e.taint === null ? "" : `, tainted by ${taintList(e.taint)}`}`);
-function renderProposals(list2) {
-  return list2.map((p) => {
-    const g = shadow(p);
-    const where2 = p.scope_key === "" ? p.scope : `${p.scope} ${p.scope_key}`;
-    const taint = taintOf(p.evidence);
-    return [
-      // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
-      safe(`- [${p.id}] ${p.type}, ${where2}, trust ${p.origin_trust}${taint === null ? "" : `, tainted by ${taint}`}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? reanchorCandidates(p).length > 0 ? ", stale: its symbol is gone" : ", hidden by an agent through an older install" : p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
-      ...p.evidence.map((e) => evidenceLine("  ", e)),
-      ...reanchorCandidates(p).length === 0 ? [] : [safe(`  re-anchor candidates: ${reanchorCandidates(p).join(", ")}; the owner decides with memory anchors adopt ${p.id} <key>`)],
-      ...p.older === null ? [] : [
-        safe(`  supersedes [${p.older.id}] ${p.older.type}: ${JSON.stringify(safe(p.older.statement))}`),
-        ...p.older.evidence.map((e) => evidenceLine("    ", e))
-      ],
-      ...p.status !== "proposed" ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? "" : "s"}, ${g.owner} from the owner)`]
-    ].join("\n");
-  }).map((block) => `${block}
-`).join("");
-}
-function decide(db, p, decision, change) {
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const { changes } = "scope" in change ? db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 0, scope = ?, scope_key = ?, valid_from = ? WHERE id = ? AND status = ?").run(change.scope, change.scopeKey, now, p.id, p.status) : db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = ?").run(now, change.reason, p.id, p.status);
-    if (changes !== 1) throw new Error(`proposal ${p.id} changed while it was being decided`);
-    const superseded = "scope" in change && p.older !== null ? applySupersession(db, p.id, p.older.id, p.status, true) : null;
-    recordAudit(db, decision === "approve" ? "proposal_approved" : "proposal_rejected", { type: "item", id: p.id }, {
-      decision,
-      shadow: shadow(p).decision,
-      ..."scope" in change ? { scope: change.scope } : {}
-    });
-    db.exec("COMMIT");
-    return superseded;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-var isPendingSupersession = (p) => p.status === "active" && p.stale_reports === 0 && p.older !== null;
-function declineSupersession(db, p) {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare("UPDATE items SET supersedes = NULL WHERE id = ?").run(p.id);
-    recordAudit(db, "proposal_rejected", { type: "item", id: p.id }, { decision: "reject", supersession: p.older?.id });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 // src/export/scf.ts
 var SCF_TIMEOUT_MS = 1e4;
 var MAX_ANSWER = 5e6;
@@ -4431,7 +4381,9 @@ function scfClient(base2, key2, timeoutMs = SCF_TIMEOUT_MS) {
     };
     let res;
     try {
-      res = await fetch(new URL(`${base2.pathname.replace(/\/$/, "")}${path}`, base2), {
+      const target = new URL(`${scfEndpoint(base2)}${path}`);
+      if (target.origin !== base2.origin) return fail(`SCF at ${base2.host}: a request would leave its origin`);
+      res = await fetch(target, {
         method,
         headers: { authorization: `Bearer ${key2}`, ...body === void 0 ? {} : { "content-type": "application/json" } },
         ...body === void 0 ? {} : { body: JSON.stringify(body) },
@@ -4464,112 +4416,130 @@ async function remoteProposals(client) {
       if (typeof p["id"] !== "string" || typeof p["status"] !== "string") throw new ScfError("SCF sent a proposal in a shape memory does not know");
       out.push({ id: p["id"], status: p["status"], fact_id: typeof p["fact_id"] === "string" ? p["fact_id"] : null, item: typeof item === "string" ? item : null });
     }
-    if (items.length < PAGE) break;
+    if (items.length < PAGE) return out;
   }
-  return out;
+  throw new ScfError(`SCF holds more than ${MAX_PAGES * PAGE} proposals, more than memory lists; nothing was sent`);
 }
-function proposalOf(row4, evidence, rationale, statement) {
+function proposalOf(row4, evidence) {
   const anchors = JSON.parse(row4.anchors_json).map((a) => ({ path: a.path, ...a.symbol === void 0 ? {} : { symbol: a.symbol } }));
   return {
     subject: row4.scope_key,
     phrase: row4.type,
-    value: statement,
+    value: row4.statement,
     layer: "memory",
-    rationale,
+    rationale: row4.rationale ?? "",
     qualifiers: {
       memory_item_id: row4.id,
       type: row4.type,
       scope: row4.scope,
       origin_trust: row4.origin_trust,
       anchors,
-      evidence: evidence.map((e) => ({ source_ref: redact(e.source_ref).text, author_role: e.author_role, captured_at: e.captured_at }))
+      evidence: evidence.map((e) => ({ source_ref: e.source_ref, author_role: e.author_role, captured_at: e.captured_at }))
     }
   };
 }
-async function exportToScf(db, tenant, client, repository) {
-  const linked = new Set(db.prepare("SELECT item_id FROM scf_links").all().map((r) => r.item_id));
+var strings2 = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(strings2) : typeof v === "object" && v !== null ? Object.values(v).flatMap(strings2) : [];
+var redactable = (payload) => strings2(payload).some((t) => Object.keys(redact(t).counts).length > 0);
+async function exportToScf(db, tenant, client, remote, endpoint, repository) {
+  const linked = new Set(db.prepare("SELECT item_id FROM scf_links WHERE endpoint = ?").all(endpoint).map((r) => r.item_id));
   const all = read(db, tenant, repository).filter(
     ({ row: row4 }) => row4.status === "proposed" && row4.quarantine === null && row4.statement !== "" && (row4.scope === "repository" || row4.scope === "organisation") && row4.scope_key !== ""
   );
   const todo = all.filter(({ row: row4 }) => !linked.has(row4.id));
   const result = { posted: 0, already: all.length - todo.length, withheld: 0 };
-  if (todo.length === 0) return result;
-  const remote = new Map((await remoteProposals(client)).flatMap((p) => p.item === null ? [] : [[p.item, p]]));
-  const link2 = db.prepare("INSERT OR IGNORE INTO scf_links (item_id, proposal_id, exported_at) VALUES (?, ?, ?)");
-  const record = (id, proposal) => {
-    inTransaction(db, () => {
-      link2.run(id, proposal, (/* @__PURE__ */ new Date()).toISOString());
-      recordAudit(db, "scf_exported", { type: "item", id }, { proposal });
-    });
-  };
+  const known = new Map(remote.flatMap((p) => p.item === null ? [] : [[p.item, p]]));
+  const links = [];
   for (const { row: row4, evidence } of todo) {
-    const known = remote.get(row4.id);
-    if (known !== void 0) {
-      record(row4.id, known.id);
+    const found = known.get(row4.id);
+    if (found !== void 0) {
+      links.push({ id: row4.id, proposal: found.id });
       result.already++;
       continue;
     }
-    const statement = redact(row4.statement);
-    const rationale = redact(row4.rationale ?? "");
-    if (Object.keys(statement.counts).length > 0 || Object.keys(rationale.counts).length > 0) {
+    const payload = proposalOf(row4, evidence);
+    if (redactable(payload)) {
       result.withheld++;
       continue;
     }
+    let answer;
     try {
-      const answer = obj(await client.post("/world/proposals", proposalOf(row4, evidence, rationale.text, statement.text)));
-      if (typeof answer["id"] !== "string") throw new ScfError("SCF answered a proposal without an id");
-      record(row4.id, answer["id"]);
-      result.posted++;
+      answer = obj(await client.post("/world/proposals", payload));
     } catch (error) {
-      if (!(error instanceof ScfError)) throw error;
-      if (result.posted === 0 && result.already === all.length - todo.length) throw error;
-      return { ...result, stoppedBy: error.message };
+      if (error instanceof ScfError && result.posted > 0) throw new ScfError(`${error.message}; ${result.posted} proposals were already sent and the next run adopts them`);
+      throw error;
     }
+    if (typeof answer["id"] !== "string") throw new ScfError("SCF answered a proposal without an id");
+    links.push({ id: row4.id, proposal: answer["id"] });
+    result.posted++;
   }
+  inTransaction(db, () => {
+    const link2 = db.prepare("INSERT OR IGNORE INTO scf_links (item_id, endpoint, proposal_id, exported_at) VALUES (?, ?, ?, ?)");
+    for (const { id, proposal } of links) {
+      link2.run(id, endpoint, proposal, (/* @__PURE__ */ new Date()).toISOString());
+      recordAudit(db, "scf_exported", { type: "item", id }, { proposal });
+    }
+  });
   return result;
 }
+var FEEDBACK_PAGE = 500;
 async function outcomes(client, fact) {
-  const items = obj(await client.get(`/world/facts/${encodeURIComponent(fact)}/feedback`))["items"];
-  if (!Array.isArray(items)) throw new ScfError("SCF sent feedback in a shape memory does not know");
-  return items.map((raw) => {
-    const f = obj(raw);
-    if (typeof f["run_id"] !== "string" || f["outcome"] !== "reinforced" && f["outcome"] !== "weakened") throw new ScfError("SCF sent feedback in a shape memory does not know");
-    return { run: f["run_id"], outcome: f["outcome"] };
-  });
-}
-async function importFromScf(db, tenant, client) {
-  const result = { approved: 0, rejected: 0, helped: 0, wrong: 0 };
-  const links = db.prepare("SELECT item_id, proposal_id, fact_id FROM scf_links ORDER BY item_id").all();
-  if (links.length === 0) return result;
-  const remote = new Map((await remoteProposals(client)).map((p) => [p.id, p]));
-  const seen = db.prepare("SELECT 1 FROM scf_feedback WHERE item_id = ? AND run_id = ?");
-  for (const { item_id: id, proposal_id, fact_id } of links) {
-    const p = remote.get(proposal_id);
-    if (p === void 0) continue;
-    const open = p.status === "accepted" || p.status === "rejected" ? proposals(db, tenant, id).find((q) => q.status === "proposed") : void 0;
-    if (open !== void 0) {
-      if (p.status === "accepted") decide(db, open, "approve", { scope: open.scope, scopeKey: open.scope_key });
-      else decide(db, open, "reject", { reason: "rejected in SCF" });
-      result[p.status === "accepted" ? "approved" : "rejected"]++;
+  const out = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const items = obj(await client.get(`/world/facts/${encodeURIComponent(fact)}/feedback?limit=${FEEDBACK_PAGE}&offset=${page * FEEDBACK_PAGE}`))["items"];
+    if (!Array.isArray(items)) throw new ScfError("SCF sent feedback in a shape memory does not know");
+    for (const raw of items) {
+      const f = obj(raw);
+      if (typeof f["run_id"] !== "string" || f["outcome"] !== "reinforced" && f["outcome"] !== "weakened") throw new ScfError("SCF sent feedback in a shape memory does not know");
+      out.push({ run: f["run_id"], outcome: f["outcome"] });
     }
-    const fact = fact_id ?? p.fact_id;
-    if (p.status !== "accepted" || fact === null) continue;
-    if (fact_id === null) db.prepare("UPDATE scf_links SET fact_id = ? WHERE item_id = ?").run(fact, id);
-    const fresh = (await outcomes(client, fact)).filter((o) => seen.get(id, o.run) === void 0);
-    if (fresh.length === 0) continue;
-    inTransaction(db, () => {
+    if (items.length < FEEDBACK_PAGE) return out;
+  }
+  throw new ScfError("SCF holds more run outcomes for one fact than memory lists; nothing was applied");
+}
+async function importFromScf(db, tenant, client, remote, endpoint) {
+  const result = { approved: 0, rejected: 0, helped: 0, wrong: 0 };
+  const links = db.prepare("SELECT l.item_id, l.proposal_id, l.fact_id, i.status FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.endpoint = ? AND i.tenant = ? ORDER BY l.item_id").all(endpoint, tenant);
+  const byId2 = new Map(remote.map((p) => [p.id, p]));
+  const seen = db.prepare("SELECT 1 FROM scf_feedback WHERE item_id = ? AND run_id = ?");
+  const plan2 = [];
+  for (const l of links) {
+    const p = byId2.get(l.proposal_id);
+    if (p === void 0) continue;
+    const decided = p.status === "accepted" || p.status === "rejected";
+    const fact = p.status === "accepted" ? l.fact_id ?? p.fact_id : null;
+    const fresh = fact === null ? [] : (await outcomes(client, fact)).filter((o) => seen.get(l.item_id, o.run) === void 0);
+    plan2.push({ id: l.item_id, decision: decided && l.status === "proposed" ? p.status : null, fact, fresh });
+  }
+  inTransaction(db, () => {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    for (const { id, decision, fact, fresh } of plan2) {
+      if (decision === "accepted") {
+        if (db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 0, valid_from = ? WHERE id = ? AND tenant = ? AND status = 'proposed'").run(now, id, tenant).changes === 1) {
+          const older = db.prepare("SELECT supersedes FROM items WHERE id = ?").get(id).supersedes;
+          if (older !== null) applySupersession(db, id, older, "proposed", true);
+          recordAudit(db, "proposal_approved", { type: "item", id }, { decision: "approve", via: "scf" });
+          result.approved++;
+        }
+      } else if (decision === "rejected") {
+        if (db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = 'rejected in SCF' WHERE id = ? AND tenant = ? AND status = 'proposed'").run(now, id, tenant).changes === 1) {
+          recordAudit(db, "proposal_rejected", { type: "item", id }, { decision: "reject", via: "scf" });
+          result.rejected++;
+        }
+      }
+      if (fact !== null) db.prepare("UPDATE scf_links SET fact_id = ? WHERE item_id = ? AND endpoint = ? AND fact_id IS NULL").run(fact, id, endpoint);
+      if (fresh.length === 0) continue;
       const add = db.prepare("INSERT OR IGNORE INTO scf_feedback (item_id, run_id, outcome) VALUES (?, ?, ?)");
       let helped = 0;
       let wrong = 0;
       for (const o of fresh) {
         if (add.run(id, o.run, o.outcome).changes === 1) o.outcome === "reinforced" ? helped++ : wrong++;
       }
-      db.prepare("UPDATE items SET helped = helped + ?, wrong = wrong + ?, reinforced_at = CASE WHEN ? > 0 THEN ? ELSE reinforced_at END WHERE id = ?").run(helped, wrong, helped, (/* @__PURE__ */ new Date()).toISOString(), id);
+      db.prepare("UPDATE items SET helped = helped + ?, wrong = wrong + ?, reinforced_at = CASE WHEN ? > 0 THEN ? ELSE reinforced_at END WHERE id = ?").run(helped, wrong, helped, now, id);
       recordAudit(db, "scf_feedback", { type: "item", id }, { helped, wrong });
       result.helped += helped;
       result.wrong += wrong;
-    });
-  }
+    }
+  });
   return result;
 }
 
@@ -4712,6 +4682,87 @@ function orbitRecall(data, context, cwd, ask) {
     rows.push(row4);
   }
   return rows.join("");
+}
+
+// src/review/review.ts
+var reanchorCandidates = (p) => p.status === "stale" && p.status_reason === "key gone" ? JSON.parse(p.anchors_json).flatMap((a) => a.candidates ?? []) : [];
+function shadow(p) {
+  const signals = new Set(p.evidence.map((e) => e.source_ref)).size;
+  const owner = new Set(p.evidence.filter((e) => e.author_role === "owner").map((e) => e.source_ref)).size;
+  return { decision: signals >= 3 && owner >= 1 && p.contradictions === 0 ? "approve" : "hold", signals, owner };
+}
+function proposals(db, tenant, id) {
+  const rows = db.prepare(
+    `SELECT id, status, scope, scope_key, type, statement, origin_trust, quarantine, contradictions, anchors_json, stale_reports, status_reason, supersedes FROM items
+       WHERE (status = 'proposed' OR (status = 'active' AND stale_reports > 0)
+              OR (status = 'active' AND EXISTS (SELECT 1 FROM items o WHERE o.id = items.supersedes AND o.status = 'active')) OR (status = 'stale' AND status_reason = 'reported stale')
+              OR (status = 'stale' AND status_reason = 'key gone' AND anchors_json LIKE '%"candidates"%')) AND tenant = ? ${id === void 0 ? "" : "AND id = ?"}
+         AND EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id)
+       ORDER BY created_at, id`
+  ).all(tenant, ...id === void 0 ? [] : [id]);
+  const evidence = db.prepare("SELECT source_ref, author_role, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id");
+  const older = db.prepare("SELECT id, type, statement FROM items WHERE id = ? AND status = 'active'");
+  for (const r of rows) {
+    r.evidence = evidence.all(r.id);
+    const o = r.supersedes === null ? void 0 : older.get(r.supersedes);
+    r.older = o === void 0 ? null : { ...o, evidence: evidence.all(o.id) };
+  }
+  return rows;
+}
+var taintOf = (evidence) => {
+  const all = [...new Set(evidence.flatMap((e) => e.taint === null ? [] : [e.taint]))];
+  return all.length === 0 ? null : taintList(all.join(","));
+};
+var evidenceLine = (indent, e) => safe(`${indent}evidence: ${e.source_ref} (${e.author_role})${e.taint === null ? "" : `, tainted by ${taintList(e.taint)}`}`);
+function renderProposals(list2) {
+  return list2.map((p) => {
+    const g = shadow(p);
+    const where2 = p.scope_key === "" ? p.scope : `${p.scope} ${p.scope_key}`;
+    const taint = taintOf(p.evidence);
+    return [
+      // Quoted, so the statement reads as data, whatever it says; normalised first, so the quoting escapes what normalising makes.
+      safe(`- [${p.id}] ${p.type}, ${where2}, trust ${p.origin_trust}${taint === null ? "" : `, tainted by ${taint}`}${p.quarantine === null ? "" : `, quarantined (${p.quarantine})`}${p.status === "stale" ? reanchorCandidates(p).length > 0 ? ", stale: its symbol is gone" : ", hidden by an agent through an older install" : p.stale_reports === 0 ? "" : `, active, reported stale by an agent ${p.stale_reports} time${p.stale_reports === 1 ? "" : "s"}`}: ${JSON.stringify(safe(p.statement))}`),
+      ...p.evidence.map((e) => evidenceLine("  ", e)),
+      ...reanchorCandidates(p).length === 0 ? [] : [safe(`  re-anchor candidates: ${reanchorCandidates(p).join(", ")}; the owner decides with memory anchors adopt ${p.id} <key>`)],
+      ...p.older === null ? [] : [
+        safe(`  supersedes [${p.older.id}] ${p.older.type}: ${JSON.stringify(safe(p.older.statement))}`),
+        ...p.older.evidence.map((e) => evidenceLine("    ", e))
+      ],
+      ...p.status !== "proposed" ? [] : [`  shadow gate: ${g.decision} (${g.signals} signal${g.signals === 1 ? "" : "s"}, ${g.owner} from the owner)`]
+    ].join("\n");
+  }).map((block) => `${block}
+`).join("");
+}
+function decide(db, p, decision, change) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const { changes } = "scope" in change ? db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 0, scope = ?, scope_key = ?, valid_from = ? WHERE id = ? AND status = ?").run(change.scope, change.scopeKey, now, p.id, p.status) : db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = ? WHERE id = ? AND status = ?").run(now, change.reason, p.id, p.status);
+    if (changes !== 1) throw new Error(`proposal ${p.id} changed while it was being decided`);
+    const superseded = "scope" in change && p.older !== null ? applySupersession(db, p.id, p.older.id, p.status, true) : null;
+    recordAudit(db, decision === "approve" ? "proposal_approved" : "proposal_rejected", { type: "item", id: p.id }, {
+      decision,
+      shadow: shadow(p).decision,
+      ..."scope" in change ? { scope: change.scope } : {}
+    });
+    db.exec("COMMIT");
+    return superseded;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+var isPendingSupersession = (p) => p.status === "active" && p.stale_reports === 0 && p.older !== null;
+function declineSupersession(db, p) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE items SET supersedes = NULL WHERE id = ?").run(p.id);
+    recordAudit(db, "proposal_rejected", { type: "item", id: p.id }, { decision: "reject", supersession: p.older?.id });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 // src/capture/ci.ts
@@ -5350,7 +5401,7 @@ function afterCompaction(data, input2) {
 }
 
 // src/eval/scorecard.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync2 } from "node:child_process";
 var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
   measure: m.measure,
   arm,
@@ -5368,7 +5419,7 @@ var seededRecall = (version) => notRun(
   ["recall"]
 );
 function orbitArm(version) {
-  const r = spawnSync3("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
+  const r = spawnSync2("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
   const found = r.status === 0 ? r.stdout.trim().split("\n")[0] : void 0;
   const note = r.error?.code === "ENOENT" ? "Orbit is not installed (no orbit on PATH), so its arm is skipped" : found === void 0 ? "orbit --version failed, so its arm is skipped" : `Orbit ${found} is installed, but its benchmark has no memory switch until QuintinBotes/orbit#233; a live run calls a model and spends money, which this harness never does`;
   return notRun(
@@ -5725,7 +5776,7 @@ function poison(version) {
 }
 
 // src/eval/lab.ts
-import { spawnSync as spawnSync4 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 import { cpSync, existsSync as existsSync12, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync13, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname12, join as join15 } from "node:path";
@@ -5751,11 +5802,11 @@ function fixtureRepository(task, repo) {
   cpSync(join15(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
-    check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
+    check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
   }
 }
 function seed(task, t, repo, data) {
-  const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
+  const memory = (args) => check(`seed ${task}'s memory`, spawnSync3(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
 }
@@ -5799,7 +5850,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   if (arm === "on") env["MEMORY_LAB_PLUGIN"] = plugin;
   else delete env["MEMORY_LAB_PLUGIN"];
-  const r = spawnSync4("/bin/sh", ["-c", agent], {
+  const r = spawnSync3("/bin/sh", ["-c", agent], {
     cwd: repo,
     env,
     input: t.prompt,
@@ -5811,7 +5862,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join15(TASKS, task, "hidden");
   const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join15(hidden, f));
-  const grade = agentFailed ? null : spawnSync4(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
     agentFailed,
@@ -6391,35 +6442,41 @@ function scfSetUp(config, data, cwd) {
   if (address === void 0) throw new Refusal(`tenant ${tenant} has no SCF address; memory init --scf ${tenant}=<url> sets one`);
   const key2 = process.env["SCF_API_KEY"];
   if (key2 === void 0 || key2 === "") throw new Refusal("SCF_API_KEY is not set");
-  const db = openStore(tenantFile(data, tenant), false);
-  if (db === null) throw new Refusal(`tenant ${tenant} has no items yet`);
-  return { tenant, client: scfClient(scfUrl(address.url), key2), db };
+  const file = tenantFile(data, tenant);
+  if (!existsSync13(file)) throw new Refusal(`tenant ${tenant} has no items yet`);
+  const url = scfUrl(address.url);
+  return { tenant, client: scfClient(url, key2), endpoint: scfEndpoint(url), file };
 }
 var unreachable = (error) => {
   if (error instanceof ScfError) throw new Refusal(`${error.message}; nothing was changed`);
   throw error;
 };
-async function scfExport(config, data, cwd, reach) {
-  const { tenant, client, db } = scfSetUp(config, data, cwd);
-  try {
-    const r = await exportToScf(db, tenant, client, reach === void 0 || reach === "all" ? void 0 : reach.repository).catch(unreachable);
-    console.log(`sent ${r.posted} proposals of tenant ${tenant} to SCF; ${r.already} already there${r.withheld > 0 ? `; ${r.withheld} not sent because they hold text redaction removes` : ""}`);
-    if (r.stoppedBy !== void 0) {
-      console.error(`${r.stoppedBy}; the rest waits for the next run`);
-      process.exitCode = 1;
+async function scfRun(set, work) {
+  const done = await withFileLockAsync(`${set.file}.scf.lock`, async () => {
+    const remote = await remoteProposals(set.client).catch(unreachable);
+    const db = openStore(set.file, false);
+    try {
+      return { value: await work(db, remote).catch(unreachable) };
+    } finally {
+      db.close();
     }
-  } finally {
-    db.close();
-  }
+  }, 6e4);
+  if (done === void 0) throw new Refusal("another SCF export or import of this tenant is running; try again when it finishes");
+  return done.value;
 }
-async function scfImport(data, cwd) {
-  const { tenant, client, db } = scfSetUp(setUp(data), data, cwd);
-  try {
-    const r = await importFromScf(db, tenant, client).catch(unreachable);
-    console.log(`from SCF for tenant ${tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.helped} helped, ${r.wrong} wrong`);
-  } finally {
-    db.close();
-  }
+async function scfExport(config, data, cwd, reach) {
+  const set = scfSetUp(config, data, cwd);
+  const r = await scfRun(set, (db, remote) => exportToScf(db, set.tenant, set.client, remote, set.endpoint, reach === void 0 || reach === "all" ? void 0 : reach.repository));
+  console.log(`sent ${r.posted} proposals of tenant ${set.tenant} to SCF; ${r.already} already there${r.withheld > 0 ? `; ${r.withheld} not sent because they hold text redaction removes` : ""}`);
+}
+async function scfImport(config, data, cwd) {
+  const set = scfSetUp(config, data, cwd);
+  const r = await scfRun(set, async (db, remote) => {
+    const result = await importFromScf(db, set.tenant, set.client, remote, set.endpoint);
+    if (result.approved > 0) await embedAfterWrite(db, config);
+    return result;
+  });
+  console.log(`from SCF for tenant ${set.tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.helped} helped, ${r.wrong} wrong`);
 }
 function reportCommand(args, data) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { tenant: { type: "string" } } });
@@ -6445,7 +6502,7 @@ async function importCommand(args, data) {
   const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" }, orbit: { type: "boolean" }, scf: { type: "boolean" } } });
   if (values.scf === true) {
     if (values["dry-run"] === true || values.orbit === true) throw new Refusal("usage: memory import --scf", 2);
-    return scfImport(data, process.cwd());
+    return scfImport(setUp(data), data, process.cwd());
   }
   const dryRun = values["dry-run"] === true;
   console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun, values.orbit === true), null, 2));

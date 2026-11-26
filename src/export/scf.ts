@@ -2,9 +2,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import { redact } from '../redact/redact.ts';
 import { recordAudit } from '../store/audit.ts';
 import { inTransaction } from '../store/transaction.ts';
-import { decide, proposals } from '../review/review.ts';
+import { applySupersession } from '../consolidate.ts';
 import { read, type EvidenceRow, type ItemRow } from './markdown.ts';
 import type { Anchor } from '../items.ts';
+import { scfEndpoint } from '../config.ts';
 
 /**
  * Swarm Code Factory (SCF) as a later backend (#13): this tenant's proposals are posted to the SCF configured for it as
@@ -43,7 +44,10 @@ export function scfClient(base: URL, key: string, timeoutMs = SCF_TIMEOUT_MS): S
     };
     let res: Response;
     try {
-      res = await fetch(new URL(`${base.pathname.replace(/\/$/, '')}${path}`, base), {
+      // Built from the validated origin and a fixed route, then checked: the key is never sent to another origin.
+      const target = new URL(`${scfEndpoint(base)}${path}`);
+      if (target.origin !== base.origin) return fail(`SCF at ${base.host}: a request would leave its origin`);
+      res = await fetch(target, {
         method,
         headers: { authorization: `Bearer ${key}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -65,7 +69,7 @@ export function scfClient(base: URL, key: string, timeoutMs = SCF_TIMEOUT_MS): S
   return { get: (path) => call('GET', path), post: (path, body) => call('POST', path, body) };
 }
 
-interface Remote {
+export interface Remote {
   id: string;
   status: string;
   fact_id: string | null;
@@ -75,7 +79,7 @@ interface Remote {
 const obj = (v: unknown): Record<string, unknown> => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 /** Every proposal SCF holds for this workspace, with the memory item id each carries, a page at a time. */
-async function remoteProposals(client: ScfClient): Promise<Remote[]> {
+export async function remoteProposals(client: ScfClient): Promise<Remote[]> {
   const out: Remote[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     const items = obj(await client.get(`/world/proposals?limit=${PAGE}&offset=${page * PAGE}`))['items'];
@@ -86,27 +90,27 @@ async function remoteProposals(client: ScfClient): Promise<Remote[]> {
       if (typeof p['id'] !== 'string' || typeof p['status'] !== 'string') throw new ScfError('SCF sent a proposal in a shape memory does not know');
       out.push({ id: p['id'], status: p['status'], fact_id: typeof p['fact_id'] === 'string' ? p['fact_id'] : null, item: typeof item === 'string' ? item : null });
     }
-    if (items.length < PAGE) break;
+    if (items.length < PAGE) return out;
   }
-  return out;
+  throw new ScfError(`SCF holds more than ${MAX_PAGES * PAGE} proposals, more than memory lists; nothing was sent`);
 }
 
 /** An item as SCF's ProposalIn: the statement is the fact's value, the item's own fields ride in its qualifiers. */
-function proposalOf(row: ItemRow, evidence: EvidenceRow[], rationale: string, statement: string): Record<string, unknown> {
+function proposalOf(row: ItemRow, evidence: EvidenceRow[]): Record<string, unknown> {
   const anchors = (JSON.parse(row.anchors_json) as Anchor[]).map((a) => ({ path: a.path, ...(a.symbol === undefined ? {} : { symbol: a.symbol }) }));
   return {
     subject: row.scope_key,
     phrase: row.type,
-    value: statement,
+    value: row.statement,
     layer: 'memory',
-    rationale,
+    rationale: row.rationale ?? '',
     qualifiers: {
       memory_item_id: row.id,
       type: row.type,
       scope: row.scope,
       origin_trust: row.origin_trust,
       anchors,
-      evidence: evidence.map((e) => ({ source_ref: redact(e.source_ref).text, author_role: e.author_role, captured_at: e.captured_at })),
+      evidence: evidence.map((e) => ({ source_ref: e.source_ref, author_role: e.author_role, captured_at: e.captured_at })),
     },
   };
 }
@@ -115,57 +119,60 @@ export interface ExportResult {
   posted: number;
   /** Already sent by an earlier run, here or from another machine. */
   already: number;
-  /** Text redaction would change: a stored item should never hold such text, so it is not sent. */
+  /** Items some outbound field of which redaction would change: a stored item should never hold such text, so none of it is sent. */
   withheld: number;
-  /** Set when SCF stopped answering part-way; what was sent before is recorded, the rest waits for the next run. */
-  stoppedBy?: string;
 }
 
+/** Every string an outbound payload carries, at any depth. */
+const strings = (v: unknown): string[] => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(strings) : typeof v === 'object' && v !== null ? Object.values(v).flatMap(strings) : []);
+/** Whether redaction would change any outbound field: statement, rationale, anchors, source references, all of it. */
+const redactable = (payload: unknown): boolean => strings(payload).some((t) => Object.keys(redact(t).counts).length > 0);
+
 /**
- * Posts this tenant's proposed items, none twice: an item with a link is skipped, and SCF's own list is read first so
- * a proposal a crashed run sent but could not record is linked, not sent again. Nothing is written locally until SCF has
- * answered, so an unreachable SCF leaves the store as it was.
+ * Posts this tenant's proposed items, none twice: an item linked to this SCF is skipped, and SCF's own list (`remote`,
+ * read before the store was opened) links a proposal a crashed run sent but could not record. Links are written in one
+ * transaction after every post succeeded, so a failure part-way leaves the store as it was and the next run adopts what
+ * was already posted.
  */
-export async function exportToScf(db: DatabaseSync, tenant: string, client: ScfClient, repository?: string): Promise<ExportResult> {
-  const linked = new Set((db.prepare('SELECT item_id FROM scf_links').all() as { item_id: string }[]).map((r) => r.item_id));
+export async function exportToScf(db: DatabaseSync, tenant: string, client: ScfClient, remote: Remote[], endpoint: string, repository?: string): Promise<ExportResult> {
+  const linked = new Set((db.prepare('SELECT item_id FROM scf_links WHERE endpoint = ?').all(endpoint) as { item_id: string }[]).map((r) => r.item_id));
   const all = read(db, tenant, repository).filter(
     ({ row }) => row.status === 'proposed' && row.quarantine === null && row.statement !== '' && (row.scope === 'repository' || row.scope === 'organisation') && row.scope_key !== '',
   );
   const todo = all.filter(({ row }) => !linked.has(row.id));
   const result: ExportResult = { posted: 0, already: all.length - todo.length, withheld: 0 };
-  if (todo.length === 0) return result;
-  const remote = new Map((await remoteProposals(client)).flatMap((p) => (p.item === null ? [] : [[p.item, p] as const])));
-  const link = db.prepare('INSERT OR IGNORE INTO scf_links (item_id, proposal_id, exported_at) VALUES (?, ?, ?)');
-  const record = (id: string, proposal: string): void => {
-    inTransaction(db, () => {
-      link.run(id, proposal, new Date().toISOString());
-      recordAudit(db, 'scf_exported', { type: 'item', id }, { proposal });
-    });
-  };
+  const known = new Map(remote.flatMap((p) => (p.item === null ? [] : [[p.item, p] as const])));
+  const links: { id: string; proposal: string }[] = [];
   for (const { row, evidence } of todo) {
-    const known = remote.get(row.id);
-    if (known !== undefined) {
-      record(row.id, known.id);
+    const found = known.get(row.id);
+    if (found !== undefined) {
+      links.push({ id: row.id, proposal: found.id });
       result.already++;
       continue;
     }
-    const statement = redact(row.statement);
-    const rationale = redact(row.rationale ?? '');
-    if (Object.keys(statement.counts).length > 0 || Object.keys(rationale.counts).length > 0) {
+    const payload = proposalOf(row, evidence);
+    if (redactable(payload)) {
       result.withheld++;
       continue;
     }
+    let answer: Record<string, unknown>;
     try {
-      const answer = obj(await client.post('/world/proposals', proposalOf(row, evidence, rationale.text, statement.text)));
-      if (typeof answer['id'] !== 'string') throw new ScfError('SCF answered a proposal without an id');
-      record(row.id, answer['id']);
-      result.posted++;
+      answer = obj(await client.post('/world/proposals', payload));
     } catch (error) {
-      if (!(error instanceof ScfError)) throw error;
-      if (result.posted === 0 && result.already === all.length - todo.length) throw error;
-      return { ...result, stoppedBy: error.message };
+      if (error instanceof ScfError && result.posted > 0) throw new ScfError(`${error.message}; ${result.posted} proposals were already sent and the next run adopts them`);
+      throw error;
     }
+    if (typeof answer['id'] !== 'string') throw new ScfError('SCF answered a proposal without an id');
+    links.push({ id: row.id, proposal: answer['id'] });
+    result.posted++;
   }
+  inTransaction(db, () => {
+    const link = db.prepare('INSERT OR IGNORE INTO scf_links (item_id, endpoint, proposal_id, exported_at) VALUES (?, ?, ?, ?)');
+    for (const { id, proposal } of links) {
+      link.run(id, endpoint, proposal, new Date().toISOString());
+      recordAudit(db, 'scf_exported', { type: 'item', id }, { proposal });
+    }
+  });
   return result;
 }
 
@@ -176,54 +183,75 @@ export interface FeedbackResult {
   wrong: number;
 }
 
-/** A run outcome list SCF sent, or throws when it is not one: an unknown outcome is never counted as either. */
+const FEEDBACK_PAGE = 500;
+
+/** Every run outcome SCF holds for a fact, a page at a time; one it does not know, or a listing it cuts short, is an error, never a count. */
 async function outcomes(client: ScfClient, fact: string): Promise<{ run: string; outcome: 'reinforced' | 'weakened' }[]> {
-  const items = obj(await client.get(`/world/facts/${encodeURIComponent(fact)}/feedback`))['items'];
-  if (!Array.isArray(items)) throw new ScfError('SCF sent feedback in a shape memory does not know');
-  return items.map((raw) => {
-    const f = obj(raw);
-    if (typeof f['run_id'] !== 'string' || (f['outcome'] !== 'reinforced' && f['outcome'] !== 'weakened')) throw new ScfError('SCF sent feedback in a shape memory does not know');
-    return { run: f['run_id'], outcome: f['outcome'] };
-  });
+  const out: { run: string; outcome: 'reinforced' | 'weakened' }[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const items = obj(await client.get(`/world/facts/${encodeURIComponent(fact)}/feedback?limit=${FEEDBACK_PAGE}&offset=${page * FEEDBACK_PAGE}`))['items'];
+    if (!Array.isArray(items)) throw new ScfError('SCF sent feedback in a shape memory does not know');
+    for (const raw of items) {
+      const f = obj(raw);
+      if (typeof f['run_id'] !== 'string' || (f['outcome'] !== 'reinforced' && f['outcome'] !== 'weakened')) throw new ScfError('SCF sent feedback in a shape memory does not know');
+      out.push({ run: f['run_id'], outcome: f['outcome'] });
+    }
+    if (items.length < FEEDBACK_PAGE) return out;
+  }
+  throw new ScfError('SCF holds more run outcomes for one fact than memory lists; nothing was applied');
 }
 
 /**
  * Brings SCF's side back: an accepted proposal makes its item active, a rejected one rejects it (the owner decided it
- * in SCF's inbox), and each run outcome on the accepted fact counts once as helped or wrong. Only items this store linked
- * are touched, whatever SCF answers.
+ * in SCF's inbox), and each run outcome on the accepted fact counts once as helped or wrong. Everything is fetched first
+ * and applied in one transaction, so an SCF that fails part-way changes nothing. Only items this store linked to this SCF
+ * are touched, looked up by their link, whatever SCF answers.
  */
-export async function importFromScf(db: DatabaseSync, tenant: string, client: ScfClient): Promise<FeedbackResult> {
+export async function importFromScf(db: DatabaseSync, tenant: string, client: ScfClient, remote: Remote[], endpoint: string): Promise<FeedbackResult> {
   const result: FeedbackResult = { approved: 0, rejected: 0, helped: 0, wrong: 0 };
-  const links = db.prepare('SELECT item_id, proposal_id, fact_id FROM scf_links ORDER BY item_id').all() as { item_id: string; proposal_id: string; fact_id: string | null }[];
-  if (links.length === 0) return result;
-  const remote = new Map((await remoteProposals(client)).map((p) => [p.id, p]));
+  const links = db
+    .prepare('SELECT l.item_id, l.proposal_id, l.fact_id, i.status FROM scf_links l JOIN items i ON i.id = l.item_id WHERE l.endpoint = ? AND i.tenant = ? ORDER BY l.item_id')
+    .all(endpoint, tenant) as { item_id: string; proposal_id: string; fact_id: string | null; status: string }[];
+  const byId = new Map(remote.map((p) => [p.id, p]));
   const seen = db.prepare('SELECT 1 FROM scf_feedback WHERE item_id = ? AND run_id = ?');
-  for (const { item_id: id, proposal_id, fact_id } of links) {
-    const p = remote.get(proposal_id);
+  const plan: { id: string; decision: 'accepted' | 'rejected' | null; fact: string | null; fresh: { run: string; outcome: 'reinforced' | 'weakened' }[] }[] = [];
+  for (const l of links) {
+    const p = byId.get(l.proposal_id);
     if (p === undefined) continue;
-    const open = p.status === 'accepted' || p.status === 'rejected' ? proposals(db, tenant, id).find((q) => q.status === 'proposed') : undefined;
-    if (open !== undefined) {
-      if (p.status === 'accepted') decide(db, open, 'approve', { scope: open.scope, scopeKey: open.scope_key });
-      else decide(db, open, 'reject', { reason: 'rejected in SCF' });
-      result[p.status === 'accepted' ? 'approved' : 'rejected']++;
-    }
-    const fact = fact_id ?? p.fact_id;
-    if (p.status !== 'accepted' || fact === null) continue;
-    if (fact_id === null) db.prepare('UPDATE scf_links SET fact_id = ? WHERE item_id = ?').run(fact, id);
-    const fresh = (await outcomes(client, fact)).filter((o) => seen.get(id, o.run) === undefined);
-    if (fresh.length === 0) continue;
-    inTransaction(db, () => {
+    const decided = p.status === 'accepted' || p.status === 'rejected';
+    const fact = p.status === 'accepted' ? (l.fact_id ?? p.fact_id) : null;
+    const fresh = fact === null ? [] : (await outcomes(client, fact)).filter((o) => seen.get(l.item_id, o.run) === undefined);
+    plan.push({ id: l.item_id, decision: decided && l.status === 'proposed' ? (p.status as 'accepted' | 'rejected') : null, fact, fresh });
+  }
+  inTransaction(db, () => {
+    const now = new Date().toISOString();
+    for (const { id, decision, fact, fresh } of plan) {
+      if (decision === 'accepted') {
+        if (db.prepare("UPDATE items SET status = 'active', status_reason = NULL, stale_reports = 0, valid_from = ? WHERE id = ? AND tenant = ? AND status = 'proposed'").run(now, id, tenant).changes === 1) {
+          const older = (db.prepare('SELECT supersedes FROM items WHERE id = ?').get(id) as { supersedes: string | null }).supersedes;
+          if (older !== null) applySupersession(db, id, older, 'proposed', true);
+          recordAudit(db, 'proposal_approved', { type: 'item', id }, { decision: 'approve', via: 'scf' });
+          result.approved++;
+        }
+      } else if (decision === 'rejected') {
+        if (db.prepare("UPDATE items SET status = 'rejected', valid_to = ?, status_reason = 'rejected in SCF' WHERE id = ? AND tenant = ? AND status = 'proposed'").run(now, id, tenant).changes === 1) {
+          recordAudit(db, 'proposal_rejected', { type: 'item', id }, { decision: 'reject', via: 'scf' });
+          result.rejected++;
+        }
+      }
+      if (fact !== null) db.prepare('UPDATE scf_links SET fact_id = ? WHERE item_id = ? AND endpoint = ? AND fact_id IS NULL').run(fact, id, endpoint);
+      if (fresh.length === 0) continue;
       const add = db.prepare('INSERT OR IGNORE INTO scf_feedback (item_id, run_id, outcome) VALUES (?, ?, ?)');
       let helped = 0;
       let wrong = 0;
       for (const o of fresh) {
         if (add.run(id, o.run, o.outcome).changes === 1) o.outcome === 'reinforced' ? helped++ : wrong++;
       }
-      db.prepare('UPDATE items SET helped = helped + ?, wrong = wrong + ?, reinforced_at = CASE WHEN ? > 0 THEN ? ELSE reinforced_at END WHERE id = ?').run(helped, wrong, helped, new Date().toISOString(), id);
+      db.prepare('UPDATE items SET helped = helped + ?, wrong = wrong + ?, reinforced_at = CASE WHEN ? > 0 THEN ? ELSE reinforced_at END WHERE id = ?').run(helped, wrong, helped, now, id);
       recordAudit(db, 'scf_feedback', { type: 'item', id }, { helped, wrong });
       result.helped += helped;
       result.wrong += wrong;
-    });
-  }
+    }
+  });
   return result;
 }

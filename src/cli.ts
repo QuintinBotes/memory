@@ -11,6 +11,7 @@ import {
   TENANT_NAME,
   TENANT_PATTERN,
   scfUrl,
+  scfEndpoint,
   consented,
   recallOn,
   currentConfigDir,
@@ -47,7 +48,8 @@ import { importSilos } from './import/import.ts';
 import { SYMBOL_KEY } from './import/silos.ts';
 import { renderReport, tenantReport, testCoverage } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
-import { ScfError, exportToScf, importFromScf, scfClient, type ScfClient } from './export/scf.ts';
+import { ScfError, exportToScf, importFromScf, remoteProposals, scfClient, type Remote, type ScfClient } from './export/scf.ts';
+import { withFileLockAsync } from './store/refresh-lock.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
@@ -594,8 +596,8 @@ async function exportCommand(args: string[], data: string, cwd: string): Promise
   }
 }
 
-/** The SCF client and the tenant's store for `export --to scf` and `import --scf`; refuses unless the owner set both up for this tenant. */
-function scfSetUp(config: Config, data: string, cwd: string): { tenant: string; client: ScfClient; db: DatabaseSync } {
+/** What `export --to scf` and `import --scf` need: the tenant, its SCF client and endpoint, its store file; refuses unless the owner set all of it up. */
+function scfSetUp(config: Config, data: string, cwd: string): { tenant: string; client: ScfClient; endpoint: string; file: string } {
   if (!covers(config, 'scf')) throw new Refusal('SCF is a kind of data you have not agreed to; run memory init and confirm');
   const context = resolveContext(cwd, config, currentConfigDir());
   const tenant = context.tenant;
@@ -604,9 +606,10 @@ function scfSetUp(config: Config, data: string, cwd: string): { tenant: string; 
   if (address === undefined) throw new Refusal(`tenant ${tenant} has no SCF address; memory init --scf ${tenant}=<url> sets one`);
   const key = process.env['SCF_API_KEY'];
   if (key === undefined || key === '') throw new Refusal('SCF_API_KEY is not set');
-  const db = openStore(tenantFile(data, tenant), false);
-  if (db === null) throw new Refusal(`tenant ${tenant} has no items yet`);
-  return { tenant, client: scfClient(scfUrl(address.url) as URL, key), db };
+  const file = tenantFile(data, tenant);
+  if (!existsSync(file)) throw new Refusal(`tenant ${tenant} has no items yet`);
+  const url = scfUrl(address.url) as URL;
+  return { tenant, client: scfClient(url, key), endpoint: scfEndpoint(url), file };
 }
 
 const unreachable = (error: unknown): never => {
@@ -614,30 +617,40 @@ const unreachable = (error: unknown): never => {
   throw error;
 };
 
+/**
+ * One SCF run, in order: lock (two runs never post the same item), ask SCF what it holds (so an SCF that does not answer
+ * costs no write, not even a migration), then open the store. A run that cannot take the lock says so.
+ */
+async function scfRun<T>(set: { client: ScfClient; file: string }, work: (db: DatabaseSync, remote: Remote[]) => Promise<T>): Promise<T> {
+  const done = await withFileLockAsync(`${set.file}.scf.lock`, async () => {
+    const remote = await remoteProposals(set.client).catch(unreachable);
+    const db = openStore(set.file, false)!;
+    try {
+      return { value: await work(db, remote).catch(unreachable) };
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+  if (done === undefined) throw new Refusal('another SCF export or import of this tenant is running; try again when it finishes');
+  return done.value;
+}
+
 /** `memory export --to scf`: this tenant's proposals to the SCF set for it; the person file is never read. */
 async function scfExport(config: Config, data: string, cwd: string, reach: Reach | undefined): Promise<void> {
-  const { tenant, client, db } = scfSetUp(config, data, cwd);
-  try {
-    const r = await exportToScf(db, tenant, client, reach === undefined || reach === 'all' ? undefined : reach.repository).catch(unreachable);
-    console.log(`sent ${r.posted} proposals of tenant ${tenant} to SCF; ${r.already} already there${r.withheld > 0 ? `; ${r.withheld} not sent because they hold text redaction removes` : ''}`);
-    if (r.stoppedBy !== undefined) {
-      console.error(`${r.stoppedBy}; the rest waits for the next run`);
-      process.exitCode = 1;
-    }
-  } finally {
-    db.close();
-  }
+  const set = scfSetUp(config, data, cwd);
+  const r = await scfRun(set, (db, remote) => exportToScf(db, set.tenant, set.client, remote, set.endpoint, reach === undefined || reach === 'all' ? undefined : reach.repository));
+  console.log(`sent ${r.posted} proposals of tenant ${set.tenant} to SCF; ${r.already} already there${r.withheld > 0 ? `; ${r.withheld} not sent because they hold text redaction removes` : ''}`);
 }
 
 /** `memory import --scf`: SCF's decisions and run outcomes, applied to the items this tenant sent. */
-async function scfImport(data: string, cwd: string): Promise<void> {
-  const { tenant, client, db } = scfSetUp(setUp(data), data, cwd);
-  try {
-    const r = await importFromScf(db, tenant, client).catch(unreachable);
-    console.log(`from SCF for tenant ${tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.helped} helped, ${r.wrong} wrong`);
-  } finally {
-    db.close();
-  }
+async function scfImport(config: Config, data: string, cwd: string): Promise<void> {
+  const set = scfSetUp(config, data, cwd);
+  const r = await scfRun(set, async (db, remote) => {
+    const result = await importFromScf(db, set.tenant, set.client, remote, set.endpoint);
+    if (result.approved > 0) await embedAfterWrite(db, config);
+    return result;
+  });
+  console.log(`from SCF for tenant ${set.tenant}: ${r.approved} approved, ${r.rejected} rejected, ${r.helped} helped, ${r.wrong} wrong`);
 }
 
 /** `memory report [--tenant <name>]`: the owner's view of which items help and which mislead, one section per tenant bound to this config. */
@@ -666,7 +679,7 @@ async function importCommand(args: string[], data: string): Promise<void> {
   const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' }, scf: { type: 'boolean' } } });
   if (values.scf === true) {
     if (values['dry-run'] === true || values.orbit === true) throw new Refusal('usage: memory import --scf', 2);
-    return scfImport(data, process.cwd());
+    return scfImport(setUp(data), data, process.cwd());
   }
   const dryRun = values['dry-run'] === true;
   console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun, values.orbit === true), null, 2));

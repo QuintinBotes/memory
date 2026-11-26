@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { runProgram } from './provider/run.ts';
 import type { Config } from './config.ts';
 
 export interface Context {
@@ -21,13 +21,10 @@ export const REPOSITORY_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR
  * caller never reads "could not run" as "not there".
  */
 export function git(cwd: string, ...args: string[]): string | null {
-  const env = { ...process.env };
-  for (const k of REPOSITORY_VARIABLES) delete env[k];
   // A partial clone may fetch a missing object; it must never wait on a credential prompt in a hook.
-  env['GIT_TERMINAL_PROMPT'] = '0';
-  const r = spawnSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
-  if (r.error !== undefined && (r.error as NodeJS.ErrnoException).code !== 'ENOENT') throw r.error;
-  return r.status === 0 ? r.stdout : null;
+  const r = runProgram('git', args, cwd, { GIT_TERMINAL_PROMPT: '0' });
+  if (r.error !== undefined && r.missing !== true) throw r.error;
+  return r.stdout;
 }
 
 /** `owner/repo` from a github.com remote URL; null for any other host or shape. */

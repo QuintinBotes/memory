@@ -26,3 +26,25 @@ export function runProvider(command: readonly string[], cwd: string, request: un
   if (r.status !== 0) return { ok: false, reason: `${program} exited ${r.status ?? 'by signal'}` };
   return { ok: true, stdout: r.stdout };
 }
+
+/** What a program memory runs for itself (git) may see: no key, token or path of the environment reaches it. */
+const PASS_THROUGH = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'];
+export const PROGRAM_MAX_OUTPUT = 64 * 1024 * 1024;
+/** Ends a program that does not answer; `MEMORY_PROGRAM_TIMEOUT_MS` shortens it, for tests of exactly that. */
+export const programTimeoutMs = (env: NodeJS.ProcessEnv = process.env): number => {
+  const n = Number(env['MEMORY_PROGRAM_TIMEOUT_MS']);
+  return Number.isInteger(n) && n > 0 ? n : 15_000;
+};
+
+/**
+ * Runs `program` with `args` without a shell, with the environment cut to PASS_THROUGH plus `extra`, SIGKILL at the
+ * timeout (SIGTERM can be ignored) and its output capped. `stdout` is null when it exited non-zero; an error is returned
+ * (never thrown) when it could not run, timed out or flooded, with `missing` set when it is not installed.
+ */
+export function runProgram(program: string, args: readonly string[], cwd: string, extra: Record<string, string> = {}): { stdout: string | null; error?: Error; missing?: boolean } {
+  const env: Record<string, string> = { ...extra };
+  for (const k of PASS_THROUGH) if (process.env[k] !== undefined) env[k] = process.env[k]!;
+  const r = spawnSync(program, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: programTimeoutMs(), killSignal: 'SIGKILL', maxBuffer: PROGRAM_MAX_OUTPUT });
+  if (r.error !== undefined) return { stdout: null, error: r.error, missing: (r.error as NodeJS.ErrnoException).code === 'ENOENT' };
+  return { stdout: r.status === 0 ? r.stdout : null };
+}

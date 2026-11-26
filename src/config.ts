@@ -78,8 +78,13 @@ export function scfUrl(text: string): URL | string {
   const local = ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
   if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) return 'an SCF address must be https (http only to this machine)';
   if (u.username !== '' || u.password !== '' || u.search !== '' || u.hash !== '') return 'an SCF address carries no credentials, query or fragment';
+  // No empty or dot segment: "//host" in a path would read as another host once a route is appended.
+  if (!/^(\/[A-Za-z0-9._~-]+)*\/?$/.test(u.pathname) || u.pathname.split('/').some((seg) => seg === '.' || seg === '..')) return 'an SCF address path holds only plain segments';
   return u;
 }
+
+/** What links to an SCF are scoped to: its origin and path prefix, no trailing slash. */
+export const scfEndpoint = (u: URL): string => `${u.origin}${u.pathname.replace(/\/$/, '')}`;
 
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
