@@ -1,11 +1,11 @@
-import { closeSync, mkdirSync, openSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /** A lock older than this belongs to a process that died; the next taker takes it over. */
 const STALE_MS = 30_000;
 
 /** Takes the lock file `lock`, or returns undefined when it is still held after `waitMs` (0 never waits); the result releases it. */
-function acquire(lock: string, waitMs: number): (() => void) | undefined {
+function acquire(lock: string, waitMs: number, staleMs: number): (() => void) | undefined {
   mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + waitMs;
   let fd: number | undefined;
@@ -14,7 +14,7 @@ function acquire(lock: string, waitMs: number): (() => void) | undefined {
       fd = openSync(lock, 'wx', 0o600);
     } catch {
       try {
-        if (Date.now() - statSync(lock).mtimeMs > STALE_MS) {
+        if (Date.now() - statSync(lock).mtimeMs > staleMs) {
           unlinkSync(lock);
           continue;
         }
@@ -41,8 +41,8 @@ function acquire(lock: string, waitMs: number): (() => void) | undefined {
  * Runs `work` holding the lock file `lock`, or returns `undefined` when it is still held after `waitMs` (0 never waits).
  * A separate file, so a holder never blocks a store's readers or writers.
  */
-export function withFileLock<T>(lock: string, work: () => T, waitMs = 0): T | undefined {
-  const release = acquire(lock, waitMs);
+export function withFileLock<T>(lock: string, work: () => T, waitMs = 0, staleMs = STALE_MS): T | undefined {
+  const release = acquire(lock, waitMs, staleMs);
   if (release === undefined) return undefined;
   try {
     return work();
@@ -52,15 +52,24 @@ export function withFileLock<T>(lock: string, work: () => T, waitMs = 0): T | un
 }
 
 /**
- * As withFileLock for work that awaits (a network call): held until the promise settles.
- * shortcut: a lock older than 30 s counts as dead, so a run longer than that may be joined by another; add a heartbeat if exports grow that long.
+ * As withFileLock for work that awaits (a network call): held until the promise settles. A heartbeat touches the lock
+ * while the work runs, so a long run is never taken for a dead one; `staleMs` is only injectable for tests.
  */
-export async function withFileLockAsync<T>(lock: string, work: () => Promise<T>, waitMs = 0): Promise<T | undefined> {
-  const release = acquire(lock, waitMs);
+export async function withFileLockAsync<T>(lock: string, work: () => Promise<T>, waitMs = 0, staleMs = STALE_MS): Promise<T | undefined> {
+  const release = acquire(lock, waitMs, staleMs);
   if (release === undefined) return undefined;
+  const beat = setInterval(() => {
+    try {
+      const now = new Date();
+      utimesSync(lock, now, now);
+    } catch {
+      // released or taken over: nothing to refresh
+    }
+  }, Math.max(1, Math.floor(staleMs / 3)));
   try {
     return await work();
   } finally {
+    clearInterval(beat);
     release();
   }
 }

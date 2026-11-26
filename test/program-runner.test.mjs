@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
 import { setup, run } from './helpers.mjs';
 
 // #81: every git memory runs goes through the shared runner: allowlisted environment, SIGKILL at a timeout, capped output.
@@ -50,4 +54,18 @@ test('G4 a machine without git has no tenant and says so instead of failing', ()
   mkdirSync(empty);
   const r = run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA, path: empty });
   assert.equal(r.status, 0, r.stderr);
+});
+
+test('G5 MEMORY_PROGRAM_TIMEOUT_MS is ignored outside the test harness and clamped to 100 ms - 15 s inside it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'memory-ts-'));
+  const outfile = join(dir, 'run.mjs');
+  await build({ entryPoints: [join(dirname(fileURLToPath(import.meta.url)), '../src/provider/run.ts')], bundle: true, platform: 'node', format: 'esm', target: 'node22', outfile, logLevel: 'silent' });
+  const { programTimeoutMs } = await import(pathToFileURL(outfile).href);
+  assert.equal(programTimeoutMs({ MEMORY_PROGRAM_TIMEOUT_MS: '1' }), 15_000);
+  assert.equal(programTimeoutMs({ MEMORY_PROGRAM_TIMEOUT_MS: '999999999' }), 15_000);
+  const h = { MEMORY_TEST_HARNESS: '1' };
+  assert.equal(programTimeoutMs({ ...h, MEMORY_PROGRAM_TIMEOUT_MS: '1' }), 100);
+  assert.equal(programTimeoutMs({ ...h, MEMORY_PROGRAM_TIMEOUT_MS: '300' }), 300);
+  assert.equal(programTimeoutMs({ ...h, MEMORY_PROGRAM_TIMEOUT_MS: '999999999' }), 15_000);
+  assert.equal(programTimeoutMs(h), 15_000);
 });

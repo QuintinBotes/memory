@@ -30,10 +30,10 @@ export function runProvider(command: readonly string[], cwd: string, request: un
 /** What a program memory runs for itself (git) may see: no key, token or path of the environment reaches it. */
 const PASS_THROUGH = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'];
 export const PROGRAM_MAX_OUTPUT = 64 * 1024 * 1024;
-/** Ends a program that does not answer; `MEMORY_PROGRAM_TIMEOUT_MS` shortens it, for tests of exactly that. */
+/** Ends a program that does not answer. Only the test harness (`MEMORY_TEST_HARNESS`) may shorten it with `MEMORY_PROGRAM_TIMEOUT_MS`; always within 100 ms to 15 s. */
 export const programTimeoutMs = (env: NodeJS.ProcessEnv = process.env): number => {
   const n = Number(env['MEMORY_PROGRAM_TIMEOUT_MS']);
-  return Number.isInteger(n) && n > 0 ? n : 15_000;
+  return env['MEMORY_TEST_HARNESS'] === '1' && Number.isInteger(n) ? Math.min(15_000, Math.max(100, n)) : 15_000;
 };
 
 /**

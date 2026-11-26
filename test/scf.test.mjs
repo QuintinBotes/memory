@@ -486,3 +486,37 @@ test('F13 feedback is read a page at a time', async () => {
     await betaScf.close();
   }
 });
+
+test('F14 a store made by main v15 (transcripts) upgrades to v16 with its transcripts kept, and SCF and transcript commands work', async () => {
+  const { s, acmeScf, betaScf } = await configured();
+  try {
+    propose(s, s.acmeApi, s.configA, 'The cache is cleared on deploy');
+    const file = join(s.data, 'tenants/acme.sqlite');
+    const old = new DatabaseSync(file);
+    try {
+      old.exec('DROP TABLE scf_links; DROP TABLE scf_feedback; PRAGMA user_version = 15;');
+      old.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES ('t1', 'old-sess', 'path', 'acme/api', '/x/old.jsonl', '2026-01-01T00:00:00Z')").run();
+    } finally {
+      old.close();
+    }
+    assert.equal(run(['init', '--transcripts', 'on', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
+    const r = await exportScf(s);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /sent 1 proposals of tenant acme/);
+    assert.deepEqual(rows(s, 'PRAGMA user_version'), [{ user_version: 16 }]);
+    assert.deepEqual(rows(s, "SELECT name FROM pragma_table_info('scf_links') WHERE name IN ('endpoint', 'held') ORDER BY name"), [{ name: 'endpoint' }, { name: 'held' }]);
+    assert.equal(rows(s, "SELECT count(*) AS n FROM sqlite_master WHERE name = 'scf_feedback'")[0].n, 1);
+    assert.equal(rows(s, 'SELECT count(*) AS n FROM scf_links')[0].n, 1);
+    acmeScf.accept(0, 'fact-1');
+    const imp = await importScf(s);
+    assert.equal(imp.status, 0, imp.stderr);
+    assert.match(imp.stdout, /1 approved/);
+    const end = run(['transcript'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 'new-sess', hook_event_name: 'SessionEnd', transcript_path: join(s.base, 'new.jsonl'), cwd: s.acmeApi }) });
+    assert.equal(end.status, 0, end.stderr);
+    assert.deepEqual(rows(s, 'SELECT id FROM transcripts ORDER BY at, id').map((x) => x.id).includes('t1'), true);
+    assert.equal(rows(s, 'SELECT count(*) AS n FROM transcripts')[0].n, 2);
+  } finally {
+    await acmeScf.close();
+    await betaScf.close();
+  }
+});

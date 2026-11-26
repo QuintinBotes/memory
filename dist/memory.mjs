@@ -210,7 +210,7 @@ var PASS_THROUGH = ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "XDG_CONFIG_HOME
 var PROGRAM_MAX_OUTPUT = 64 * 1024 * 1024;
 var programTimeoutMs = (env = process.env) => {
   const n = Number(env["MEMORY_PROGRAM_TIMEOUT_MS"]);
-  return Number.isInteger(n) && n > 0 ? n : 15e3;
+  return env["MEMORY_TEST_HARNESS"] === "1" && Number.isInteger(n) ? Math.min(15e3, Math.max(100, n)) : 15e3;
 };
 function runProgram(program, args, cwd, extra = {}) {
   const env = { ...extra };
@@ -1800,10 +1800,10 @@ function networkFilesystem(dir) {
 }
 
 // src/store/refresh-lock.ts
-import { closeSync, mkdirSync as mkdirSync3, openSync, statSync, unlinkSync as unlinkSync2, writeSync } from "node:fs";
+import { closeSync, mkdirSync as mkdirSync3, openSync, statSync, unlinkSync as unlinkSync2, utimesSync, writeSync } from "node:fs";
 import { dirname as dirname4 } from "node:path";
 var STALE_MS = 3e4;
-function acquire(lock, waitMs) {
+function acquire(lock, waitMs, staleMs) {
   mkdirSync3(dirname4(lock), { recursive: true, mode: 448 });
   const deadline = Date.now() + waitMs;
   let fd;
@@ -1812,7 +1812,7 @@ function acquire(lock, waitMs) {
       fd = openSync(lock, "wx", 384);
     } catch {
       try {
-        if (Date.now() - statSync(lock).mtimeMs > STALE_MS) {
+        if (Date.now() - statSync(lock).mtimeMs > staleMs) {
           unlinkSync2(lock);
           continue;
         }
@@ -1833,8 +1833,8 @@ function acquire(lock, waitMs) {
     }
   };
 }
-function withFileLock(lock, work, waitMs = 0) {
-  const release = acquire(lock, waitMs);
+function withFileLock(lock, work, waitMs = 0, staleMs = STALE_MS) {
+  const release = acquire(lock, waitMs, staleMs);
   if (release === void 0) return void 0;
   try {
     return work();
@@ -1842,12 +1842,20 @@ function withFileLock(lock, work, waitMs = 0) {
     release();
   }
 }
-async function withFileLockAsync(lock, work, waitMs = 0) {
-  const release = acquire(lock, waitMs);
+async function withFileLockAsync(lock, work, waitMs = 0, staleMs = STALE_MS) {
+  const release = acquire(lock, waitMs, staleMs);
   if (release === void 0) return void 0;
+  const beat = setInterval(() => {
+    try {
+      const now = /* @__PURE__ */ new Date();
+      utimesSync(lock, now, now);
+    } catch {
+    }
+  }, Math.max(1, Math.floor(staleMs / 3)));
   try {
     return await work();
   } finally {
+    clearInterval(beat);
     release();
   }
 }
