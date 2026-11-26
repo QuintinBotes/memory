@@ -26,7 +26,7 @@ import {
   type Config,
 } from './config.ts';
 import { filterRepository, git, resolveContext, type Context, type Reach } from './context.ts';
-import { refusal } from './gate.ts';
+import { Refusal, refusal } from './gate.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
@@ -36,8 +36,9 @@ import { adoptCandidate, atHead, logAnchors, managedBy, providerConfig, refreshA
 import { networkFilesystem } from './store/filesystem.ts';
 import { withFileLock, withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
+import { UI_HOST, serveUi } from './ui/server.ts';
 import { EmbedError, WRITE_TIMEOUT_MS, notOnThisMachine, providerFor } from './embed/provider.ts';
-import { embedPending } from './embed/vectors.ts';
+import { embedAfterWrite, embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
 import { DEFAULT_STANDARDS, applyPromotion, insidePath, promotions, propose as proposePromotions, rejectPromotion, renderPromotion } from './promote/promote.ts';
 import { applyEdit, edits, loadInstructions, rejectEdit, renderEdit, type Withheld } from './instructions.ts';
@@ -55,7 +56,7 @@ import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { OUTCOMES, recordOutcome, routeToolsets, type Outcome } from './recall/toolsets.ts';
-import { declineSupersession, decide, isPendingSupersession, proposals, reanchorCandidates, renderProposals, type Proposal } from './review/review.ts';
+import { decideById, proposalStores, proposals, renderProposals, type Proposal } from './review/review.ts';
 import { MODEL_DEFAULTS, expireTranscripts, modelIsLocal, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
 import { modelTimeoutMs, runProvider } from './provider/run.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
@@ -176,6 +177,11 @@ const USAGE = `usage: memory <command>
       nothing unless the repository's .orbit/config.yaml has knowledge.lessons_in_prompts true. Exits 2 without a context
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_related, memory_propose, memory_feedback
+  ui [--port <n>] [--yes-non-interactive]
+      a local page to browse, search (ranked as memory_search), edit (as a supersession) and review what review lists,
+      on 127.0.0.1 only; any other --host is refused. Prints the address with this run's token; stop it with Ctrl-C.
+      It can apply instruction-file edits, so it starts only from a terminal, as conflicts apply does, unless
+      --yes-non-interactive is given (put an ask rule on it)
   session-start
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
@@ -231,16 +237,6 @@ const USAGE = `usage: memory <command>
   eval verdict --scorecard <file> --lab <file>
       whether auto memory may be switched off: only when both files of rows show memory no worse
   --version`;
-
-/** Exit 1: refused, nothing was written. Exit 2: the command cannot run as given. */
-class Refusal extends Error {
-  constructor(
-    message: string,
-    readonly code: 1 | 2 = 1,
-  ) {
-    super(message);
-  }
-}
 
 const NOT_SET_UP = 'memory is not set up, or its configuration changed since you agreed to it; run memory init and confirm the plan';
 
@@ -321,27 +317,6 @@ function init(args: string[], data: string): void {
   recordAudit(db, 'consent_granted', null, { planHash: config.consent.planHash, version: PLAN_VERSION });
   db.close();
   console.error('Consent recorded. Memory is on for the tenants this config is bound to.');
-}
-
-/**
- * After a write: embeds what is now active here and has no vector. A failure never undoes the write; it is said, and
- * `memory embed --backfill` fills the gap. No key is the normal state of a machine that does not use embeddings, so it is not said.
- * `tenant` is the file's tenant, '' for the person file: a tenant's text goes only to an embedder on this machine (#28).
- */
-async function embedAfterWrite(db: DatabaseSync, config: Config, tenant: string): Promise<void> {
-  if (!covers(config, 'embeddings')) return;
-  const provider = providerFor(config, WRITE_TIMEOUT_MS);
-  if (provider === null) return;
-  if (tenant !== '' && !provider.local) {
-    console.error(`memory: not embedded (${notOnThisMachine(provider, tenant)})`);
-    return;
-  }
-  try {
-    await embedPending(db, provider);
-  } catch (error) {
-    if (!(error instanceof EmbedError)) throw error;
-    if (!error.noKey) console.error(`memory: not embedded (${error.message}); memory embed --backfill fills it later`);
-  }
 }
 
 /** `memory embed --backfill`: the stores this repository's tenant and the person file hold. */
@@ -728,11 +703,6 @@ async function importCommand(args: string[], data: string): Promise<void> {
   if (dryRun) console.error('Nothing was written. Run memory import without --dry-run to store these as proposals.');
 }
 
-/** The stores whose proposals may be reviewed here: this repository's tenant, then the person file. */
-function proposalStores(data: string, context: Context): { file: string; tenant: string }[] {
-  return [...(context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }]), { file: personFile(data), tenant: '' }];
-}
-
 /** The edits to instruction files that wait for the owner, in the stores this repository may see. */
 function openEdits(data: string, context: Context): ReturnType<typeof edits> {
   const out: ReturnType<typeof edits> = [];
@@ -820,9 +790,7 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
       }
       process.stdout.write(renderEdit(ins, e));
       if (values.confirm !== true) return void console.error('Nothing was written. Run the same command with --confirm to write this edit.');
-      if (!process.stdin.isTTY && values['yes-non-interactive'] !== true) {
-        throw new Refusal('nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command', 2);
-      }
+      ownerTerminal(values['yes-non-interactive'], 'nothing was written: apply is');
       try {
         return void console.log(applyEdit(db, ins, e));
       } catch (error) {
@@ -837,6 +805,13 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
     return;
   }
   throw new Refusal(`no edit ${id} here; memory conflicts lists them`);
+}
+
+/** What lets a command write an instruction file: the owner's terminal (stdin a TTY), or --yes-non-interactive under an ask rule. */
+function ownerTerminal(yes: boolean | undefined, refused: string): void {
+  if (!process.stdin.isTTY && yes !== true) {
+    throw new Refusal(`${refused} run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command`, 2);
+  }
 }
 
 /**
@@ -879,9 +854,7 @@ function promoteCommand(args: string[], data: string, cwd: string): void {
         return void console.log(`rejected ${p.id}; it is kept so it is not proposed again, and no file was written`);
       }
       process.stdout.write(fence(PROPOSALS_LABEL, renderPromotion(p)));
-      if (!process.stdin.isTTY && values['yes-non-interactive'] !== true) {
-        throw new Refusal('nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command', 2);
-      }
+      ownerTerminal(values['yes-non-interactive'], 'nothing was written: apply is');
       console.log(applyPromotion(db, p, top, context.tenant, context.repository));
     } catch (error) {
       throw error instanceof Refusal ? error : new Refusal((error as Error).message);
@@ -899,6 +872,19 @@ const realpathOrSelf = (path: string): string => {
   }
 };
 
+/** `memory ui [--port <n>]`: the local page. The host is checked before anything is opened, so a refused one binds no socket. */
+function uiCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { host: { type: 'string' }, port: { type: 'string' }, 'yes-non-interactive': { type: 'boolean' } } });
+  if (positionals.length > 0) throw new Refusal('usage: memory ui [--port <n>] [--yes-non-interactive]', 2);
+  if (values.host !== undefined && values.host !== UI_HOST) throw new Refusal(`memory ui binds ${UI_HOST} only; --host ${values.host} is refused`, 2);
+  const port = values.port === undefined ? 0 : Number(values.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535 || (values.port !== undefined && !/^\d+$/.test(values.port))) throw new Refusal('--port is a whole number from 0 to 65535', 2);
+  // The page can apply edits to instruction files, so it starts only where conflicts apply would write.
+  ownerTerminal(values['yes-non-interactive'], 'nothing was served: memory ui applies edits to instruction files, so it is');
+  setUp(data);
+  serveUi(data, cwd, port);
+}
+
 /** `memory approve <id> [--scope]` and `memory reject <id> [--reason]`: the owner's decision on one proposal. */
 async function decideCommand(args: string[], data: string, cwd: string, decision: 'approve' | 'reject'): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -910,49 +896,10 @@ async function decideCommand(args: string[], data: string, cwd: string, decision
   const id = positionals[0]!;
   const scope = values.scope as Scope | undefined;
   if (scope !== undefined && !SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(', ')}`, 2);
-  const reason = typeof values.reason === 'string' ? values.reason.trim() : '';
   const config = setUp(data);
-  const context = resolveContext(cwd, config, currentConfigDir());
-
-  for (const { file, tenant } of proposalStores(data, context)) {
-    const db = openStore(file, false);
-    if (db === null) continue;
-    try {
-      const [p] = proposals(db, tenant, id);
-      if (p === undefined) continue;
-      if (decision === 'approve' && reanchorCandidates(p).length > 0) {
-        throw new Refusal(`${id} is stale because its symbol is gone; choose a new anchor with memory anchors adopt ${id} <key> (candidates: ${reanchorCandidates(p).join(', ')}), or memory reject ${id}`);
-      }
-      if (decision === 'reject') {
-        // A reason kept in the person file follows the owner into every organisation, as the statement does.
-        const why = reason === '' ? null : refusal(reason, tenant === '' ? organisationTerms(config, context.repository) : undefined);
-        if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
-        if (isPendingSupersession(p)) {
-          declineSupersession(db, p);
-          console.log(`declined: ${id} stays active and ${p.older!.id} stays active`);
-          return;
-        }
-        decide(db, p, 'reject', { reason: reason === '' ? null : reason });
-        console.log(`rejected ${id}; the same statement will not be proposed again`);
-        return;
-      }
-      // A proposal keeps to its file: moving between the person file and a tenant is a new item.
-      const allowed = tenant === '' ? ['person', 'global'] : p.scope === 'repository' ? ['repository', 'organisation'] : [p.scope];
-      const to = scope ?? p.scope;
-      if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(' or ')} only`);
-      if (to === 'organisation' && p.anchors_json !== '[]') throw new Refusal('only a repository item can have an anchor');
-      const scopeKey = to === 'organisation' && p.scope === 'repository' ? p.scope_key.split('/')[0]! : p.scope_key;
-      const superseded = decide(db, p, 'approve', { scope: to, scopeKey });
-      const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
-      const replaced = superseded === null ? '' : `; it supersedes ${p.older!.id}, which stays on record; undo with memory undo ${superseded}`;
-      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}${replaced}`);
-      await embedAfterWrite(db, config, tenant);
-      return;
-    } finally {
-      db.close();
-    }
-  }
-  throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+  const done = await decideById(data, config, resolveContext(cwd, config, currentConfigDir()), id, decision, { scope, reason: typeof values.reason === 'string' ? values.reason : undefined });
+  if (done === null) throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+  console.log(done);
 }
 
 /** `memory related <path-or-symbol> [--depth <n>]`: what is anchored at or under it. */
@@ -1603,6 +1550,8 @@ async function main(argv: string[]): Promise<void> {
       return closeCommand(rest, data, process.cwd());
     case 'recall':
       return recallCommand(rest, data, process.cwd());
+    case 'ui':
+      return uiCommand(rest, data, process.cwd());
     case 'mcp':
       return serve(data, process.cwd(), pluginVersion());
     case 'session-start':

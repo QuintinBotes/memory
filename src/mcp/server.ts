@@ -6,13 +6,13 @@ import { managedBy } from '../anchors/refresh.ts';
 import { withRefreshLock } from '../store/refresh-lock.ts';
 import { automationRefusal } from '../automation.ts';
 import { ConfigError, consented, currentConfigDir, loadConfig, organisationTerms, type Config } from '../config.ts';
-import { filterRepository, git, resolveContext, type Context } from '../context.ts';
+import { filterRepository, git, resolveContext, type Context, type Reach } from '../context.ts';
 import { refusal } from '../gate.ts';
 import { addItem } from '../consolidate.ts';
 import { displayPath, judge, loadInstructions, type Withheld } from '../instructions.ts';
 import { logWithheld } from '../store/injections.ts';
 import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, taintList, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
-import { READS_EXPIRED, band, confidence, rank, searchTerms } from '../recall/rank.ts';
+import { READS_EXPIRED, band, confidence, rank, searchTerms, type Hit } from '../recall/rank.ts';
 import { fuse, type Ranker } from '../recall/fuse.ts';
 import { rerank } from '../recall/rerank.ts';
 import { similarities } from '../recall/semantic.ts';
@@ -129,7 +129,7 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], key: str
 }
 
 /** The stores an item may be read from here, each with the SQL that keeps a read inside this repository and owner. */
-function stores(data: string, context: Context): { file: string; tenant: string; where: string; params: string[] }[] {
+export function stores(data: string, context: Context): { file: string; tenant: string; where: string; params: string[] }[] {
   const out = [];
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     out.push({
@@ -173,18 +173,24 @@ async function search(args: Args, data: string, config: Config, context: Context
     reach = found;
   }
   const elsewhere = reach !== undefined && reach.repository !== context.repository;
+  const found = await searchHits(query, elsewhere ? [] : relativePaths, data, config, context, cwd, 'mcp', reach);
+  // The notes sit outside the fence: they are memory's own sentences, not items.
+  const note = found.note + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach!.repository} is not this checkout.\n` : '');
+  if (found.hits.length === 0) return `${note}No memory item matches.`;
+  return note + fence(ITEMS_LABEL, found.hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
+}
+
+/** memory_search's ranking, for it and the page: the hits for `query` and `paths`, best first, and a note line when embeddings were not used. */
+export async function searchHits(query: string, paths: string[], data: string, config: Config, context: Context, cwd: string, session: string, reach?: Reach): Promise<{ hits: Hit[]; note: string }> {
   const withheld: Withheld[] = [];
   const items = visibleItems(data, context, cwd, searchTerms(query), undefined, withheld, reach);
-  logWithheld(data, config, 'memory_search', 'mcp', withheld);
+  logWithheld(data, config, 'memory_search', session, withheld);
   const semantic = await similarities(data, context, config, query, items);
   const now = Date.now();
-  const ranked: Ranker = (list, similarity, near) => rank(list, elsewhere ? [] : relativePaths, now, similarity, undefined, [], context.repository, near);
+  const ranked: Ranker = (list, similarity, near) => rank(list, paths, now, similarity, undefined, [], context.repository, near);
   const fused = semantic !== null && 'similarity' in semantic ? fuse(items, semantic.similarity, ranked) : ranked(items);
   const { hits, note: reranked } = await rerank(config, context, query, fused);
-  // The notes sit outside the fence: they are memory's own sentences, not items.
-  const note = (semantic !== null && 'note' in semantic ? `${semantic.note}\n` : '') + (reranked === undefined ? '' : `${reranked}\n`) + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach!.repository} is not this checkout.\n` : '');
-  if (hits.length === 0) return `${note}No memory item matches.`;
-  return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
+  return { hits, note: (semantic !== null && 'note' in semantic ? `${semantic.note}\n` : '') + (reranked === undefined ? '' : `${reranked}\n`) };
 }
 
 function relatedTool(args: Args, data: string, config: Config, context: Context, cwd: string): string {
@@ -219,6 +225,21 @@ interface ItemRow {
 function get(args: Args, data: string, context: Context, cwd: string): string {
   const id = text(args, 'id');
   const format = args['format'] === undefined ? 'rows' : oneOf(args['format'], ['rows', 'json'] as const, 'format');
+  const found = itemDetail(data, context, cwd, id);
+  if (found === undefined) throw new ToolError(`no item ${id} here; memory_search finds the items this repository may see`);
+  const { row, evidence, anchors, status, anchorStatus, level, taint } = found;
+  if (format === 'json') return fence(ITEMS_LABEL, `${safeJson(found.view)}\n`);
+  const item = { ...row, anchors, source: evidence[0]?.source ?? '', ...(taint === '' ? {} : { taint }) };
+  return fence(ITEMS_LABEL, [
+    leanRow(item),
+    ...(row.rationale === null ? [] : [safe(`because: ${row.rationale}`)]),
+    safe(`status ${status}${row.status_reason === null ? '' : ` (${row.status_reason})`} · confidence ${level} · support ${row.support} · helped ${row.helped} · wrong ${row.wrong} · contradicted ${row.contradictions} · anchor ${anchorStatus}`),
+    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`)),
+  ].map((l) => `${l}\n`).join(''));
+}
+
+/** One item memory_get may show here, re-checked first, with the store it was read from; undefined when there is none. */
+export function itemDetail(data: string, context: Context, cwd: string, id: string) {
   const found = first(data, context, (db, store) => {
     const checked = store.tenant === '' ? undefined : withRefreshLock(store.file, () => recheck(db, store.tenant, context.repository!, cwd, { id, managed: managedBy(data, context.repository) }));
     // Proposals and tombstones are the owner's queue, not memory.
@@ -232,9 +253,9 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
     const evidence = db
       .prepare('SELECT source_ref AS source, author_role AS role, captured_at AS capturedAt, taint FROM evidence WHERE item_id = ? ORDER BY captured_at, id')
       .all(id) as { source: string; role: string; capturedAt: string; taint: string | null }[];
-    return { row, evidence, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
+    return { row, evidence, store, gone: checked?.staleItems.find((i) => i.id === id)?.reason };
   });
-  if (found === undefined) throw new ToolError(`no item ${id} here; memory_search finds the items this repository may see`);
+  if (found === undefined) return undefined;
   const { row, evidence, gone } = found;
   const anchors = JSON.parse(row.anchors_json) as Anchor[];
   const status = row.status === 'active' && row.expired === 1 ? 'expired' : row.status;
@@ -242,21 +263,13 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
   const anchorStatus = anchors.length === 0 ? 'none' : gone ?? 'current';
   const level = band(confidence(row));
   const taint = [...new Set(evidence.flatMap((e) => (e.taint === null ? [] : [e.taint])))].join(',');
-  if (format === 'json') {
-    return fence(ITEMS_LABEL, `${safeJson({
-      id: row.id, type: row.type, scope: row.scope, scopeKey: row.scope_key, statement: row.statement, rationale: row.rationale,
-      status, statusReason: row.status_reason, trust: row.origin_trust, quarantine: row.quarantine, anchors, anchorStatus,
-      support: row.support, helped: row.helped, wrong: row.wrong, contradictions: row.contradictions, confidence: level,
-      validFrom: row.valid_from, taint: taint === '' ? null : taintList(taint), evidence,
-    })}\n`);
-  }
-  const item = { ...row, anchors, source: evidence[0]?.source ?? '', ...(taint === '' ? {} : { taint }) };
-  return fence(ITEMS_LABEL, [
-    leanRow(item),
-    ...(row.rationale === null ? [] : [safe(`because: ${row.rationale}`)]),
-    safe(`status ${status}${row.status_reason === null ? '' : ` (${row.status_reason})`} · confidence ${level} · support ${row.support} · helped ${row.helped} · wrong ${row.wrong} · contradicted ${row.contradictions} · anchor ${anchorStatus}`),
-    ...evidence.map((e) => safe(`evidence: ${e.source} (${e.role}) ${e.capturedAt.slice(0, 10)}${e.taint === null ? '' : `, tainted by ${taintList(e.taint)}`}`)),
-  ].map((l) => `${l}\n`).join(''));
+  const view = {
+    id: row.id, type: row.type, scope: row.scope, scopeKey: row.scope_key, statement: row.statement, rationale: row.rationale,
+    status, statusReason: row.status_reason, trust: row.origin_trust, quarantine: row.quarantine, anchors, anchorStatus,
+    support: row.support, helped: row.helped, wrong: row.wrong, contradictions: row.contradictions, confidence: level,
+    validFrom: row.valid_from, taint: taint === '' ? null : taintList(taint), evidence,
+  };
+  return { ...found, view, anchors, status, anchorStatus, level, taint };
 }
 
 function propose(args: Args, data: string, config: Config, context: Context, cwd: string, agent: string): string {

@@ -1,8 +1,14 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { taintList } from '../items.ts';
+import { organisationTerms, type Config } from '../config.ts';
+import type { Context } from '../context.ts';
+import { embedAfterWrite } from '../embed/vectors.ts';
+import { Refusal, refusal } from '../gate.ts';
+import { taintList, type Scope } from '../items.ts';
 import { safe } from '../render/rows.ts';
 import { applySupersession } from '../consolidate.ts';
 import { recordAudit } from '../store/audit.ts';
+import { openStore } from '../store/db.ts';
+import { personFile, tenantFile } from '../store/paths.ts';
 
 /**
  * The owner's review of proposals. Approve and reject are terminal commands
@@ -136,6 +142,62 @@ export function decide(
     db.exec('ROLLBACK');
     throw error;
   }
+}
+
+/** The stores whose proposals may be reviewed here: this repository's tenant, then the person file. */
+export function proposalStores(data: string, context: Context): { file: string; tenant: string }[] {
+  return [...(context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }]), { file: personFile(data), tenant: '' }];
+}
+
+/**
+ * The owner's decision on one proposal of the stores this repository may see, as `memory approve`, `memory reject` and
+ * the page make it: what was done, or null when no proposal has that id here. Throws Refusal when it may not be made.
+ */
+export async function decideById(
+  data: string,
+  config: Config,
+  context: Context,
+  id: string,
+  decision: 'approve' | 'reject',
+  options: { scope?: Scope | undefined; reason?: string | undefined },
+): Promise<string | null> {
+  const reason = options.reason?.trim() ?? '';
+  for (const { file, tenant } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      const [p] = proposals(db, tenant, id);
+      if (p === undefined) continue;
+      if (decision === 'approve' && reanchorCandidates(p).length > 0) {
+        throw new Refusal(`${id} is stale because its symbol is gone; choose a new anchor with memory anchors adopt ${id} <key> (candidates: ${reanchorCandidates(p).join(', ')}), or memory reject ${id}`);
+      }
+      if (decision === 'reject') {
+        // A reason kept in the person file follows the owner into every organisation, as the statement does.
+        const why = reason === '' ? null : refusal(reason, tenant === '' ? organisationTerms(config, context.repository) : undefined);
+        if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
+        if (isPendingSupersession(p)) {
+          declineSupersession(db, p);
+          return `declined: ${id} stays active and ${p.older!.id} stays active`;
+        }
+        decide(db, p, 'reject', { reason: reason === '' ? null : reason });
+        return `rejected ${id}; the same statement will not be proposed again`;
+      }
+      // A proposal keeps to its file: moving between the person file and a tenant is a new item.
+      const allowed = tenant === '' ? ['person', 'global'] : p.scope === 'repository' ? ['repository', 'organisation'] : [p.scope];
+      const to = options.scope ?? p.scope;
+      if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(' or ')} only`);
+      if (to === 'organisation' && p.anchors_json !== '[]') throw new Refusal('only a repository item can have an anchor');
+      const scopeKey = to === 'organisation' && p.scope === 'repository' ? p.scope_key.split('/')[0]! : p.scope_key;
+      const superseded = decide(db, p, 'approve', { scope: to, scopeKey });
+      const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
+      const replaced = superseded === null ? '' : `; it supersedes ${p.older!.id}, which stays on record; undo with memory undo ${superseded}`;
+      await embedAfterWrite(db, config, tenant);
+      return `approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}${replaced}`;
+    } finally {
+      db.close();
+    }
+  }
+  return null;
 }
 
 /** Whether `p` is an active item whose only question is whether it replaces an older one. */

@@ -1,6 +1,16 @@
 import { redact } from './redact/redact.ts';
 import { codeFreeViolations, visibleText } from './codefree.ts';
 
+/** Exit 1: refused, nothing was written. Exit 2: the command cannot run as given. */
+export class Refusal extends Error {
+  constructor(
+    message: string,
+    readonly code: 1 | 2 = 1,
+  ) {
+    super(message);
+  }
+}
+
 export const MAX_STATEMENT = 300;
 export const EMAIL = /[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9])/;
 export const HANDLE = /(?<![\w@/.])@[A-Za-z0-9][A-Za-z0-9-]*(?![\w-]*(?:\/|\(|\.\w))/;

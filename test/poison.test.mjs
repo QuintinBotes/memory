@@ -611,6 +611,7 @@ test('P17 a transcript gives proposals only: secrets are redacted, a control tok
 const PATHS = {
   'src/cli.ts': 'remember (owner): P6, P9, P10, P12',
   'src/mcp/server.ts': 'memory_propose: P1, P2, P4, P7, P8, P10, P12, P13',
+  'src/ui/server.ts': 'an edit in memory ui, through the remember gate: test/ui.test.mjs',
   'src/capture/capture.ts': 'automatic capture: P3, P5, P8, P10, P12, P13',
   'src/capture/failures.ts': 'failure repair proposals from sessions and CI: P16',
   'src/capture/transcripts.ts': 'the owner\'s corrections in transcripts: P17',
