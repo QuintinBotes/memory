@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records are deleted after 30 days and by `memory purge`. A session in no tenant records nothing.
   `PostCompact` keeps the redacted compaction summary as an episode, only under this opt-in.
   `<private>` spans are tracked across the whole transcript and a sentence touching one is never quoted; the transcript is only opened at processing (SessionEnd reads the environment, not the file); `memory purge --repo` deletes only that repository's records; expiry runs on every sweep whatever the opt-in and each deletion is audited once (`transcripts_expired`); whether a transcript reads as automation is decided from its recording environment and its own entrypoint, never the sweeping process. Corrections are found by deterministic cues first; the offline small-model batch is not built yet.
+- Export memory as SCF. `memory export --to scf [--repo | --all-repos]` posts a
+  tenant's proposed repository and organisation items to the SCF set for it
+  (`memory init --scf <tenant>=<url>`, key in `SCF_API_KEY`) as world proposals
+  with layer `memory` and their evidence, once each; `memory import --scf` brings
+  back SCF's approvals and rejections and counts run outcomes as helped and wrong.
+  Schema 16 adds `scf_links` and `scf_feedback`. The person file and other tenants
+  are never sent, text redaction would change is withheld, and an unreachable SCF
+  changes nothing. New consent category `scf` (plan version 11).
+
 - Filter memory by repository, and record where each item came from. Schema 14
   adds `origin_repository` (null = unknown) to every item; `remember`, `capture`,
   `memory_propose` and `memory import` fill it from the repository they ran in

@@ -35,6 +35,8 @@ export interface Config {
   pointOfAction?: boolean;
   /** The code anchor provider `memory recall --diff` asks for a change's impact (#16): a command, run without a shell. */
   impactProvider?: { command: string[] };
+  /** The SCF each tenant exports its proposals to (#13), by tenant name; a tenant without an entry sends nothing. Part of the consent plan. */
+  scf?: Record<string, { url: string }>;
   /** Set by memory itself when two memory-linked reverts came within seven days (#18); every recall stays off until the owner runs `memory init --recall on`. */
   recallOff?: { reason: string; at: string };
 }
@@ -65,6 +67,25 @@ export const neverSubagent = (type: string): boolean =>
   type === 'Explore' || type === 'Plan' || type.startsWith('review-voice:') || REVIEW_VOICE_AGENTS.includes(type);
 export const subagentAllowed = (config: Config, type: string): boolean =>
   !neverSubagent(type) && (type === 'general-purpose' || (config.subagentTypes ?? []).includes(type));
+/** The configured address as a URL, or why it is refused: https, or http to this machine only; no credentials, query or fragment. */
+export function scfUrl(text: string): URL | string {
+  let u: URL;
+  try {
+    u = new URL(text);
+  } catch {
+    return `"${text}" is not a URL`;
+  }
+  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) return 'an SCF address must be https (http only to this machine)';
+  if (u.username !== '' || u.password !== '' || u.search !== '' || u.hash !== '') return 'an SCF address carries no credentials, query or fragment';
+  // No empty or dot segment: "//host" in a path would read as another host once a route is appended.
+  if (!/^(\/[A-Za-z0-9._~-]+)*\/?$/.test(u.pathname) || u.pathname.split('/').some((seg) => seg === '.' || seg === '..')) return 'an SCF address path holds only plain segments';
+  return u;
+}
+
+/** What links to an SCF are scoped to: its origin and path prefix, no trailing slash. */
+export const scfEndpoint = (u: URL): string => `${u.origin}${u.pathname.replace(/\/$/, '')}`;
+
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
 
@@ -164,6 +185,12 @@ export function loadConfig(data: string): Config | null {
   if (impact !== undefined && !isAbsolute(impact.command[0]!)) {
     throw new ConfigError('impactProvider.command[0] must be an absolute path');
   }
+  const scf = c.scf;
+  if (scf !== undefined) {
+    const entries = typeof scf === 'object' && scf !== null && !Array.isArray(scf) ? Object.entries(scf) : null;
+    const bad = entries === null ? 'scf must map a tenant name to {"url": an address}' : entries.map(([t, v]) => (!(t in c.tenants!) ? `scf names tenant "${t}", which does not exist` : typeof v?.url !== 'string' ? `scf.${t} needs a "url"` : typeof scfUrl(v.url) === 'string' ? `scf.${t}: ${scfUrl(v.url) as string}` : null)).find((m) => m !== null);
+    if (bad !== undefined && bad !== null) throw new ConfigError(bad);
+  }
   const off = c.recallOff;
   if (off !== undefined && !(typeof off === 'object' && off !== null && typeof off.reason === 'string' && typeof off.at === 'string')) {
     throw new ConfigError('recallOff must be { reason: text, at: a time }');
@@ -181,6 +208,7 @@ export function loadConfig(data: string): Config | null {
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
     ...(impact !== undefined ? { impactProvider: impact } : {}),
+    ...(scf !== undefined ? { scf } : {}),
     ...(off !== undefined ? { recallOff: off } : {}),
   };
 }
@@ -205,6 +233,8 @@ export function planHash(config: Config): string {
     optIns: [config.optIns.transcripts, config.optIns.failingCommands],
     // Only when on, so a consent given before this existed still holds.
     ...(config.automation === true ? { automation: true } : {}),
+    // Likewise: a destination for a tenant's items needs the owner's yes.
+    ...(config.scf !== undefined && Object.keys(config.scf).length > 0 ? { scf: sorted(Object.fromEntries(Object.entries(config.scf).map(([k, v]) => [k, [v.url]]))) } : {}),
   });
   return createHash('sha256').update(canonical).digest('hex');
 }

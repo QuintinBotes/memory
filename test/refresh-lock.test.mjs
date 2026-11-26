@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setup, remember, sessionStart, runAsync, commit } from './helpers.mjs';
+import { setup, remember, sessionStart, runAsync, commit, until } from './helpers.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
 
 // Gap 4 (#24), edge case: background jobs take a separate lock, so two anchor refreshes never run at once and a
 // refresh never holds up the session-start slice or a writer.
@@ -69,4 +74,31 @@ test('a lock left by a dead process is taken over once it is old', async () => {
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(state(s), { status: 'stale', stales: 1 });
   assert.equal(existsSync(s.lock), false);
+});
+
+async function loadTs(entry) {
+  const dir = mkdtempSync(join(tmpdir(), 'memory-ts-'));
+  const outfile = join(dir, 'm.mjs');
+  await build({ entryPoints: [join(dirname(fileURLToPath(import.meta.url)), entry)], bundle: true, platform: 'node', format: 'esm', target: 'node22', outfile, logLevel: 'silent' });
+  return import(pathToFileURL(outfile).href);
+}
+
+test('L1 an async lock held past the stale threshold still blocks a second taker, because the holder keeps it fresh', async () => {
+  const { withFileLockAsync, withFileLock } = await loadTs('../src/store/refresh-lock.ts');
+  const lock = join(mkdtempSync(join(tmpdir(), 'memory-lock-')), 'x.lock');
+  const STALE = 150;
+  let release;
+  const gate = new Promise((ok) => (release = ok));
+  let held;
+  const holder = withFileLockAsync(lock, async () => ((held = true), gate), 0, STALE);
+  await until(() => held === true);
+  await new Promise((ok) => setTimeout(ok, STALE * 4)); // several stale periods pass while the work is still running
+  try {
+    assert.equal(withFileLock(lock, () => 'took it', 0, STALE), undefined);
+  } finally {
+    release();
+  }
+  await holder;
+  assert.equal(existsSync(lock), false, 'released at the end');
+  assert.equal(withFileLock(lock, () => 'took it', 0, STALE), 'took it');
 });

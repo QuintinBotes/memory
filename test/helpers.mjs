@@ -78,10 +78,10 @@ function assertNoNetwork({ net, netLog }) {
  * is about exactly that attempt, when `netLog` names the file that receives each request's URL and body.
  */
 function childEnv({ data, config, path, env: extra, netLog }) {
-  const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv, ...extra };
+  const env = { PATH: path ?? process.env.PATH, HOME: process.env.HOME, ...gitEnv, MEMORY_TEST_HARNESS: '1', ...extra };
   env.NODE_OPTIONS = `--import ${pathToFileURL(join(root, 'test', 'no-network.mjs')).href}`;
   // WORK_LOG names the file that receives this run's SQLite work (test/work-count.mjs).
-  if (env.WORK_LOG || env.LOCK_WAIT_LOG) env.NODE_OPTIONS += ` --import ${pathToFileURL(join(root, 'test', 'work-count.mjs')).href}`;
+  if (env.WORK_LOG || env.LOCK_WAIT_LOG || env.FILE_LOCK_LOG) env.NODE_OPTIONS += ` --import ${pathToFileURL(join(root, 'test', 'work-count.mjs')).href}`;
   env.NO_NET_LOG = netLog ?? netDefault;
   if (data) env.MEMORY_DATA_DIR = data;
   if (config) env.CLAUDE_CONFIG_DIR = config;

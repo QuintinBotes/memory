@@ -33,6 +33,8 @@ export type AuditAction =
   | 'promotion_proposed'
   | 'promotion_applied'
   | 'promotion_rejected'
+  | 'scf_exported'
+  | 'scf_feedback'
   | 'transcripts_processed'
   | 'transcripts_expired'
   | 'undone';
