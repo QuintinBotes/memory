@@ -5842,7 +5842,6 @@ function processTranscripts(db, tenant, config, extract = findCorrections) {
   return done;
 }
 var MODEL_DEFAULTS = { url: "http://127.0.0.1:11434", model: "inkling-2-mini" };
-var modelIsLocal = (url) => ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname);
 function modelTranscripts(db, tenant, config, ask) {
   const done = { read: 0, proposed: 0 };
   const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND outcome = 'read' ORDER BY at, id").all();
@@ -8444,7 +8443,7 @@ function correctionsCommand(data, cwd) {
   let failed;
   for (const { file, tenant } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
     if (tenant === "" && !covers(config, "personTranscripts")) continue;
-    if (tenant !== "" && !modelIsLocal(url)) {
+    if (tenant !== "" && !onThisMachine(new URL(url))) {
       console.error(`memory: the model pass did not run for tenant ${tenant}: its model at ${url} is not on this machine`);
       continue;
     }

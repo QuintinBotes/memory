@@ -162,6 +162,21 @@ test('#80 2.3 a client tenant and a remote model: the pass does not run for that
   assert.equal(query(acme(s), 'SELECT outcome FROM transcripts')[0].outcome, 'read');
 });
 
+// #101: the model pass and the semantic leg share one check for a model on this machine.
+for (const [url, local] of [['http://localhost:11434', true], ['http://[::1]:11434', true], ['http://127.0.0.1:11434', true], ['http://192.0.2.10:11434', false], ['http://models.lan:11434', false]]) {
+  test(`#101 the model pass treats ${url} as ${local ? 'on' : 'not on'} this machine, as the semantic leg does`, () => {
+    const s = setup();
+    recorded(s);
+    const fixture = join(s.base, 'fake.json');
+    writeFileSync(fixture, JSON.stringify({ mode: 'crash' }));
+    const log = join(s.base, 'calls.log');
+    configure(s, { url, command: [process.execPath, FAKE, fixture, log] });
+    const r = run(['corrections'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+    assert.equal(/not run for tenant acme/.test(r.stderr), !local, r.stderr);
+    assert.equal(existsSync(log), local, local ? 'the model was asked' : 'the model was never called');
+  });
+}
+
 const snapshot = (s) => JSON.stringify([query(acme(s), 'SELECT * FROM items ORDER BY id'), query(acme(s), 'SELECT * FROM transcripts ORDER BY id'), query(acme(s), 'SELECT * FROM audit_events ORDER BY rowid')]);
 for (const mode of ['hang', 'flood', 'crash']) {
   test(`#80 2.4 a model that ${mode === 'hang' ? 'never answers and ignores SIGTERM' : mode === 'flood' ? 'floods output' : 'fails'}: the batch stops at its limits after one call and memory is unchanged`, () => {

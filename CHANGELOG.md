@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The model pass and the semantic leg decide "a model on this machine" with one shared check (127.0.0.1, localhost, [::1]) instead of two copies (#101).
 - `memory outcome` with `--source` counts a run once per toolset: reporting the same run again changes nothing and says so (#99). An outcome without `--source` still counts each time.
 - SCF export (#86): an answer is read a chunk at a time and the export fails at the 5 MB cap instead of buffering the whole body first; a blank proposal id is rejected, never linked, so the next export can adopt a real proposal; README, SECURITY.md and the consent plan's closing line now say that `memory export --to scf` sends a tenant's proposals and evidence to the SCF address configured for it.
 - `memory purge --repo` deleted every episode in each store it opened (#82). Each failing-command episode now records its repository (schema 17; older episodes stay unknown). `--repo` deletes only that repository's episodes and keeps unknown-origin ones; `--tenant` still deletes them all. The preview lists episode counts per repository and, for kept unknown-origin episodes, names the `--tenant` command that removes them.

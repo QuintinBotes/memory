@@ -281,8 +281,6 @@ export function processTranscripts(db: DatabaseSync, tenant: string, config: Con
 /** The model pass's defaults (#80): a local Ollama and Inkling 2 Mini, which the owner installs; memory never downloads a model. */
 export const MODEL_DEFAULTS = { url: 'http://127.0.0.1:11434', model: 'inkling-2-mini' };
 /** Whether the model runs on the owner's machine, judged by its address. */
-export const modelIsLocal = (url: string): boolean => ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname);
-
 /** Asks the model for the corrections in these turns: the candidates, or why it failed. */
 export type Ask = (turns: Turn[]) => Candidate[] | { failed: string };
 

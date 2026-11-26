@@ -15,6 +15,7 @@ import {
   scfEndpoint,
   consented,
   recallOn,
+  onThisMachine,
   currentConfigDir,
   emptyConfig,
   loadConfig,
@@ -57,7 +58,7 @@ import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { OUTCOMES, recordOutcome, routeToolsets, type Outcome } from './recall/toolsets.ts';
 import { decideById, proposalStores, proposals, renderProposals, type Proposal } from './review/review.ts';
-import { MODEL_DEFAULTS, expireTranscripts, modelIsLocal, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
+import { MODEL_DEFAULTS, expireTranscripts, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
 import { modelTimeoutMs, runProvider } from './provider/run.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { captureCi } from './capture/ci.ts';
@@ -1066,7 +1067,7 @@ function correctionsCommand(data: string, cwd: string): void {
   let failed: string | undefined;
   for (const { file, tenant } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
     if (tenant === '' && !covers(config, 'personTranscripts')) continue;
-    if (tenant !== '' && !modelIsLocal(url)) {
+    if (tenant !== '' && !onThisMachine(new URL(url))) {
       console.error(`memory: the model pass did not run for tenant ${tenant}: its model at ${url} is not on this machine`);
       continue;
     }
