@@ -1427,7 +1427,7 @@ function buildConsentPlan(config, storageLocation) {
       "A rejected item is kept as a tombstone, reduced to a hash of its statement, its type and its scope 30 days after rejection, so the statement is never proposed again",
       "memory purge --older-than N deletes evidence older than N days; an item left without evidence stays on disk as proposed and is no longer shown",
       "Each tenant has its own file; a session opens only the tenant its repository and config allow",
-      "The store never leaves this machine; the only text that does is what the embeddings category above lists, and only when a provider key is set"
+      "The store never leaves this machine; the only text that does is what the embeddings, capture and scf categories above list: item and query text to the embedding provider when a provider key is set, the redacted transcript to the capture model, and, when you run memory export --to scf, a tenant's proposals with their evidence to the SCF address set for it"
     ]
   };
 }
@@ -4472,10 +4472,16 @@ function scfClient(base2, key2, timeoutMs = SCF_TIMEOUT_MS) {
     }
     if (!res.ok) return fail(`SCF at ${base2.host} answered ${res.status}`);
     try {
-      const text4 = await res.text();
-      if (text4.length > MAX_ANSWER) return fail(`SCF at ${base2.host} answered too much`);
-      return JSON.parse(text4);
-    } catch {
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of res.body ?? []) {
+        size += chunk.byteLength;
+        if (size > MAX_ANSWER) return fail(`SCF at ${base2.host} answered too much`);
+        chunks.push(chunk);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch (error) {
+      if (error === failed) throw error;
       return fail(`SCF at ${base2.host} sent an answer memory cannot read`);
     }
   };
@@ -4491,6 +4497,7 @@ async function remoteProposals(client) {
       const p = obj(raw);
       const item = obj(obj(p["payload"])["qualifiers"])["memory_item_id"];
       if (typeof p["id"] !== "string" || typeof p["status"] !== "string") throw new ScfError("SCF sent a proposal in a shape memory does not know");
+      if (p["id"].trim() === "") continue;
       out.push({ id: p["id"], status: p["status"], fact_id: typeof p["fact_id"] === "string" ? p["fact_id"] : null, item: typeof item === "string" ? item : null });
     }
     if (items.length < PAGE) return out;
@@ -4545,7 +4552,7 @@ async function exportToScf(db, tenant, client, remote, endpoint, repository) {
       if (error instanceof ScfError && result.posted > 0) throw new ScfError(`${error.message}; ${result.posted} proposals were already sent and the next run adopts them`);
       throw error;
     }
-    if (typeof answer["id"] !== "string") throw new ScfError("SCF answered a proposal without an id");
+    if (typeof answer["id"] !== "string" || answer["id"].trim() === "") throw new ScfError("SCF answered a proposal without an id");
     links.push({ id: row4.id, proposal: answer["id"] });
     result.posted++;
   }

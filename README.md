@@ -48,8 +48,10 @@ through which agents search, read, propose and give feedback. The plan is tracke
   and paths and says so.
 - **Local where it counts.** The store never leaves this machine. What does
   leave is listed in [SECURITY.md](SECURITY.md): the text sent to the embedding
-  provider, and, at the end of a session, the redacted transcript sent to the
-  capture model. No runtime dependencies: both calls are a plain `fetch`. Node
+  provider; at the end of a session, the redacted transcript sent to the
+  capture model; and, when you run `memory export --to scf`, a tenant's
+  proposals with their evidence sent to the SCF address configured for that
+  tenant. No runtime dependencies: every call is a plain `fetch`. Node
   22.13 or newer, where `node:sqlite` needs no flag.
 
 ## Using it
