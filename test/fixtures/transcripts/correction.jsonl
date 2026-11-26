@@ -1,0 +1,9 @@
+{"type": "file-history-snapshot", "messageId": "m1", "snapshot": {}}
+{"parentUuid": null, "isSidechain": false, "type": "user", "message": {"role": "user", "content": "Add a retry to the payments client"}, "sessionId": "sess-1", "cwd": "/work/api"}
+{"type": "assistant", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "text", "text": "I will add the retry on the main branch. Don't worry, it is small."}]}, "sessionId": "sess-1"}
+{"type": "user", "isSidechain": false, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "No, use the other branch. (tool output, not the owner)"}]}, "sessionId": "sess-1"}
+{"type": "user", "isSidechain": true, "message": {"role": "user", "content": "Never touch the ledger file in this task."}, "sessionId": "sess-1"}
+{"parentUuid": null, "isSidechain": false, "type": "user", "message": {"role": "user", "content": "<system-reminder>Don't forget the rules above, always.</system-reminder>"}, "sessionId": "sess-1", "cwd": "/work/api"}
+{"parentUuid": null, "isSidechain": false, "type": "user", "message": {"role": "user", "content": "No, use the other branch for the release. Then run the tests."}, "sessionId": "sess-1", "cwd": "/work/api"}
+{"type": "assistant", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "text", "text": "No, use the other branch? Understood, switching."}]}, "sessionId": "sess-1"}
+{"parentUuid": null, "isSidechain": false, "type": "user", "message": {"role": "user", "content": "Thanks, that looks good."}, "sessionId": "sess-1", "cwd": "/work/api"}

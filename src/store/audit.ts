@@ -33,6 +33,8 @@ export type AuditAction =
   | 'promotion_proposed'
   | 'promotion_applied'
   | 'promotion_rejected'
+  | 'transcripts_processed'
+  | 'transcripts_expired'
   | 'undone';
 
 export function recordAudit(

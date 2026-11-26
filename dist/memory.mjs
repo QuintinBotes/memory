@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { isAbsolute as isAbsolute9, join as join16, normalize as normalize4 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -1027,13 +1027,13 @@ function knownItem(db, c) {
 var TOMBSTONE_DAYS = 30;
 function reduceTombstones(db) {
   const due = `status IN ('rejected', 'expired') AND statement != '' AND valid_to < ?`;
-  const cutoff2 = new Date(Date.now() - TOMBSTONE_DAYS * 864e5).toISOString();
-  if (db.prepare(`SELECT 1 FROM items WHERE ${due} LIMIT 1`).get(cutoff2) === void 0) return;
+  const cutoff3 = new Date(Date.now() - TOMBSTONE_DAYS * 864e5).toISOString();
+  if (db.prepare(`SELECT 1 FROM items WHERE ${due} LIMIT 1`).get(cutoff3) === void 0) return;
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff2);
-    db.prepare(`DELETE FROM item_vectors WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff2);
-    const { changes } = db.prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE ${due}`).run(cutoff2);
+    db.prepare(`DELETE FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff3);
+    db.prepare(`DELETE FROM item_vectors WHERE item_id IN (SELECT id FROM items WHERE ${due})`).run(cutoff3);
+    const { changes } = db.prepare(`UPDATE items SET statement = '', rationale = NULL, status_reason = NULL, anchors_json = '[]' WHERE ${due}`).run(cutoff3);
     recordAudit(db, "tombstones_reduced", null, { count: Number(changes) });
     db.exec("COMMIT");
   } catch (error) {
@@ -1371,7 +1371,8 @@ var DATA_CATEGORIES = [
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
   { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" },
   { id: "impact", since: 8, text: "When impactProvider is set in config.json, memory recall --diff runs that command, without a shell, once per call and sends it on standard input the repository's owner/name, the range and the paths the range changes; what it answers (dependents' paths and symbol keys) is used to rank items and is not stored. A provider backed by a code graph may start an index job of its own to answer, and a graph that has no snapshot yet answers pending, which memory reads as no snapshot. Without impactProvider, or before you agree to this plan, nothing is run" },
-  { id: "symbols", since: 9, text: "When impactProvider is set in config.json, the anchor refresh (#10) runs that command, which you chose, without a shell and with only PATH and HOME in its environment, once per question: at session start in a detached job, and when you remember an anchor at a symbol key or run memory anchors. It sends on standard input the repository's owner/name, the symbol keys, file paths, line numbers and snapshot ids of the checkout's anchored items; it answers with symbols' keys, signatures, line ranges and content hashes. memory sends nothing elsewhere and what the command does with what it receives is outside memory. Each automatic move of an anchor is logged in the tenant's file and can be undone with memory anchors undo. Without impactProvider, or before you agree to this plan, anchors are checked by path and hash only" }
+  { id: "symbols", since: 9, text: "When impactProvider is set in config.json, the anchor refresh (#10) runs that command, which you chose, without a shell and with only PATH and HOME in its environment, once per question: at session start in a detached job, and when you remember an anchor at a symbol key or run memory anchors. It sends on standard input the repository's owner/name, the symbol keys, file paths, line numbers and snapshot ids of the checkout's anchored items; it answers with symbols' keys, signatures, line ranges and content hashes. memory sends nothing elsewhere and what the command does with what it receives is outside memory. Each automatic move of an anchor is logged in the tenant's file and can be undone with memory anchors undo. Without impactProvider, or before you agree to this plan, anchors are checked by path and hash only" },
+  { id: "transcripts", since: 10, text: "When you turn on the separate opt-in for transcripts (memory init --transcripts on), in a repository that matches a tenant: at the end of a session only the path of the session's transcript file, with the session id, the repository and the time, is recorded in the tenant's file; at the next session start or in the daily sweep memory reads that file on this machine, never sending it anywhere, takes only your own messages, replaces credentials, emails and handles in them, and keeps each correction you gave the agent (a sentence such as 'no, use the other branch') as a proposal that quotes your words verbatim, with the session id and line as its source, waiting for your approval. Nothing of the transcript is kept besides those quotes; agent output, subagent reports and tool results are never read as corrections, text between <private> and </private> and a transcript containing DO NOT INDEX THIS CHAT are skipped. After a compaction the compaction summary, redacted, is kept as an episode. The path records and episodes are deleted after 30 days; memory purge removes them with the tenant and --older-than removes those before its cut-off. With the opt-in off, or before you agree to this plan, nothing is recorded" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -2554,7 +2555,24 @@ var MIGRATIONS = [
     const has = db.prepare("PRAGMA table_info(items)").all().some((c) => c.name === "origin_repository");
     if (!has) db.exec("ALTER TABLE items ADD COLUMN origin_repository TEXT;");
     db.exec("UPDATE items SET origin_repository = scope_key WHERE scope = 'repository' AND origin_repository IS NULL;");
-  }
+  },
+  // v15 - transcripts, opt-in (#12): where a session's transcript is, recorded by the SessionEnd hook and read at the next
+  // session start or sweep, and the redacted compaction summaries kept as episodes. Never the transcript's text; deleted
+  // after 30 days.
+  `
+  CREATE TABLE IF NOT EXISTS transcripts (
+    id TEXT PRIMARY KEY,
+    session TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('path', 'summary')),
+    repository TEXT NOT NULL,
+    path TEXT,
+    summary TEXT,
+    at TEXT NOT NULL,
+    processed_at TEXT,
+    outcome TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_transcripts_open ON transcripts (kind, processed_at);
+  `
 ];
 var SECURE_DELETE = 6;
 var WRITE_BUSY_MS = 5e3;
@@ -3589,6 +3607,9 @@ function executePurge(db, scope) {
     }
     if (scope.all === true || scope.tenant !== void 0 || scope.repository !== void 0) db.prepare("DELETE FROM episodes").run();
     else if (scope.before !== void 0) db.prepare("DELETE FROM episodes WHERE at < ?").run(scope.before);
+    if (scope.all === true || scope.tenant !== void 0) db.prepare("DELETE FROM transcripts").run();
+    else if (scope.repository !== void 0) db.prepare("DELETE FROM transcripts WHERE repository = ?").run(scope.repository);
+    else if (scope.before !== void 0) db.prepare("DELETE FROM transcripts WHERE at < ?").run(scope.before);
     db.prepare("DELETE FROM item_vectors WHERE item_id NOT IN (SELECT id FROM items WHERE status = 'active')").run();
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     const audited = scope.source === void 0 ? scope : { ...scope, source: "withheld" };
@@ -4416,11 +4437,11 @@ function orbitRecall(data, context, cwd, ask) {
   const stale = /* @__PURE__ */ new Set();
   try {
     const at2 = (id) => db.prepare("SELECT kind, key FROM item_keys WHERE item_id = ?").all(id);
-    const cutoff2 = new Date(today - ORBIT_EXPIRY_DAYS * 864e5).toISOString();
+    const cutoff3 = new Date(today - ORBIT_EXPIRY_DAYS * 864e5).toISOString();
     for (const item of visible2) {
       if (at2(item.id).some((k) => (k.kind === "fingerprint" ? ask.fingerprints : ask.checks).includes(k.key))) keyed.add(item.id);
       const last = db.prepare("SELECT max(captured_at) AS at FROM evidence WHERE item_id = ?").get(item.id);
-      if (item.source.startsWith("orbit run ") && (last.at ?? "") < cutoff2) stale.add(item.id);
+      if (item.source.startsWith("orbit run ") && (last.at ?? "") < cutoff3) stale.add(item.id);
     }
   } finally {
     db.close();
@@ -4517,11 +4538,121 @@ function declineSupersession(db, p) {
   }
 }
 
+// src/capture/transcripts.ts
+import { randomBytes as randomBytes5 } from "node:crypto";
+import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
+import { basename as basename3 } from "node:path";
+var TRANSCRIPT_DAYS = 30;
+var MAX_SUMMARY = 4e3;
+var cutoff = () => new Date(Date.now() - TRANSCRIPT_DAYS * 864e5).toISOString();
+var transcriptsOn = (config) => config !== null && consented(config) && config.optIns.transcripts && covers(config, "transcripts");
+var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
+function recordTranscript(data, input2) {
+  const config = loadConfig(data);
+  if (!transcriptsOn(config)) return;
+  const path = str(input2["transcript_path"]);
+  if (automationRefusal(config, process.env) !== null) return;
+  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  if (context.tenant === null || context.repository === null) return;
+  const compaction = input2["hook_event_name"] === "PostCompact";
+  const summary = compaction ? str(input2["compact_summary"]) : void 0;
+  if (compaction ? summary === void 0 : path === void 0) return;
+  const session = str(input2["session_id"]) ?? "unknown";
+  const db = openStore(tenantFile(data, context.tenant), true, HOOK_BUSY_MS);
+  try {
+    const id = `t-${randomBytes5(5).toString("hex")}`;
+    const at2 = (/* @__PURE__ */ new Date()).toISOString();
+    if (summary !== void 0) {
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, context.repository, scrub(summary).slice(0, MAX_SUMMARY), at2, at2);
+    } else if (db.prepare("SELECT 1 FROM transcripts WHERE session = ? AND kind = 'path' AND path = ? AND processed_at IS NULL").get(session, path) === void 0) {
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, context.repository, path, at2);
+    }
+  } finally {
+    db.close();
+  }
+}
+var NOT_TYPED = /^</;
+var HIDDEN = "\uE000";
+function hidePrivate(text4, state) {
+  let out = "";
+  let last = 0;
+  for (const m of text4.matchAll(/<(\/?)private>/g)) {
+    out += state.open ? HIDDEN : text4.slice(last, m.index);
+    state.open = m[1] === "";
+    last = m.index + m[0].length;
+  }
+  return out + (state.open ? HIDDEN : text4.slice(last));
+}
+function ownerTurns(file) {
+  const raw = readFileSync12(file, "utf8");
+  if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
+  const turns = [];
+  const state = { open: false };
+  raw.split("\n").forEach((row4, i) => {
+    let o;
+    try {
+      o = JSON.parse(row4);
+    } catch {
+      return;
+    }
+    if (o.type !== "user" && o.type !== "assistant" || o.isSidechain === true || o.isMeta === true) return;
+    const c = o.message?.content;
+    const text4 = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b?.type === "text" ? b.text ?? "" : "").join(" ") : "";
+    const visible2 = hidePrivate(text4, state);
+    if (o.type !== "user") return;
+    const flat = scrub(visible2).replace(/\s+/g, " ").trim();
+    if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
+  });
+  return turns;
+}
+var CORRECTION = /^(?:no(?=[,.!:;])|no\s+(?:use|not|do|don'?t|that|it|the|wait|stop)\b|nope\b|wrong\b|stop\b|don'?t\b|do not\b|never\b|not that\b|that'?s (?:not|wrong)\b|actually\b|instead\b|please (?:don'?t|do not|stop|use)\b)/i;
+function findCorrections(turns) {
+  const out = [];
+  for (const t of turns.slice(1)) {
+    for (const quote of t.text.split(/(?<=[.!?])\s+/)) {
+      if (!quote.includes(HIDDEN) && CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
+    }
+  }
+  return out;
+}
+var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
+function expireTranscripts(db) {
+  const expired = Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
+  if (expired > 0) recordAudit(db, "transcripts_expired", null, { expired });
+  return expired;
+}
+function processTranscripts(db, tenant, config, extract = findCorrections) {
+  const done = { read: 0, proposed: 0, missing: 0 };
+  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all();
+  for (const r of rows) {
+    let outcome = "read";
+    if (!existsSync11(r.path)) {
+      outcome = "missing";
+      done.missing++;
+    } else if (automationRefusal(config, {}, r.path) !== null) {
+      outcome = "automation";
+    } else {
+      done.read++;
+      const turns = ownerTurns(r.path);
+      for (const c of verbatim(turns, extract(turns))) {
+        const statement = `Owner correction: "${c.quote}"`;
+        const source = `transcript:${r.session}:L${c.line}:${basename3(r.path)}`;
+        if (refusal(statement) !== null || refusal(source) !== null) continue;
+        const stored = addItem(db, { tenant, scope: "repository", scopeKey: r.repository, originRepository: r.repository, type: "preference", statement, rationale: null, anchors: [], source, trust: "owner", status: "proposed" });
+        if (stored.kind === "inserted") done.proposed++;
+      }
+    }
+    db.prepare("UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), outcome, r.id);
+  }
+  if (rows.length > 0) recordAudit(db, "transcripts_processed", null, { ...done });
+  return done;
+}
+
 // src/capture/ci.ts
 import { execFileSync as execFileSync4 } from "node:child_process";
 
 // src/capture/failures.ts
-import { createHash as createHash6, randomBytes as randomBytes5 } from "node:crypto";
+import { createHash as createHash6, randomBytes as randomBytes6 } from "node:crypto";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { userInfo } from "node:os";
 
@@ -4619,7 +4750,7 @@ var CREATE2 = `CREATE TABLE IF NOT EXISTS failure_ledger (
   PRIMARY KEY (session, agent, fingerprint, item_id)
 )`;
 var KEEP_DAYS2 = 14;
-var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
+var str2 = (v) => typeof v === "string" && v !== "" ? v : void 0;
 var PLACEHOLDER = /<(?:path|tmp|time|dur|hex|uuid|n|repo|port)>/g;
 var COMMON = /* @__PURE__ */ new Set(["error", "failed", "fail", "warning", "exit", "code"]);
 var MIN_SIGNATURE_WORDS = 2;
@@ -4645,18 +4776,18 @@ function plan(db, matching, session, agent, fingerprint) {
 }
 function failureRecall(data, input2, log) {
   const config = loadConfig(data);
-  const agentType = str(input2["agent_type"]);
-  const error = str(input2["error"]);
+  const agentType = str2(input2["agent_type"]);
+  const error = str2(input2["error"]);
   if (!recallOn(config) || input2["tool_name"] !== "Bash" || input2["is_interrupt"] === true || error === void 0) return "";
   if (agentType !== void 0 && !subagentAllowed(config, agentType)) return "";
-  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  const context = resolveContext(str2(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null || context.repository === null || context.owner === null) return "";
   const code = /^Exit code (\d+)/.exec(error)?.[1];
   const { fingerprint } = fingerprintFailure(error, code === void 0 ? null : Number(code));
   const lines2 = errorLines(error).map((l) => new Set(words2(l)));
   const all = new Set(lines2.flatMap((l) => [...l]));
-  const session = str(input2["session_id"]) ?? "unknown";
-  const agent = str(input2["agent_id"]) ?? MAIN_AGENT;
+  const session = str2(input2["session_id"]) ?? "unknown";
+  const agent = str2(input2["agent_id"]) ?? MAIN_AGENT;
   const base2 = { session, agent, via: "failure-recall", at: (/* @__PURE__ */ new Date()).toISOString() };
   try {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
@@ -4819,18 +4950,18 @@ function proposeRepair(db, context, r) {
   db.prepare("INSERT OR IGNORE INTO item_keys (item_id, kind, key) VALUES (?, 'fingerprint', ?)").run(stored.id, r.fingerprint);
   return stored.id;
 }
-var str2 = (v) => typeof v === "string" && v !== "" ? v : void 0;
-var commandOf = (input2) => str2(input2["tool_input"]?.command);
-var cutoff = () => new Date(Date.now() - EPISODE_DAYS * 864e5).toISOString();
+var str3 = (v) => typeof v === "string" && v !== "" ? v : void 0;
+var commandOf = (input2) => str3(input2["tool_input"]?.command);
+var cutoff2 = () => new Date(Date.now() - EPISODE_DAYS * 864e5).toISOString();
 function expireEpisodes(db) {
-  if (db.prepare("SELECT 1 FROM episodes WHERE at < ? LIMIT 1").get(cutoff()) !== void 0) db.prepare("DELETE FROM episodes WHERE at < ?").run(cutoff());
+  if (db.prepare("SELECT 1 FROM episodes WHERE at < ? LIMIT 1").get(cutoff2()) !== void 0) db.prepare("DELETE FROM episodes WHERE at < ?").run(cutoff2());
 }
 function recordEpisode(data, input2) {
   const config = loadConfig(data);
-  const error = str2(input2["error"]);
+  const error = str3(input2["error"]);
   const command = commandOf(input2);
   if (!episodesOn(config) || input2["tool_name"] !== "Bash" || input2["is_interrupt"] === true || error === void 0 || command === void 0 || ownCommand(command)) return;
-  const cwd = str2(input2["cwd"]) ?? process.cwd();
+  const cwd = str3(input2["cwd"]) ?? process.cwd();
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) return;
   const names = committerNames(cwd);
@@ -4846,8 +4977,8 @@ function recordEpisode(data, input2) {
         `INSERT INTO episodes (id, session, command_key, command, fingerprint, signature, head, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (session, command_key, fingerprint) DO UPDATE SET at = excluded.at, head = excluded.head, repaired_at = NULL`
       ).run(
-        `x-${randomBytes5(5).toString("hex")}`,
-        str2(input2["session_id"]) ?? "unknown",
+        `x-${randomBytes6(5).toString("hex")}`,
+        str3(input2["session_id"]) ?? "unknown",
         key(command, cwd),
         safe2.slice(0, MAX_COMMAND),
         fingerprint,
@@ -4876,10 +5007,10 @@ function commandPassed(data, input2) {
   const reverts = isGitRevert(command);
   const episodes = episodesOn(config) && !ownCommand(command);
   if (!commits && !reverts && !episodes) return "";
-  const cwd = str2(input2["cwd"]) ?? process.cwd();
+  const cwd = str3(input2["cwd"]) ?? process.cwd();
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null) return "";
-  const session = str2(input2["session_id"]) ?? "unknown";
+  const session = str3(input2["session_id"]) ?? "unknown";
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return "";
   try {
@@ -4900,7 +5031,7 @@ function commandPassed(data, input2) {
   }
 }
 function repairOpenEpisodes(db, repo, session, command, cwd) {
-  const open = db.prepare("SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?").all(session, key(command, cwd), cutoff());
+  const open = db.prepare("SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?").all(session, key(command, cwd), cutoff2());
   if (open.length === 0) return;
   const now = git2(cwd, "rev-parse", "HEAD")?.trim() ?? "";
   const fixed = open.filter((e) => now !== "" && now !== e.head);
@@ -4997,11 +5128,11 @@ function captureCi(data, config, cwd, limit = 100) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync11, readFileSync as readFileSync12, realpathSync as realpathSync5 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync13, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname11, isAbsolute as isAbsolute8, join as join12, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
-var str3 = (v) => typeof v === "string" && v !== "" ? v : void 0;
+var str4 = (v) => typeof v === "string" && v !== "" ? v : void 0;
 var num = (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : void 0;
 function enabled(data) {
   const config = loadConfig(data);
@@ -5009,7 +5140,7 @@ function enabled(data) {
 }
 function locate(abs) {
   let dir = dirname11(abs);
-  while (!existsSync11(dir) && dirname11(dir) !== dir) dir = dirname11(dir);
+  while (!existsSync12(dir) && dirname11(dir) !== dir) dir = dirname11(dir);
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root = realpathSync5(top);
@@ -5019,7 +5150,7 @@ function locate(abs) {
 function touched2(input2, cwd) {
   const tool = input2["tool_name"];
   const args = input2["tool_input"] ?? {};
-  const file = str3(args["file_path"]) ?? str3(args["notebook_path"]);
+  const file = str4(args["file_path"]) ?? str4(args["notebook_path"]);
   if (file === void 0 || typeof tool !== "string") return null;
   const at2 = locate(resolve6(cwd, file));
   if (at2 === null) return null;
@@ -5030,11 +5161,11 @@ function touched2(input2, cwd) {
     const limit = num(args["limit"]);
     if (offset !== void 0 || limit !== void 0) ranges = [[offset ?? 1, limit === void 0 ? Infinity : (offset ?? 1) + limit - 1]];
   } else if (tool === "Edit") {
-    replaced = [str3(args["old_string"])].filter((s) => s !== void 0);
+    replaced = [str4(args["old_string"])].filter((s) => s !== void 0);
     ranges = [];
   } else if (tool === "MultiEdit") {
     const edits2 = Array.isArray(args["edits"]) ? args["edits"] : [];
-    replaced = edits2.map((e) => str3(e["old_string"])).filter((s) => s !== void 0);
+    replaced = edits2.map((e) => str4(e["old_string"])).filter((s) => s !== void 0);
     ranges = [];
   } else if (tool !== "Write" && tool !== "NotebookEdit") {
     return null;
@@ -5069,7 +5200,7 @@ function anchored(items, root, t) {
   const read2 = () => {
     if (text4 === void 0) {
       try {
-        text4 = readFileSync12(resolve6(root, t.path), "utf8");
+        text4 = readFileSync13(resolve6(root, t.path), "utf8");
       } catch {
         text4 = null;
       }
@@ -5080,15 +5211,15 @@ function anchored(items, root, t) {
 }
 function pointOfAction(data, input2, log) {
   const config = enabled(data);
-  const agentType = str3(input2["agent_type"]);
+  const agentType = str4(input2["agent_type"]);
   if (config === null || agentType !== void 0 && !subagentAllowed(config, agentType)) return "";
-  const cwd = str3(input2["cwd"]) ?? process.cwd();
+  const cwd = str4(input2["cwd"]) ?? process.cwd();
   const hit = touched2(input2, cwd);
   if (hit === null) return "";
   const context = resolveContext(hit.root, config, currentConfigDir());
   if (context.tenant === null || context.repository === null || context.owner === null) return "";
-  const session = str3(input2["session_id"]) ?? "unknown";
-  const agent = str3(input2["agent_id"]) ?? MAIN_AGENT;
+  const session = str4(input2["session_id"]) ?? "unknown";
+  const agent = str4(input2["agent_id"]) ?? MAIN_AGENT;
   const base2 = { session, agent, via: "point-of-action", at: (/* @__PURE__ */ new Date()).toISOString() };
   try {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
@@ -5116,9 +5247,9 @@ function pointOfAction(data, input2, log) {
 }
 function preCompact(data, input2) {
   const config = enabled(data);
-  const session = str3(input2["session_id"]);
+  const session = str4(input2["session_id"]);
   if (config === null || session === void 0) return "";
-  const context = resolveContext(str3(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  const context = resolveContext(str4(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null) return "";
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return "";
@@ -5139,9 +5270,9 @@ function preCompact(data, input2) {
 }
 function afterCompaction(data, input2) {
   const config = enabled(data);
-  const session = str3(input2["session_id"]);
+  const session = str4(input2["session_id"]);
   if (config === null || session === void 0) return;
-  const context = resolveContext(str3(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  const context = resolveContext(str4(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
   if (context.tenant === null) return;
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return;
@@ -5529,7 +5660,7 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync4 } from "node:child_process";
-import { cpSync, existsSync as existsSync12, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync13, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync14, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname12, join as join15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -5541,7 +5672,7 @@ var BUNDLE = join15(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync12(join15(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync13(join15(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -5570,7 +5701,7 @@ var jsonLines2 = (text4) => text4.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync12(file) ? jsonLines2(readFileSync13(file, "utf8")) : [];
+var readLines = (file) => existsSync13(file) ? jsonLines2(readFileSync14(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -5653,9 +5784,9 @@ function lab(version, agent, model, only) {
   const base2 = mkdtempSync4(join15(tmpdir4(), "memory-lab-"));
   try {
     const plugin = join15(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync12(join15(ROOT, part))) cpSync(join15(ROOT, part), join15(plugin, part), { recursive: true });
+    for (const part of PLUGIN_PARTS) if (existsSync13(join15(ROOT, part))) cpSync(join15(ROOT, part), join15(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync13(join15(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync14(join15(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -5700,11 +5831,13 @@ suppressSqliteExperimentalWarning();
 var USAGE = `usage: memory <command>
 
   init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
-       [--failing-commands on|off] [--recall on] [--confirm]
+       [--failing-commands on|off] [--transcripts on|off] [--recall on] [--confirm]
       show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
       sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
       --failing-commands on keeps failed Bash commands as scrubbed episodes, 30 days, so the same command passing
-      later becomes a repair proposal; off is the default. --recall on turns recall back on after memory turned it
+      later becomes a repair proposal; off is the default. --transcripts on records each session's transcript path
+      at its end and turns your corrections in it into quoted proposals at the next session start or sweep; off is
+      the default. --recall on turns recall back on after memory turned it
       off itself, when two memory-linked reverts came within seven days
   remember [--scope repository|organisation|person|global] [--type <type>]
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
@@ -5797,6 +5930,9 @@ var USAGE = `usage: memory <command>
       count the reverts of commits memory linked items to, as the hook does after a git revert
   pre-compact
       the PreCompact hook: at most 1,000 characters of the items shown at the point of action this session
+  transcript
+      the SessionEnd and PostCompact hook, with the transcripts opt-in on: records the transcript's path (never its text),
+      or a compaction's redacted summary as an episode; the next session start or sweep reads the corrections
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
       as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
@@ -5838,7 +5974,7 @@ function setUp(data) {
 function init(args, data) {
   const { values } = parseArgs({
     args,
-    options: { tenant: { type: "string", multiple: true }, bind: { type: "string" }, automation: { type: "string" }, "failing-commands": { type: "string" }, recall: { type: "string" }, confirm: { type: "boolean" } }
+    options: { tenant: { type: "string", multiple: true }, bind: { type: "string" }, automation: { type: "string" }, "failing-commands": { type: "string" }, transcripts: { type: "string" }, recall: { type: "string" }, confirm: { type: "boolean" } }
   });
   const network = networkFilesystem(data);
   if (network !== void 0) {
@@ -5869,6 +6005,10 @@ function init(args, data) {
   if (values["failing-commands"] !== void 0) {
     if (values["failing-commands"] !== "on" && values["failing-commands"] !== "off") throw new Refusal("--failing-commands is on or off", 2);
     config.optIns.failingCommands = values["failing-commands"] === "on";
+  }
+  if (values.transcripts !== void 0) {
+    if (values.transcripts !== "on" && values.transcripts !== "off") throw new Refusal("--transcripts is on or off", 2);
+    config.optIns.transcripts = values.transcripts === "on";
   }
   if (values.recall !== void 0) {
     if (values.recall !== "on") throw new Refusal("--recall can only be on: memory turns it off itself", 2);
@@ -6468,14 +6608,17 @@ function recallCommand(args, data, cwd) {
   process.stdout.write(found.text);
 }
 function sweepCommand(data, cwd, due) {
-  const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
   let proposed = 0;
-  for (const { file } of proposalStores(data, context)) {
+  for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false, due ? HOOK_BUSY_MS : void 0);
     if (db === null) continue;
     try {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
       expireEpisodes(db);
+      expireTranscripts(db);
+      if (tenant !== "" && transcriptsOn(config)) processTranscripts(db, tenant, config);
     } finally {
       db.close();
     }
@@ -6484,7 +6627,7 @@ function sweepCommand(data, cwd, due) {
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync14(0, "utf8"));
+    const v = JSON.parse(readFileSync15(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -6600,6 +6743,12 @@ function revertsCommand(data, cwd) {
     db.close();
   }
 }
+function transcriptHook(data) {
+  try {
+    recordTranscript(data, hookInput());
+  } catch {
+  }
+}
 function preCompactHook(data) {
   try {
     process.stdout.write(preCompact(data, hookInput()));
@@ -6630,7 +6779,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync13(file)) return;
+  if (!existsSync14(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -6644,7 +6793,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync14(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync15(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -6700,7 +6849,7 @@ function purge(args, data, cwd) {
     all: values.all
   };
   const tenantsDir = join16(data, "tenants");
-  const every = existsSync13(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const every = existsSync14(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -6744,7 +6893,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync14(file, "utf8"));
+    return parse(readFileSync15(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
@@ -6868,6 +7017,8 @@ async function main(argv) {
       return ciCommand(data, process.cwd());
     case "reverts":
       return revertsCommand(data, process.cwd());
+    case "transcript":
+      return transcriptHook(data);
     case "pre-compact":
       return preCompactHook(data);
     case "capture":
