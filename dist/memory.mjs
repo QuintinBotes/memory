@@ -5646,15 +5646,16 @@ var OUTCOMES = ["accepted", "rejected"];
 function recordOutcome(db, id, outcome, cost, source) {
   return inTransaction(db, () => {
     const item = db.prepare("SELECT statement FROM items WHERE id = ? AND type = 'toolset' AND status = 'active' AND valid_to IS NULL").get(id);
-    if (item === void 0) return false;
+    if (item === void 0) return "missing";
+    if (source !== void 0 && db.prepare("SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ? AND outcome IS NOT NULL").get(id, source) !== void 0) return "already";
     const now = (/* @__PURE__ */ new Date()).toISOString();
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, outcome, cost)
        VALUES (?, ?, ?, 'owner', ?, ?, 'deterministic', ?, ?)`
-    ).run(`e-${randomBytes6(5).toString("hex")}`, id, source, sha256(item.statement), now, outcome, cost);
+    ).run(`e-${randomBytes6(5).toString("hex")}`, id, source ?? "run", sha256(item.statement), now, outcome, cost);
     if (outcome === "accepted") db.prepare("UPDATE items SET reinforced_at = ? WHERE id = ?").run(now, id);
     recordAudit(db, "toolset_outcome", { type: "item", id }, { outcome, cost });
-    return true;
+    return "recorded";
   });
 }
 function routeToolsets(db, task) {
@@ -8324,21 +8325,24 @@ function routeCommand(args, data) {
   else process.stdout.write(out);
 }
 function outcomeCommand(args, data) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { cost: { type: "string", default: "0" }, source: { type: "string", default: "run" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { cost: { type: "string", default: "0" }, source: { type: "string" } } });
   const [id, outcome] = positionals;
   if (positionals.length !== 2 || !OUTCOMES.includes(outcome)) throw new Refusal(`usage: memory outcome <id> ${OUTCOMES.join("|")} [--cost <n>] [--source <run>]`, 2);
   const cost = Number(values.cost);
   if (!Number.isFinite(cost) || cost < 0 || values.cost.trim() === "") throw new Refusal("--cost takes a number, 0 or more", 2);
-  const why = refusal(values.source, void 0, true);
+  const source = values.source?.trim() || void 0;
+  const why = source === void 0 ? null : refusal(source, void 0, true);
   if (why !== null) throw new Refusal(`not recorded: the source is refused because ${why}`);
   setUp(data);
   const db = openStore(personFile(data), false);
+  let done = "missing";
   try {
-    if (db === null || !recordOutcome(db, id, outcome, cost, values.source.trim() || "run")) throw new Refusal(`no active toolset ${id}; remember one with --scope global --type toolset`);
+    if (db !== null) done = recordOutcome(db, id, outcome, cost, source);
   } finally {
     db?.close();
   }
-  console.log(`recorded ${outcome} for ${id}${cost > 0 ? `, cost ${cost}` : ""}`);
+  if (done === "missing") throw new Refusal(`no active toolset ${id}; remember one with --scope global --type toolset`);
+  console.log(done === "already" ? `already recorded: ${source} has an outcome on ${id}; nothing changed` : `recorded ${outcome} for ${id}${cost > 0 ? `, cost ${cost}` : ""}`);
 }
 function closeCommand(args, data, cwd) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });

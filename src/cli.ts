@@ -931,21 +931,24 @@ function routeCommand(args: string[], data: string): void {
 
 /** `memory outcome <id> accepted|rejected [--cost <n>] [--source <run>]`: one run's outcome with a toolset. */
 function outcomeCommand(args: string[], data: string): void {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { cost: { type: 'string', default: '0' }, source: { type: 'string', default: 'run' } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { cost: { type: 'string', default: '0' }, source: { type: 'string' } } });
   const [id, outcome] = positionals as [string, Outcome];
   if (positionals.length !== 2 || !OUTCOMES.includes(outcome)) throw new Refusal(`usage: memory outcome <id> ${OUTCOMES.join('|')} [--cost <n>] [--source <run>]`, 2);
   const cost = Number(values.cost);
   if (!Number.isFinite(cost) || cost < 0 || values.cost.trim() === '') throw new Refusal('--cost takes a number, 0 or more', 2);
-  const why = refusal(values.source, undefined, true);
+  const source = values.source?.trim() || undefined;
+  const why = source === undefined ? null : refusal(source, undefined, true);
   if (why !== null) throw new Refusal(`not recorded: the source is refused because ${why}`);
   setUp(data);
   const db = openStore(personFile(data), false);
+  let done: ReturnType<typeof recordOutcome> = 'missing';
   try {
-    if (db === null || !recordOutcome(db, id, outcome, cost, values.source.trim() || 'run')) throw new Refusal(`no active toolset ${id}; remember one with --scope global --type toolset`);
+    if (db !== null) done = recordOutcome(db, id, outcome, cost, source);
   } finally {
     db?.close();
   }
-  console.log(`recorded ${outcome} for ${id}${cost > 0 ? `, cost ${cost}` : ''}`);
+  if (done === 'missing') throw new Refusal(`no active toolset ${id}; remember one with --scope global --type toolset`);
+  console.log(done === 'already' ? `already recorded: ${source} has an outcome on ${id}; nothing changed` : `recorded ${outcome} for ${id}${cost > 0 ? `, cost ${cost}` : ''}`);
 }
 
 /** `memory close <id>`: the owner closes an approved open question. */

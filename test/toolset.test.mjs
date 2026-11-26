@@ -100,3 +100,20 @@ test('SC5: of two toolsets with the same purpose, both are returned with counts 
   const rows = routed(s, 'review this pull request');
   assert.deepEqual(rows.map((r) => [r.id, r.accepted]), [[second, 2], [[alpha, beta].sort()[0], 0]]);
 });
+
+// #99: one run is one outcome, however often it is reported.
+test('#99 the same --source recorded twice counts once and says so; no --source and another source still count', () => {
+  const s = setup();
+  const id = toolset(s, REVIEW);
+  assert.equal(outcome(s, id, 'accepted', '--cost', '0.4', '--source', 'run-1').status, 0);
+  const again = outcome(s, id, 'accepted', '--cost', '0.4', '--source', 'run-1');
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /already recorded/);
+  assert.deepEqual(counts(s, id), { id, accepted: 1, rejected: 0, cost: 0.4 });
+  assert.equal(outcome(s, id, 'rejected', '--source', 'run-1').status, 0, 'a different verdict for the same run is still the same run');
+  assert.deepEqual(counts(s, id), { id, accepted: 1, rejected: 0, cost: 0.4 });
+  assert.equal(outcome(s, id, 'accepted').status, 0);
+  assert.equal(outcome(s, id, 'accepted').status, 0);
+  assert.equal(outcome(s, id, 'accepted', '--source', 'run-2').status, 0);
+  assert.deepEqual(counts(s, id), { id, accepted: 4, rejected: 0, cost: 0.4 });
+});
