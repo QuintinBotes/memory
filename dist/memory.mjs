@@ -1014,8 +1014,8 @@ function insertItem(db, item) {
     );
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
-       VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`
-    ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now, cleanTaint(item.taint));
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(`e-${randomBytes(5).toString("hex")}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now, item.extractor ?? "deterministic", cleanTaint(item.taint));
   });
   return id;
 }
@@ -1973,8 +1973,8 @@ function mergeEvidence(db, id, c) {
     if (db.prepare("SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?").get(id, c.source) !== void 0) return { kind: "known", id };
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
-       VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`
-    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? (/* @__PURE__ */ new Date()).toISOString(), cleanTaint(c.taint));
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? (/* @__PURE__ */ new Date()).toISOString(), c.extractor ?? "deterministic", cleanTaint(c.taint));
     db.prepare("UPDATE items SET support = support + ? WHERE id = ?").run(delta, id);
     const audit = recordAudit(db, "evidence_merged", { type: "item", id }, { evidenceId, supportDelta: delta, trust });
     const { support } = db.prepare("SELECT support FROM items WHERE id = ?").get(id);
@@ -2799,26 +2799,57 @@ var captureWanted = (config) => consented(config) && covers(config, "capture") &
 function scrub(text4) {
   return redact(text4).text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, "[REDACTED:PRIVATE_KEY]").replace(new RegExp(WEBHOOK.source, "gi"), "[REDACTED:WEBHOOK]").replace(new RegExp(EMAIL.source, "g"), "[REDACTED:EMAIL]").replace(new RegExp(HANDLE.source, "g"), "[REDACTED:HANDLE]");
 }
-function transcriptLines(file) {
-  return readFileSync7(file, "utf8").split("\n").map((line, i) => {
+var blocks = (c, kinds) => typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => kinds.includes(b?.type ?? "") ? b.text ?? "" : "").join(" ") : "";
+var said = (role, text4) => role === "user" || role === "assistant" ? [role, text4] : null;
+var CODEX_INJECTED = /^\s*(?:<|#\s*AGENTS\.md instructions\b)/;
+var ADAPTERS = [
+  {
+    agent: "claude-code",
+    // Every Claude Code record carries its session id, so a transcript with no message yet is still known.
+    owns: (o) => typeof o.type === "string" && (typeof o.sessionId === "string" || (o.type === "user" || o.type === "assistant") && typeof o.message === "object"),
+    turn: (o) => said(o.type, blocks(o.message?.content, ["text"]))
+  },
+  {
+    // A Codex rollout log, ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl: a session_meta record, then response items and events.
+    agent: "codex",
+    owns: (o) => o.type === "session_meta" && typeof o.payload === "object",
+    turn: (o) => {
+      if (o.type !== "response_item" || o.payload?.type !== "message") return null;
+      const text4 = blocks(o.payload.content, ["input_text", "output_text"]);
+      return o.payload.role === "user" && CODEX_INJECTED.test(text4) ? null : said(o.payload.role, text4);
+    }
+  }
+];
+function readLog(file) {
+  const records = readFileSync7(file, "utf8").split("\n").map((line) => {
     try {
       const o = JSON.parse(line);
-      if (o.type !== "user" && o.type !== "assistant") return "";
-      const c = o.message?.content;
-      const text4 = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b?.type === "text" ? b.text ?? "" : "").join(" ") : "";
-      const flat = text4.replace(/\s+/g, " ").trim();
-      return flat === "" ? "" : `L${i + 1} ${o.type}: ${flat}`;
+      return typeof o === "object" && o !== null ? o : null;
     } catch {
-      return "";
+      return null;
     }
   });
+  const adapter = ADAPTERS.find((a) => records.some((o) => o !== null && a.owns(o)));
+  if (adapter === void 0) return null;
+  const lines2 = records.map((o, i) => {
+    const turn = o === null ? null : adapter.turn(o);
+    const flat = turn?.[1].replace(/\s+/g, " ").trim() ?? "";
+    return flat === "" ? "" : `L${i + 1} ${turn[0]}: ${flat}`;
+  });
+  return { agent: adapter.agent, lines: lines2 };
 }
+var summarise = (data, record) => {
+  mkdirSync6(join6(data, "logs"), { recursive: true, mode: 448 });
+  appendFileSync3(join6(data, "logs", "capture.jsonl"), `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), ...record })}
+`, { mode: 384 });
+};
 function externalSources(file) {
   const found = /* @__PURE__ */ new Set();
   const label = (s) => s.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 60);
   for (const line of readFileSync7(file, "utf8").split("\n")) {
     try {
       const o = JSON.parse(line);
+      if (o.payload?.type === "web_search_call") found.add("web:search");
       const content = o.message?.content;
       if (!Array.isArray(content)) continue;
       for (const b of content) {
@@ -2934,13 +2965,19 @@ function keepCandidates(db, context, candidates, from2) {
     else if (stored.kind === "inserted") {
       saved++;
       if (status === "proposed") queued++;
-      recordAudit(db, "item_captured", { type: "item", id: stored.id }, { session: from2.session, agent: "claude-code", status });
+      recordAudit(db, "item_captured", { type: "item", id: stored.id }, { session: from2.session, agent: from2.agent, status });
     }
   }
   return { saved, merged, queued };
 }
 async function captureLocked(data, config, context, path, session, input2) {
-  const lines2 = transcriptLines(path);
+  const log = readLog(path);
+  if (log === null) {
+    const skipped = `${basename2(path)}: unknown log format`;
+    summarise(data, { session, skipped, saved: 0 });
+    return `nothing captured: skipped ${skipped}`;
+  }
+  const { agent, lines: lines2 } = log;
   const seen = readState(data)[session] ?? 0;
   let text4 = lines2.slice(seen).filter((l) => l !== "").join("\n");
   if (text4.length > MAX_TRANSCRIPT_CHARS) text4 = text4.slice(text4.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, "");
@@ -2952,19 +2989,13 @@ async function captureLocked(data, config, context, path, session, input2) {
   const db = openStore(tenantFile(data, context.tenant), true);
   let kept;
   try {
-    kept = keepCandidates(db, context, candidates, { session, source: `capture:claude-code:${session}:${basename2(path)}`, taint });
+    kept = keepCandidates(db, context, candidates, { session, agent, source: `capture:${agent}:${session}:${basename2(path)}`, taint });
   } finally {
     db.close();
   }
   const { saved, merged, queued } = kept;
   const usage2 = model.usage ?? { input: 0, output: 0 };
-  mkdirSync6(join6(data, "logs"), { recursive: true, mode: 448 });
-  appendFileSync3(
-    join6(data, "logs", "capture.jsonl"),
-    `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), session, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, candidates: candidates.length, saved, merged })}
-`,
-    { mode: 384 }
-  );
+  summarise(data, { session, agent, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, candidates: candidates.length, saved, merged });
   commitWatermark(data, session, lines2.length);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }
@@ -3377,7 +3408,7 @@ function get(args, data, context, cwd) {
   ].map((l) => `${l}
 `).join(""));
 }
-function propose2(args, data, config, context, cwd) {
+function propose2(args, data, config, context, cwd, agent) {
   const automated = automationRefusal(config);
   if (automated !== null) throw new ToolError(`not proposed: ${automated}`);
   const statement = text2(args, "statement");
@@ -3400,11 +3431,11 @@ function propose2(args, data, config, context, cwd) {
     if (why !== null) throw new ToolError(`not proposed: ${what} is refused because ${why}`);
   }
   const ins = loadInstructions(cwd, currentConfigDir());
-  const said = judge(ins, statement);
-  if (said?.kind === "repeats") return `not proposed: duplicates ${displayPath(ins, said.line.file)}:${said.line.line}, which the agent already loads`;
+  const said2 = judge(ins, statement);
+  if (said2?.kind === "repeats") return `not proposed: duplicates ${displayPath(ins, said2.line.file)}:${said2.line.line}, which the agent already loads`;
   const tenant = personal ? "" : context.tenant;
   const scopeKey = scope === "repository" ? context.repository : scope === "organisation" ? context.owner : "";
-  const candidate = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: "proposed", trust: origin, originRepository: context.repository };
+  const candidate = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: "proposed", trust: origin, originRepository: context.repository, extractor: `mcp:${agent}` };
   const taint = [...typeof named === "string" ? [named.trim()] : [], ...origin === "external" || origin === "bot" ? [`${origin}:${source}`] : []];
   if (taint.length > 0) candidate.taint = taint.join(";");
   const db = openStore(personal ? personFile(data) : tenantFile(data, tenant), true);
@@ -3449,7 +3480,7 @@ function feedback(args, data, context, cwd) {
   if (done === void 0) throw new ToolError(`no active item ${id} here; feedback applies to items memory_search can return`);
   return done;
 }
-async function call(name, args, data, cwd) {
+async function call(name, args, data, cwd, agent) {
   const config = loadConfig(data);
   if (!consented(config)) throw new ToolError("memory is not set up, or its configuration changed since the owner agreed to it");
   const context = resolveContext(cwd, config, currentConfigDir());
@@ -3464,14 +3495,18 @@ async function call(name, args, data, cwd) {
     case "memory_related":
       return relatedTool(args, data, config, context, cwd);
     case "memory_propose":
-      return propose2(args, data, config, context, cwd);
+      return propose2(args, data, config, context, cwd, agent);
     case "memory_feedback":
       return feedback(args, data, context, cwd);
     default:
       throw new ToolError(`no tool ${String(name)}; memory's tools are ${TOOLS.map((t) => t.name).join(", ")}`);
   }
 }
-async function handle(line, data, cwd, version) {
+var clientName = (info) => {
+  const name = info?.name;
+  return typeof name === "string" && name.trim() !== "" ? name.trim().replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 60) : "unknown";
+};
+async function handle(line, data, cwd, version, client) {
   let message;
   try {
     message = JSON.parse(line);
@@ -3486,6 +3521,7 @@ async function handle(line, data, cwd, version) {
   const ok = (result) => ({ jsonrpc: "2.0", id, result });
   switch (method) {
     case "initialize":
+      client.agent = clientName(params?.["clientInfo"]);
       return ok({
         protocolVersion: PROTOCOL_VERSIONS.includes(params?.["protocolVersion"]) ? params["protocolVersion"] : PROTOCOL_VERSIONS.at(-1),
         capabilities: { tools: {} },
@@ -3499,7 +3535,7 @@ async function handle(line, data, cwd, version) {
       const args = params?.["arguments"] ?? {};
       try {
         if (typeof args !== "object" || args === null || Array.isArray(args)) throw new ToolError("arguments is an object");
-        return ok({ content: [{ type: "text", text: await call(params?.["name"], args, data, cwd) }] });
+        return ok({ content: [{ type: "text", text: await call(params?.["name"], args, data, cwd, client.agent) }] });
       } catch (error) {
         const known = error instanceof ToolError || error instanceof ConfigError;
         if (!known) console.error(`memory: ${error.message}`);
@@ -3512,10 +3548,11 @@ async function handle(line, data, cwd, version) {
 }
 function serve(data, cwd, version) {
   let queue = Promise.resolve();
+  const client = { agent: "unknown" };
   createInterface({ input: process.stdin, terminal: false }).on("line", (line) => {
     if (line.trim() === "") return;
     queue = queue.then(async () => {
-      const reply = await handle(line, data, cwd, version);
+      const reply = await handle(line, data, cwd, version, client);
       if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}
 `);
     }).catch((error) => {
@@ -6010,6 +6047,7 @@ var FAMILIES = [
       ];
       keepCandidates(db, { tenant: TENANT2, repository: REPO }, texts.map((statement, i) => ({ kind: "lesson", statement, evidence: `L${i}` })), {
         session: "poison",
+        agent: "claude-code",
         source: "capture:claude-code:poison:t.jsonl",
         taint: []
       });
