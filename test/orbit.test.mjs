@@ -279,7 +279,7 @@ test('a store from before item keys opens and gains the table', () => {
   assert.equal(kept.length, 1);
   assert.equal(run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   const after = new DatabaseSync(file, { readOnly: true });
-  assert.equal(after.prepare('PRAGMA user_version').get().user_version, 16);
+  assert.equal(after.prepare('PRAGMA user_version').get().user_version, 17);
   assert.equal(after.prepare('SELECT count(*) AS n FROM item_keys').get().n, 0);
   const now = after.prepare('SELECT i.id, i.statement, (SELECT count(*) FROM evidence e WHERE e.item_id = i.id) AS evidence FROM items i').all().map((r) => ({ ...r }));
   assert.deepEqual(now, kept, 'items and evidence survive the migration');

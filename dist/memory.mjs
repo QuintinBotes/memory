@@ -3,7 +3,7 @@
 // src/cli.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join16, normalize as normalize4 } from "node:path";
+import { basename as basename4, isAbsolute as isAbsolute9, join as join16, normalize as normalize4 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -2650,7 +2650,13 @@ var MIGRATIONS = [
     outcome TEXT NOT NULL CHECK (outcome IN ('reinforced', 'weakened')),
     PRIMARY KEY (item_id, run_id)
   );
-  `
+  `,
+  // v17 - the repository an episode came from (null = unknown: stored before this version), so purge --repo deletes only
+  // that repository's episodes. Skipped when the column is there, so a store rolled back by version alone still opens.
+  (db) => {
+    const has = db.prepare("PRAGMA table_info(episodes)").all().some((c) => c.name === "repository");
+    if (!has) db.exec("ALTER TABLE episodes ADD COLUMN repository TEXT;");
+  }
 ];
 var SECURE_DELETE = 6;
 var WRITE_BUSY_MS = 5e3;
@@ -3641,6 +3647,12 @@ var orphaned = (e) => ({
   params: [...e.params, ...e.params]
 });
 var SHOWN = "status IN ('active', 'stale')";
+function episodeClause(scope) {
+  if (scope.all === true || scope.tenant !== void 0) return { where: "1=1", params: [] };
+  if (scope.repository !== void 0) return { where: "repository = ?", params: [scope.repository] };
+  if (scope.before !== void 0) return { where: "at < ?", params: [scope.before] };
+  return { where: "1=0", params: [] };
+}
 function previewPurge(db, scope) {
   const i = itemClause(scope);
   const e = evidenceClause(scope);
@@ -3658,7 +3670,21 @@ function previewPurge(db, scope) {
     reached = touched(e);
   }
   const checks = db.prepare(`SELECT DISTINCT promoted_to AS c FROM items WHERE promoted_to IS NOT NULL AND ${reached.where} ORDER BY c`).all(...reached.params).map((r) => r.c);
-  return { items, evidence, returnedToProposed: returnedToProposedIds.length, returnedToProposedIds, checks };
+  const x = episodeClause(scope);
+  const episodesByRepository = {};
+  for (const r of db.prepare("SELECT repository, COUNT(*) AS n FROM episodes WHERE repository IS NOT NULL GROUP BY repository ORDER BY repository").all()) {
+    episodesByRepository[r.repository] = r.n;
+  }
+  return {
+    items,
+    evidence,
+    returnedToProposed: returnedToProposedIds.length,
+    returnedToProposedIds,
+    checks,
+    episodes: count(db, `SELECT COUNT(*) AS n FROM episodes WHERE ${x.where}`, ...x.params),
+    episodesByRepository,
+    episodesNotAttributable: count(db, "SELECT COUNT(*) AS n FROM episodes WHERE repository IS NULL")
+  };
 }
 function executePurge(db, scope) {
   const preview = previewPurge(db, scope);
@@ -3683,15 +3709,15 @@ function executePurge(db, scope) {
       }
       db.prepare(`DELETE FROM evidence WHERE ${e.where}`).run(...e.params);
     }
-    if (scope.all === true || scope.tenant !== void 0 || scope.repository !== void 0) db.prepare("DELETE FROM episodes").run();
-    else if (scope.before !== void 0) db.prepare("DELETE FROM episodes WHERE at < ?").run(scope.before);
+    const x = episodeClause(scope);
+    db.prepare(`DELETE FROM episodes WHERE ${x.where}`).run(...x.params);
     if (scope.all === true || scope.tenant !== void 0) db.prepare("DELETE FROM transcripts").run();
     else if (scope.repository !== void 0) db.prepare("DELETE FROM transcripts WHERE repository = ?").run(scope.repository);
     else if (scope.before !== void 0) db.prepare("DELETE FROM transcripts WHERE at < ?").run(scope.before);
     db.prepare("DELETE FROM item_vectors WHERE item_id NOT IN (SELECT id FROM items WHERE status = 'active')").run();
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     const audited = scope.source === void 0 ? scope : { ...scope, source: "withheld" };
-    const { returnedToProposedIds: _ids, ...counts } = preview;
+    const { returnedToProposedIds: _ids, episodesByRepository: _by, ...counts } = preview;
     recordAudit(db, "purge", null, { scope: audited, removed: counts });
     db.exec("COMMIT");
   } catch (error) {
@@ -5294,8 +5320,8 @@ function recordEpisode(data, input2) {
     inTransaction(db, () => {
       expireEpisodes(db);
       db.prepare(
-        `INSERT INTO episodes (id, session, command_key, command, fingerprint, signature, head, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (session, command_key, fingerprint) DO UPDATE SET at = excluded.at, head = excluded.head, repaired_at = NULL`
+        `INSERT INTO episodes (id, session, command_key, command, fingerprint, signature, head, at, repository) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (session, command_key, fingerprint) DO UPDATE SET at = excluded.at, head = excluded.head, repaired_at = NULL, repository = excluded.repository`
       ).run(
         `x-${randomBytes6(5).toString("hex")}`,
         str3(input2["session_id"]) ?? "unknown",
@@ -5304,7 +5330,8 @@ function recordEpisode(data, input2) {
         fingerprint,
         signature ?? "",
         git2(cwd, "rev-parse", "HEAD")?.trim() ?? "",
-        (/* @__PURE__ */ new Date()).toISOString()
+        (/* @__PURE__ */ new Date()).toISOString(),
+        context.repository
       );
     });
   } finally {
@@ -7253,7 +7280,8 @@ function purge(args, data, cwd) {
   const files = tenants.map((t) => tenantFile(data, t));
   if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0 || repository !== void 0) files.push(personFile(data));
   const report = {};
-  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [] };
+  const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [], episodes: 0, episodesByRepository: {}, episodesNotAttributable: 0 };
+  const keptNotAttributable = [];
   const residue = [];
   for (const file of files) {
     const db = openStore(file, false);
@@ -7266,6 +7294,12 @@ function purge(args, data, cwd) {
       total.returnedToProposed += r.returnedToProposed;
       total.returnedToProposedIds.push(...r.returnedToProposedIds);
       total.checks.push(...r.checks);
+      total.episodes += r.episodes;
+      total.episodesNotAttributable += r.episodesNotAttributable;
+      for (const [repo, n] of Object.entries(r.episodesByRepository)) total.episodesByRepository[repo] = (total.episodesByRepository[repo] ?? 0) + n;
+      if (repository !== void 0 && r.episodesNotAttributable > 0 && file !== personFile(data)) {
+        keptNotAttributable.push(`${r.episodesNotAttributable} episode(s) not attributable to a repository are kept; memory purge --tenant ${basename4(file, ".sqlite")} removes them (and everything else in that tenant)`);
+      }
     } catch (error) {
       if (!(error instanceof PurgeResidueError)) throw error;
       residue.push(`${file}: ${error.message}`);
@@ -7277,7 +7311,7 @@ function purge(args, data, cwd) {
     if (values.all === true) rmSync6(injectionLog(data), { force: true });
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
-  console.log(JSON.stringify({ ...total, files: report }, null, 2));
+  console.log(JSON.stringify({ ...total, ...keptNotAttributable.length > 0 ? { notAttributable: keptNotAttributable } : {}, files: report }, null, 2));
   if (residue.length > 0) throw new Refusal(`purge incomplete
 ${residue.join("\n")}`);
   if (values.confirm !== true) console.error("Nothing was deleted. Run the same command with --confirm to delete.");

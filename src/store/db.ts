@@ -292,6 +292,13 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     PRIMARY KEY (item_id, run_id)
   );
   `,
+
+  // v17 - the repository an episode came from (null = unknown: stored before this version), so purge --repo deletes only
+  // that repository's episodes. Skipped when the column is there, so a store rolled back by version alone still opens.
+  (db) => {
+    const has = (db.prepare('PRAGMA table_info(episodes)').all() as { name: string }[]).some((c) => c.name === 'repository');
+    if (!has) db.exec('ALTER TABLE episodes ADD COLUMN repository TEXT;');
+  },
 ];
 const SECURE_DELETE = 6;
 
