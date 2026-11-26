@@ -851,6 +851,82 @@ worse: at least one measured row that holds its bar, and none that misses
 it. Otherwise it names the measure and arm that missed. It changes no
 setting; you do.
 
+### Head to head
+
+`memory eval head-to-head --since <date> --history <file>` scores memory
+against the alternatives on your own work (#25). Questions come from the
+history's corrections, decisions and failures after `--since`, each labelled
+with one category: single fact, multi-source, knowledge update (only the newer
+decision is right), temporal (what applied at a date), abstention (nothing
+applies, so silence is right), code-anchored hazard, or stale citation (the
+cited code was rewritten, so the item must not be recalled). A question whose
+answer was only recorded after the cut-off is dropped; no arm ingests
+anything dated after it.
+
+Arms: this plugin (a throwaway store, searched as `memory_search` searches),
+memory off, Claude Code auto memory (a `MEMORY.md` of one line per note, of
+which Claude Code loads the first 200 lines), the whole history in context,
+and Mem0, Graphiti, Basic Memory and a community memory plugin, each run from
+your local install. The bars are printed first, before any arm runs; then per
+arm and category recall at 1 and 5 against the answer keys, the share it
+stayed silent, stale recall (a stale or superseded item in the top five),
+tokens per question and per correct item (characters divided by four, for
+every arm) and p50 and p95 latency on this machine; then the verdict against
+the best alternative, the categories memory misses, the matcher's precision,
+and the vocabulary-miss share: of memory's misses that another arm found,
+those whose item shares no word with the question. Grading is a match of the
+answer key's words in the hit, no model. Every row but latency is the same
+for the same inputs.
+
+The replay set, every per-question result, the scorecard and `last.json`
+(with `vocabulary_miss_share`) stay in `eval/head-to-head/<tenant>/` in the
+data directory. `sample.jsonl` there holds 30 of the run's matches: mark each
+`correct` true or false and pass the file back with `--checked` to report the
+matcher's precision. The synthetic fixture reproduces the plugin's own rows:
+
+```bash
+node test/fixtures/head-to-head/generate.mjs   # rewrites acme.json, 315 questions
+memory eval head-to-head --since 2026-06-01 --history test/fixtures/head-to-head/acme.json \
+  --checked test/fixtures/head-to-head/checked.jsonl [--arms arms.json]
+```
+
+The history file:
+
+```json
+{"tenant": "acme", "repository": "acme/api", "client": true,
+ "evidence": [{"id": "e1", "at": "2026-01-05", "kind": "decision", "statement": "Store ledger amounts as floats", "key": "amounts as floats"},
+              {"id": "e2", "at": "2026-02-05", "kind": "decision", "statement": "Store ledger amounts as integer cents", "key": "amounts as integer cents", "supersedes": "e1"},
+              {"id": "e3", "at": "2026-02-08", "kind": "code-change", "statement": "Rewrote src/ledger/legacy.ts", "path": "src/ledger/legacy.ts"}],
+ "events": [{"id": "q1", "at": "2026-03-04", "kind": "correction", "question": "How do we store ledger amounts?", "answers": ["e2"]}]}
+```
+
+Evidence kinds are `decision`, `correction`, `lesson`, `hazard`, `failure`
+and `code-change`; `key` is the phrase that shows a hit holds the item, and
+`path` anchors it. An event may name a `path` (the file being edited) and an
+`asOf` date (a temporal question). A tenant is a client tenant unless
+`client` is false.
+
+An alternative runs only through the command you name in the arms file, as
+its own process; no code of it is in this repository:
+
+```json
+{"arms": {"mem0": {"command": ["python3", "/path/to/mem0-arm.py"], "modelBacked": true},
+          "graphiti": {"command": ["graphiti-arm"], "offMachine": true}}}
+```
+
+The command gets only `PATH`, `HOME`, `DO_NOT_TRACK=1` and the arm's own
+switch (`MEM0_TELEMETRY=False`, `GRAPHITI_TELEMETRY_ENABLED=false`) in its
+environment, and speaks one JSON object per line: it answers
+`{"op": "hello"}` with `{"telemetry": "off"}`, `{"op": "ingest", "evidence":
+[...]}` with `{"ok": true}`, and `{"op": "answer", "question": "...",
+"path"?: "..."}` with `{"hits": ["best first", ...]}` (an empty list is
+silence). An arm with no command, one that is not installed, crashes, or does
+not confirm its telemetry is off scores zero and the scorecard says why; it
+is sent no evidence until it confirms. A `modelBacked` arm runs three times
+and reports its spread. An `offMachine` arm, one that sends evidence to a
+hosted model or service, is skipped for a client tenant, with the reason. Any
+other name adds an arm.
+
 ## Code anchor providers
 
 Items can be anchored to code. Memory ships a provider that anchors by path,

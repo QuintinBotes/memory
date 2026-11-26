@@ -1,0 +1,6299 @@
+{
+ "tenant": "acme",
+ "repository": "acme/api",
+ "client": true,
+ "evidence": [
+  {
+   "id": "e001",
+   "at": "2026-01-01",
+   "kind": "decision",
+   "statement": "The payments worker batch size is 80",
+   "key": "payments worker batch size is 80"
+  },
+  {
+   "id": "e002",
+   "at": "2026-01-01",
+   "kind": "lesson",
+   "statement": "payments requests time out after 13 seconds",
+   "key": "payments requests time out after 13 seconds"
+  },
+  {
+   "id": "e003",
+   "at": "2026-02-01",
+   "kind": "decision",
+   "statement": "The payments service publishes to the payments-events-v18 queue",
+   "key": "payments-events-v18"
+  },
+  {
+   "id": "e004",
+   "at": "2026-02-01",
+   "kind": "decision",
+   "statement": "Run the payments migration before deploying payments",
+   "key": "Run the payments migration before deploying payments"
+  },
+  {
+   "id": "e005",
+   "at": "2026-03-01",
+   "kind": "correction",
+   "statement": "Flush the payments cache after deploying payments",
+   "key": "Flush the payments cache after deploying payments"
+  },
+  {
+   "id": "e006",
+   "at": "2026-02-01",
+   "kind": "decision",
+   "statement": "Write the payments changelog entry before releasing payments",
+   "key": "Write the payments changelog entry before releasing payments"
+  },
+  {
+   "id": "e007",
+   "at": "2026-03-01",
+   "kind": "correction",
+   "statement": "Turn the payments feature flag on only after releasing payments",
+   "key": "Turn the payments feature flag on only after releasing payments"
+  },
+  {
+   "id": "e008",
+   "at": "2026-02-01",
+   "kind": "decision",
+   "statement": "The payments on call runbook lives in docs/runbooks/payments.md",
+   "key": "The payments on call runbook lives in docs/runbooks/payments.md"
+  },
+  {
+   "id": "e009",
+   "at": "2026-03-01",
+   "kind": "correction",
+   "statement": "Page the payments on call rota through the payments-oncall alias",
+   "key": "Page the payments on call rota through the payments-oncall alias"
+  },
+  {
+   "id": "e010",
+   "at": "2026-01-01",
+   "kind": "decision",
+   "statement": "Store payments amounts as floats",
+   "key": "store payments amounts as floats"
+  },
+  {
+   "id": "e011",
+   "at": "2026-04-01",
+   "kind": "decision",
+   "statement": "Store payments amounts as integer cents",
+   "key": "store payments amounts as integer cents",
+   "supersedes": "e010"
+  },
+  {
+   "id": "e012",
+   "at": "2026-01-01",
+   "kind": "decision",
+   "statement": "Store payments identifiers as uuid v4",
+   "key": "store payments identifiers as uuid v4"
+  },
+  {
+   "id": "e013",
+   "at": "2026-04-01",
+   "kind": "decision",
+   "statement": "Store payments identifiers as ulid",
+   "key": "store payments identifiers as ulid",
+   "supersedes": "e012"
+  },
+  {
+   "id": "e014",
+   "at": "2026-01-01",
+   "kind": "decision",
+   "statement": "Store payments log level as debug",
+   "key": "store payments log level as debug"
+  },
+  {
+   "id": "e015",
+   "at": "2026-04-01",
+   "kind": "decision",
+   "statement": "Store payments log level as info",
+   "key": "store payments log level as info",
+   "supersedes": "e014"
+  },
+  {
+   "id": "e016",
+   "at": "2026-01-01",
+   "kind": "decision",
+   "statement": "The payments client pins API version 2024-01",
+   "key": "payments client pins API version 2024-01"
+  },
+  {
+   "id": "e017",
+   "at": "2026-05-01",
+   "kind": "decision",
+   "statement": "The payments client pins API version 2025-06",
+   "key": "payments client pins API version 2025-06",
+   "supersedes": "e016"
+  },
+  {
+   "id": "e018",
+   "at": "2026-01-01",
+   "kind": "decision",
+   "statement": "The payments client pins Node version 20",
+   "key": "payments client pins Node version 20"
+  },
+  {
+   "id": "e019",
+   "at": "2026-05-01",
+   "kind": "decision",
+   "statement": "The payments client pins Node version 22",
+   "key": "payments client pins Node version 22",
+   "supersedes": "e018"
+  },
+  {
+   "id": "e020",
+   "at": "2026-01-01",
+   "kind": "decision",
+   "statement": "The payments client pins retry backoff linear",
+   "key": "payments client pins retry backoff linear"
+  },
+  {
+   "id": "e021",
+   "at": "2026-05-01",
+   "kind": "decision",
+   "statement": "The payments client pins retry backoff exponential",
+   "key": "payments client pins retry backoff exponential",
+   "supersedes": "e020"
+  },
+  {
+   "id": "e022",
+   "at": "2026-02-01",
+   "kind": "hazard",
+   "statement": "Never call payments.charge() without holding the payments row lock",
+   "key": "holding the payments row lock",
+   "path": "src/payments/charge.ts"
+  },
+  {
+   "id": "e023",
+   "at": "2026-02-01",
+   "kind": "hazard",
+   "statement": "Never call payments.sync() without holding the payments advisory lock",
+   "key": "holding the payments advisory lock",
+   "path": "src/payments/sync.ts"
+  },
+  {
+   "id": "e024",
+   "at": "2026-02-01",
+   "kind": "hazard",
+   "statement": "Never call payments.flush() without holding the payments write fence",
+   "key": "holding the payments write fence",
+   "path": "src/payments/flush.ts"
+  },
+  {
+   "id": "e025",
+   "at": "2026-01-01",
+   "kind": "hazard",
+   "statement": "The payments rounding rule lives in legacy module 1",
+   "key": "payments rounding rule lives in legacy module 1",
+   "path": "src/payments/legacy-1.ts"
+  },
+  {
+   "id": "e026",
+   "at": "2026-04-01",
+   "kind": "code-change",
+   "statement": "Rewrote src/payments/legacy-1.ts",
+   "path": "src/payments/legacy-1.ts"
+  },
+  {
+   "id": "e027",
+   "at": "2026-01-01",
+   "kind": "hazard",
+   "statement": "The payments currency table lives in legacy module 2",
+   "key": "payments currency table lives in legacy module 2",
+   "path": "src/payments/legacy-2.ts"
+  },
+  {
+   "id": "e028",
+   "at": "2026-04-01",
+   "kind": "code-change",
+   "statement": "Rewrote src/payments/legacy-2.ts",
+   "path": "src/payments/legacy-2.ts"
+  },
+  {
+   "id": "e029",
+   "at": "2026-01-01",
+   "kind": "hazard",
+   "statement": "The payments tax lookup lives in legacy module 3",
+   "key": "payments tax lookup lives in legacy module 3",
+   "path": "src/payments/legacy-3.ts"
+  },
+  {
+   "id": "e030",
+   "at": "2026-04-01",
+   "kind": "code-change",
+   "statement": "Rewrote src/payments/legacy-3.ts",
+   "path": "src/payments/legacy-3.ts"
+  },
+  {
+   "id": "e031",
+   "at": "2026-01-02",
+   "kind": "decision",
+   "statement": "The invoices worker batch size is 150",
+   "key": "invoices worker batch size is 150"
+  },
+  {
+   "id": "e032",
+   "at": "2026-01-02",
+   "kind": "lesson",
+   "statement": "invoices requests time out after 3 seconds",
+   "key": "invoices requests time out after 3 seconds"
+  },
+  {
+   "id": "e033",
+   "at": "2026-02-02",
+   "kind": "decision",
+   "statement": "The invoices service publishes to the invoices-events-v8 queue",
+   "key": "invoices-events-v8"
+  },
+  {
+   "id": "e034",
+   "at": "2026-02-02",
+   "kind": "decision",
+   "statement": "Run the invoices migration before deploying invoices",
+   "key": "Run the invoices migration before deploying invoices"
+  },
+  {
+   "id": "e035",
+   "at": "2026-03-02",
+   "kind": "correction",
+   "statement": "Flush the invoices cache after deploying invoices",
+   "key": "Flush the invoices cache after deploying invoices"
+  },
+  {
+   "id": "e036",
+   "at": "2026-02-02",
+   "kind": "decision",
+   "statement": "Write the invoices changelog entry before releasing invoices",
+   "key": "Write the invoices changelog entry before releasing invoices"
+  },
+  {
+   "id": "e037",
+   "at": "2026-03-02",
+   "kind": "correction",
+   "statement": "Turn the invoices feature flag on only after releasing invoices",
+   "key": "Turn the invoices feature flag on only after releasing invoices"
+  },
+  {
+   "id": "e038",
+   "at": "2026-02-02",
+   "kind": "decision",
+   "statement": "The invoices on call runbook lives in docs/runbooks/invoices.md",
+   "key": "The invoices on call runbook lives in docs/runbooks/invoices.md"
+  },
+  {
+   "id": "e039",
+   "at": "2026-03-02",
+   "kind": "correction",
+   "statement": "Page the invoices on call rota through the invoices-oncall alias",
+   "key": "Page the invoices on call rota through the invoices-oncall alias"
+  },
+  {
+   "id": "e040",
+   "at": "2026-01-02",
+   "kind": "decision",
+   "statement": "Store invoices amounts as floats",
+   "key": "store invoices amounts as floats"
+  },
+  {
+   "id": "e041",
+   "at": "2026-04-02",
+   "kind": "decision",
+   "statement": "Store invoices amounts as integer cents",
+   "key": "store invoices amounts as integer cents",
+   "supersedes": "e040"
+  },
+  {
+   "id": "e042",
+   "at": "2026-01-02",
+   "kind": "decision",
+   "statement": "Store invoices identifiers as uuid v4",
+   "key": "store invoices identifiers as uuid v4"
+  },
+  {
+   "id": "e043",
+   "at": "2026-04-02",
+   "kind": "decision",
+   "statement": "Store invoices identifiers as ulid",
+   "key": "store invoices identifiers as ulid",
+   "supersedes": "e042"
+  },
+  {
+   "id": "e044",
+   "at": "2026-01-02",
+   "kind": "decision",
+   "statement": "Store invoices log level as debug",
+   "key": "store invoices log level as debug"
+  },
+  {
+   "id": "e045",
+   "at": "2026-04-02",
+   "kind": "decision",
+   "statement": "Store invoices log level as info",
+   "key": "store invoices log level as info",
+   "supersedes": "e044"
+  },
+  {
+   "id": "e046",
+   "at": "2026-01-02",
+   "kind": "decision",
+   "statement": "The invoices client pins API version 2024-01",
+   "key": "invoices client pins API version 2024-01"
+  },
+  {
+   "id": "e047",
+   "at": "2026-05-02",
+   "kind": "decision",
+   "statement": "The invoices client pins API version 2025-06",
+   "key": "invoices client pins API version 2025-06",
+   "supersedes": "e046"
+  },
+  {
+   "id": "e048",
+   "at": "2026-01-02",
+   "kind": "decision",
+   "statement": "The invoices client pins Node version 20",
+   "key": "invoices client pins Node version 20"
+  },
+  {
+   "id": "e049",
+   "at": "2026-05-02",
+   "kind": "decision",
+   "statement": "The invoices client pins Node version 22",
+   "key": "invoices client pins Node version 22",
+   "supersedes": "e048"
+  },
+  {
+   "id": "e050",
+   "at": "2026-01-02",
+   "kind": "decision",
+   "statement": "The invoices client pins retry backoff linear",
+   "key": "invoices client pins retry backoff linear"
+  },
+  {
+   "id": "e051",
+   "at": "2026-05-02",
+   "kind": "decision",
+   "statement": "The invoices client pins retry backoff exponential",
+   "key": "invoices client pins retry backoff exponential",
+   "supersedes": "e050"
+  },
+  {
+   "id": "e052",
+   "at": "2026-02-02",
+   "kind": "hazard",
+   "statement": "Never call invoices.charge() without holding the invoices row lock",
+   "key": "holding the invoices row lock",
+   "path": "src/invoices/charge.ts"
+  },
+  {
+   "id": "e053",
+   "at": "2026-02-02",
+   "kind": "hazard",
+   "statement": "Never call invoices.sync() without holding the invoices advisory lock",
+   "key": "holding the invoices advisory lock",
+   "path": "src/invoices/sync.ts"
+  },
+  {
+   "id": "e054",
+   "at": "2026-02-02",
+   "kind": "hazard",
+   "statement": "Never call invoices.flush() without holding the invoices write fence",
+   "key": "holding the invoices write fence",
+   "path": "src/invoices/flush.ts"
+  },
+  {
+   "id": "e055",
+   "at": "2026-01-02",
+   "kind": "hazard",
+   "statement": "The invoices rounding rule lives in legacy module 1",
+   "key": "invoices rounding rule lives in legacy module 1",
+   "path": "src/invoices/legacy-1.ts"
+  },
+  {
+   "id": "e056",
+   "at": "2026-04-02",
+   "kind": "code-change",
+   "statement": "Rewrote src/invoices/legacy-1.ts",
+   "path": "src/invoices/legacy-1.ts"
+  },
+  {
+   "id": "e057",
+   "at": "2026-01-02",
+   "kind": "hazard",
+   "statement": "The invoices currency table lives in legacy module 2",
+   "key": "invoices currency table lives in legacy module 2",
+   "path": "src/invoices/legacy-2.ts"
+  },
+  {
+   "id": "e058",
+   "at": "2026-04-02",
+   "kind": "code-change",
+   "statement": "Rewrote src/invoices/legacy-2.ts",
+   "path": "src/invoices/legacy-2.ts"
+  },
+  {
+   "id": "e059",
+   "at": "2026-01-02",
+   "kind": "hazard",
+   "statement": "The invoices tax lookup lives in legacy module 3",
+   "key": "invoices tax lookup lives in legacy module 3",
+   "path": "src/invoices/legacy-3.ts"
+  },
+  {
+   "id": "e060",
+   "at": "2026-04-02",
+   "kind": "code-change",
+   "statement": "Rewrote src/invoices/legacy-3.ts",
+   "path": "src/invoices/legacy-3.ts"
+  },
+  {
+   "id": "e061",
+   "at": "2026-01-03",
+   "kind": "decision",
+   "statement": "The ledger worker batch size is 50",
+   "key": "ledger worker batch size is 50"
+  },
+  {
+   "id": "e062",
+   "at": "2026-01-03",
+   "kind": "lesson",
+   "statement": "ledger requests time out after 10 seconds",
+   "key": "ledger requests time out after 10 seconds"
+  },
+  {
+   "id": "e063",
+   "at": "2026-02-03",
+   "kind": "decision",
+   "statement": "The ledger service publishes to the ledger-events-v15 queue",
+   "key": "ledger-events-v15"
+  },
+  {
+   "id": "e064",
+   "at": "2026-02-03",
+   "kind": "decision",
+   "statement": "Run the ledger migration before deploying ledger",
+   "key": "Run the ledger migration before deploying ledger"
+  },
+  {
+   "id": "e065",
+   "at": "2026-03-03",
+   "kind": "correction",
+   "statement": "Flush the ledger cache after deploying ledger",
+   "key": "Flush the ledger cache after deploying ledger"
+  },
+  {
+   "id": "e066",
+   "at": "2026-02-03",
+   "kind": "decision",
+   "statement": "Write the ledger changelog entry before releasing ledger",
+   "key": "Write the ledger changelog entry before releasing ledger"
+  },
+  {
+   "id": "e067",
+   "at": "2026-03-03",
+   "kind": "correction",
+   "statement": "Turn the ledger feature flag on only after releasing ledger",
+   "key": "Turn the ledger feature flag on only after releasing ledger"
+  },
+  {
+   "id": "e068",
+   "at": "2026-02-03",
+   "kind": "decision",
+   "statement": "The ledger on call runbook lives in docs/runbooks/ledger.md",
+   "key": "The ledger on call runbook lives in docs/runbooks/ledger.md"
+  },
+  {
+   "id": "e069",
+   "at": "2026-03-03",
+   "kind": "correction",
+   "statement": "Page the ledger on call rota through the ledger-oncall alias",
+   "key": "Page the ledger on call rota through the ledger-oncall alias"
+  },
+  {
+   "id": "e070",
+   "at": "2026-01-03",
+   "kind": "decision",
+   "statement": "Store ledger amounts as floats",
+   "key": "store ledger amounts as floats"
+  },
+  {
+   "id": "e071",
+   "at": "2026-04-03",
+   "kind": "decision",
+   "statement": "Store ledger amounts as integer cents",
+   "key": "store ledger amounts as integer cents",
+   "supersedes": "e070"
+  },
+  {
+   "id": "e072",
+   "at": "2026-01-03",
+   "kind": "decision",
+   "statement": "Store ledger identifiers as uuid v4",
+   "key": "store ledger identifiers as uuid v4"
+  },
+  {
+   "id": "e073",
+   "at": "2026-04-03",
+   "kind": "decision",
+   "statement": "Store ledger identifiers as ulid",
+   "key": "store ledger identifiers as ulid",
+   "supersedes": "e072"
+  },
+  {
+   "id": "e074",
+   "at": "2026-01-03",
+   "kind": "decision",
+   "statement": "Store ledger log level as debug",
+   "key": "store ledger log level as debug"
+  },
+  {
+   "id": "e075",
+   "at": "2026-04-03",
+   "kind": "decision",
+   "statement": "Store ledger log level as info",
+   "key": "store ledger log level as info",
+   "supersedes": "e074"
+  },
+  {
+   "id": "e076",
+   "at": "2026-01-03",
+   "kind": "decision",
+   "statement": "The ledger client pins API version 2024-01",
+   "key": "ledger client pins API version 2024-01"
+  },
+  {
+   "id": "e077",
+   "at": "2026-05-03",
+   "kind": "decision",
+   "statement": "The ledger client pins API version 2025-06",
+   "key": "ledger client pins API version 2025-06",
+   "supersedes": "e076"
+  },
+  {
+   "id": "e078",
+   "at": "2026-01-03",
+   "kind": "decision",
+   "statement": "The ledger client pins Node version 20",
+   "key": "ledger client pins Node version 20"
+  },
+  {
+   "id": "e079",
+   "at": "2026-05-03",
+   "kind": "decision",
+   "statement": "The ledger client pins Node version 22",
+   "key": "ledger client pins Node version 22",
+   "supersedes": "e078"
+  },
+  {
+   "id": "e080",
+   "at": "2026-01-03",
+   "kind": "decision",
+   "statement": "The ledger client pins retry backoff linear",
+   "key": "ledger client pins retry backoff linear"
+  },
+  {
+   "id": "e081",
+   "at": "2026-05-03",
+   "kind": "decision",
+   "statement": "The ledger client pins retry backoff exponential",
+   "key": "ledger client pins retry backoff exponential",
+   "supersedes": "e080"
+  },
+  {
+   "id": "e082",
+   "at": "2026-02-03",
+   "kind": "hazard",
+   "statement": "Never call ledger.charge() without holding the ledger row lock",
+   "key": "holding the ledger row lock",
+   "path": "src/ledger/charge.ts"
+  },
+  {
+   "id": "e083",
+   "at": "2026-02-03",
+   "kind": "hazard",
+   "statement": "Never call ledger.sync() without holding the ledger advisory lock",
+   "key": "holding the ledger advisory lock",
+   "path": "src/ledger/sync.ts"
+  },
+  {
+   "id": "e084",
+   "at": "2026-02-03",
+   "kind": "hazard",
+   "statement": "Never call ledger.flush() without holding the ledger write fence",
+   "key": "holding the ledger write fence",
+   "path": "src/ledger/flush.ts"
+  },
+  {
+   "id": "e085",
+   "at": "2026-01-03",
+   "kind": "hazard",
+   "statement": "The ledger rounding rule lives in legacy module 1",
+   "key": "ledger rounding rule lives in legacy module 1",
+   "path": "src/ledger/legacy-1.ts"
+  },
+  {
+   "id": "e086",
+   "at": "2026-04-03",
+   "kind": "code-change",
+   "statement": "Rewrote src/ledger/legacy-1.ts",
+   "path": "src/ledger/legacy-1.ts"
+  },
+  {
+   "id": "e087",
+   "at": "2026-01-03",
+   "kind": "hazard",
+   "statement": "The ledger currency table lives in legacy module 2",
+   "key": "ledger currency table lives in legacy module 2",
+   "path": "src/ledger/legacy-2.ts"
+  },
+  {
+   "id": "e088",
+   "at": "2026-04-03",
+   "kind": "code-change",
+   "statement": "Rewrote src/ledger/legacy-2.ts",
+   "path": "src/ledger/legacy-2.ts"
+  },
+  {
+   "id": "e089",
+   "at": "2026-01-03",
+   "kind": "hazard",
+   "statement": "The ledger tax lookup lives in legacy module 3",
+   "key": "ledger tax lookup lives in legacy module 3",
+   "path": "src/ledger/legacy-3.ts"
+  },
+  {
+   "id": "e090",
+   "at": "2026-04-03",
+   "kind": "code-change",
+   "statement": "Rewrote src/ledger/legacy-3.ts",
+   "path": "src/ledger/legacy-3.ts"
+  },
+  {
+   "id": "e091",
+   "at": "2026-01-04",
+   "kind": "decision",
+   "statement": "The webhooks worker batch size is 120",
+   "key": "webhooks worker batch size is 120"
+  },
+  {
+   "id": "e092",
+   "at": "2026-01-04",
+   "kind": "lesson",
+   "statement": "webhooks requests time out after 17 seconds",
+   "key": "webhooks requests time out after 17 seconds"
+  },
+  {
+   "id": "e093",
+   "at": "2026-02-04",
+   "kind": "decision",
+   "statement": "The webhooks service publishes to the webhooks-events-v5 queue",
+   "key": "webhooks-events-v5"
+  },
+  {
+   "id": "e094",
+   "at": "2026-02-04",
+   "kind": "decision",
+   "statement": "Run the webhooks migration before deploying webhooks",
+   "key": "Run the webhooks migration before deploying webhooks"
+  },
+  {
+   "id": "e095",
+   "at": "2026-03-04",
+   "kind": "correction",
+   "statement": "Flush the webhooks cache after deploying webhooks",
+   "key": "Flush the webhooks cache after deploying webhooks"
+  },
+  {
+   "id": "e096",
+   "at": "2026-02-04",
+   "kind": "decision",
+   "statement": "Write the webhooks changelog entry before releasing webhooks",
+   "key": "Write the webhooks changelog entry before releasing webhooks"
+  },
+  {
+   "id": "e097",
+   "at": "2026-03-04",
+   "kind": "correction",
+   "statement": "Turn the webhooks feature flag on only after releasing webhooks",
+   "key": "Turn the webhooks feature flag on only after releasing webhooks"
+  },
+  {
+   "id": "e098",
+   "at": "2026-02-04",
+   "kind": "decision",
+   "statement": "The webhooks on call runbook lives in docs/runbooks/webhooks.md",
+   "key": "The webhooks on call runbook lives in docs/runbooks/webhooks.md"
+  },
+  {
+   "id": "e099",
+   "at": "2026-03-04",
+   "kind": "correction",
+   "statement": "Page the webhooks on call rota through the webhooks-oncall alias",
+   "key": "Page the webhooks on call rota through the webhooks-oncall alias"
+  },
+  {
+   "id": "e100",
+   "at": "2026-01-04",
+   "kind": "decision",
+   "statement": "Store webhooks amounts as floats",
+   "key": "store webhooks amounts as floats"
+  },
+  {
+   "id": "e101",
+   "at": "2026-04-04",
+   "kind": "decision",
+   "statement": "Store webhooks amounts as integer cents",
+   "key": "store webhooks amounts as integer cents",
+   "supersedes": "e100"
+  },
+  {
+   "id": "e102",
+   "at": "2026-01-04",
+   "kind": "decision",
+   "statement": "Store webhooks identifiers as uuid v4",
+   "key": "store webhooks identifiers as uuid v4"
+  },
+  {
+   "id": "e103",
+   "at": "2026-04-04",
+   "kind": "decision",
+   "statement": "Store webhooks identifiers as ulid",
+   "key": "store webhooks identifiers as ulid",
+   "supersedes": "e102"
+  },
+  {
+   "id": "e104",
+   "at": "2026-01-04",
+   "kind": "decision",
+   "statement": "Store webhooks log level as debug",
+   "key": "store webhooks log level as debug"
+  },
+  {
+   "id": "e105",
+   "at": "2026-04-04",
+   "kind": "decision",
+   "statement": "Store webhooks log level as info",
+   "key": "store webhooks log level as info",
+   "supersedes": "e104"
+  },
+  {
+   "id": "e106",
+   "at": "2026-01-04",
+   "kind": "decision",
+   "statement": "The webhooks client pins API version 2024-01",
+   "key": "webhooks client pins API version 2024-01"
+  },
+  {
+   "id": "e107",
+   "at": "2026-05-04",
+   "kind": "decision",
+   "statement": "The webhooks client pins API version 2025-06",
+   "key": "webhooks client pins API version 2025-06",
+   "supersedes": "e106"
+  },
+  {
+   "id": "e108",
+   "at": "2026-01-04",
+   "kind": "decision",
+   "statement": "The webhooks client pins Node version 20",
+   "key": "webhooks client pins Node version 20"
+  },
+  {
+   "id": "e109",
+   "at": "2026-05-04",
+   "kind": "decision",
+   "statement": "The webhooks client pins Node version 22",
+   "key": "webhooks client pins Node version 22",
+   "supersedes": "e108"
+  },
+  {
+   "id": "e110",
+   "at": "2026-01-04",
+   "kind": "decision",
+   "statement": "The webhooks client pins retry backoff linear",
+   "key": "webhooks client pins retry backoff linear"
+  },
+  {
+   "id": "e111",
+   "at": "2026-05-04",
+   "kind": "decision",
+   "statement": "The webhooks client pins retry backoff exponential",
+   "key": "webhooks client pins retry backoff exponential",
+   "supersedes": "e110"
+  },
+  {
+   "id": "e112",
+   "at": "2026-02-04",
+   "kind": "hazard",
+   "statement": "Never call webhooks.charge() without holding the webhooks row lock",
+   "key": "holding the webhooks row lock",
+   "path": "src/webhooks/charge.ts"
+  },
+  {
+   "id": "e113",
+   "at": "2026-02-04",
+   "kind": "hazard",
+   "statement": "Never call webhooks.sync() without holding the webhooks advisory lock",
+   "key": "holding the webhooks advisory lock",
+   "path": "src/webhooks/sync.ts"
+  },
+  {
+   "id": "e114",
+   "at": "2026-02-04",
+   "kind": "hazard",
+   "statement": "Never call webhooks.flush() without holding the webhooks write fence",
+   "key": "holding the webhooks write fence",
+   "path": "src/webhooks/flush.ts"
+  },
+  {
+   "id": "e115",
+   "at": "2026-01-04",
+   "kind": "hazard",
+   "statement": "The webhooks rounding rule lives in legacy module 1",
+   "key": "webhooks rounding rule lives in legacy module 1",
+   "path": "src/webhooks/legacy-1.ts"
+  },
+  {
+   "id": "e116",
+   "at": "2026-04-04",
+   "kind": "code-change",
+   "statement": "Rewrote src/webhooks/legacy-1.ts",
+   "path": "src/webhooks/legacy-1.ts"
+  },
+  {
+   "id": "e117",
+   "at": "2026-01-04",
+   "kind": "hazard",
+   "statement": "The webhooks currency table lives in legacy module 2",
+   "key": "webhooks currency table lives in legacy module 2",
+   "path": "src/webhooks/legacy-2.ts"
+  },
+  {
+   "id": "e118",
+   "at": "2026-04-04",
+   "kind": "code-change",
+   "statement": "Rewrote src/webhooks/legacy-2.ts",
+   "path": "src/webhooks/legacy-2.ts"
+  },
+  {
+   "id": "e119",
+   "at": "2026-01-04",
+   "kind": "hazard",
+   "statement": "The webhooks tax lookup lives in legacy module 3",
+   "key": "webhooks tax lookup lives in legacy module 3",
+   "path": "src/webhooks/legacy-3.ts"
+  },
+  {
+   "id": "e120",
+   "at": "2026-04-04",
+   "kind": "code-change",
+   "statement": "Rewrote src/webhooks/legacy-3.ts",
+   "path": "src/webhooks/legacy-3.ts"
+  },
+  {
+   "id": "e121",
+   "at": "2026-01-05",
+   "kind": "decision",
+   "statement": "The auth worker batch size is 190",
+   "key": "auth worker batch size is 190"
+  },
+  {
+   "id": "e122",
+   "at": "2026-01-05",
+   "kind": "lesson",
+   "statement": "auth requests time out after 7 seconds",
+   "key": "auth requests time out after 7 seconds"
+  },
+  {
+   "id": "e123",
+   "at": "2026-02-05",
+   "kind": "decision",
+   "statement": "The auth service publishes to the auth-events-v12 queue",
+   "key": "auth-events-v12"
+  },
+  {
+   "id": "e124",
+   "at": "2026-02-05",
+   "kind": "decision",
+   "statement": "Run the auth migration before deploying auth",
+   "key": "Run the auth migration before deploying auth"
+  },
+  {
+   "id": "e125",
+   "at": "2026-03-05",
+   "kind": "correction",
+   "statement": "Flush the auth cache after deploying auth",
+   "key": "Flush the auth cache after deploying auth"
+  },
+  {
+   "id": "e126",
+   "at": "2026-02-05",
+   "kind": "decision",
+   "statement": "Write the auth changelog entry before releasing auth",
+   "key": "Write the auth changelog entry before releasing auth"
+  },
+  {
+   "id": "e127",
+   "at": "2026-03-05",
+   "kind": "correction",
+   "statement": "Turn the auth feature flag on only after releasing auth",
+   "key": "Turn the auth feature flag on only after releasing auth"
+  },
+  {
+   "id": "e128",
+   "at": "2026-02-05",
+   "kind": "decision",
+   "statement": "The auth on call runbook lives in docs/runbooks/auth.md",
+   "key": "The auth on call runbook lives in docs/runbooks/auth.md"
+  },
+  {
+   "id": "e129",
+   "at": "2026-03-05",
+   "kind": "correction",
+   "statement": "Page the auth on call rota through the auth-oncall alias",
+   "key": "Page the auth on call rota through the auth-oncall alias"
+  },
+  {
+   "id": "e130",
+   "at": "2026-01-05",
+   "kind": "decision",
+   "statement": "Store auth amounts as floats",
+   "key": "store auth amounts as floats"
+  },
+  {
+   "id": "e131",
+   "at": "2026-04-05",
+   "kind": "decision",
+   "statement": "Store auth amounts as integer cents",
+   "key": "store auth amounts as integer cents",
+   "supersedes": "e130"
+  },
+  {
+   "id": "e132",
+   "at": "2026-01-05",
+   "kind": "decision",
+   "statement": "Store auth identifiers as uuid v4",
+   "key": "store auth identifiers as uuid v4"
+  },
+  {
+   "id": "e133",
+   "at": "2026-04-05",
+   "kind": "decision",
+   "statement": "Store auth identifiers as ulid",
+   "key": "store auth identifiers as ulid",
+   "supersedes": "e132"
+  },
+  {
+   "id": "e134",
+   "at": "2026-01-05",
+   "kind": "decision",
+   "statement": "Store auth log level as debug",
+   "key": "store auth log level as debug"
+  },
+  {
+   "id": "e135",
+   "at": "2026-04-05",
+   "kind": "decision",
+   "statement": "Store auth log level as info",
+   "key": "store auth log level as info",
+   "supersedes": "e134"
+  },
+  {
+   "id": "e136",
+   "at": "2026-01-05",
+   "kind": "decision",
+   "statement": "The auth client pins API version 2024-01",
+   "key": "auth client pins API version 2024-01"
+  },
+  {
+   "id": "e137",
+   "at": "2026-05-05",
+   "kind": "decision",
+   "statement": "The auth client pins API version 2025-06",
+   "key": "auth client pins API version 2025-06",
+   "supersedes": "e136"
+  },
+  {
+   "id": "e138",
+   "at": "2026-01-05",
+   "kind": "decision",
+   "statement": "The auth client pins Node version 20",
+   "key": "auth client pins Node version 20"
+  },
+  {
+   "id": "e139",
+   "at": "2026-05-05",
+   "kind": "decision",
+   "statement": "The auth client pins Node version 22",
+   "key": "auth client pins Node version 22",
+   "supersedes": "e138"
+  },
+  {
+   "id": "e140",
+   "at": "2026-01-05",
+   "kind": "decision",
+   "statement": "The auth client pins retry backoff linear",
+   "key": "auth client pins retry backoff linear"
+  },
+  {
+   "id": "e141",
+   "at": "2026-05-05",
+   "kind": "decision",
+   "statement": "The auth client pins retry backoff exponential",
+   "key": "auth client pins retry backoff exponential",
+   "supersedes": "e140"
+  },
+  {
+   "id": "e142",
+   "at": "2026-02-05",
+   "kind": "hazard",
+   "statement": "Never call auth.charge() without holding the auth row lock",
+   "key": "holding the auth row lock",
+   "path": "src/auth/charge.ts"
+  },
+  {
+   "id": "e143",
+   "at": "2026-02-05",
+   "kind": "hazard",
+   "statement": "Never call auth.sync() without holding the auth advisory lock",
+   "key": "holding the auth advisory lock",
+   "path": "src/auth/sync.ts"
+  },
+  {
+   "id": "e144",
+   "at": "2026-02-05",
+   "kind": "hazard",
+   "statement": "Never call auth.flush() without holding the auth write fence",
+   "key": "holding the auth write fence",
+   "path": "src/auth/flush.ts"
+  },
+  {
+   "id": "e145",
+   "at": "2026-01-05",
+   "kind": "hazard",
+   "statement": "The auth rounding rule lives in legacy module 1",
+   "key": "auth rounding rule lives in legacy module 1",
+   "path": "src/auth/legacy-1.ts"
+  },
+  {
+   "id": "e146",
+   "at": "2026-04-05",
+   "kind": "code-change",
+   "statement": "Rewrote src/auth/legacy-1.ts",
+   "path": "src/auth/legacy-1.ts"
+  },
+  {
+   "id": "e147",
+   "at": "2026-01-05",
+   "kind": "hazard",
+   "statement": "The auth currency table lives in legacy module 2",
+   "key": "auth currency table lives in legacy module 2",
+   "path": "src/auth/legacy-2.ts"
+  },
+  {
+   "id": "e148",
+   "at": "2026-04-05",
+   "kind": "code-change",
+   "statement": "Rewrote src/auth/legacy-2.ts",
+   "path": "src/auth/legacy-2.ts"
+  },
+  {
+   "id": "e149",
+   "at": "2026-01-05",
+   "kind": "hazard",
+   "statement": "The auth tax lookup lives in legacy module 3",
+   "key": "auth tax lookup lives in legacy module 3",
+   "path": "src/auth/legacy-3.ts"
+  },
+  {
+   "id": "e150",
+   "at": "2026-04-05",
+   "kind": "code-change",
+   "statement": "Rewrote src/auth/legacy-3.ts",
+   "path": "src/auth/legacy-3.ts"
+  },
+  {
+   "id": "e151",
+   "at": "2026-01-06",
+   "kind": "decision",
+   "statement": "The search worker batch size is 90",
+   "key": "search worker batch size is 90"
+  },
+  {
+   "id": "e152",
+   "at": "2026-01-06",
+   "kind": "lesson",
+   "statement": "search requests time out after 14 seconds",
+   "key": "search requests time out after 14 seconds"
+  },
+  {
+   "id": "e153",
+   "at": "2026-02-06",
+   "kind": "decision",
+   "statement": "The search service publishes to the search-events-v19 queue",
+   "key": "search-events-v19"
+  },
+  {
+   "id": "e154",
+   "at": "2026-02-06",
+   "kind": "decision",
+   "statement": "Run the search migration before deploying search",
+   "key": "Run the search migration before deploying search"
+  },
+  {
+   "id": "e155",
+   "at": "2026-03-06",
+   "kind": "correction",
+   "statement": "Flush the search cache after deploying search",
+   "key": "Flush the search cache after deploying search"
+  },
+  {
+   "id": "e156",
+   "at": "2026-02-06",
+   "kind": "decision",
+   "statement": "Write the search changelog entry before releasing search",
+   "key": "Write the search changelog entry before releasing search"
+  },
+  {
+   "id": "e157",
+   "at": "2026-03-06",
+   "kind": "correction",
+   "statement": "Turn the search feature flag on only after releasing search",
+   "key": "Turn the search feature flag on only after releasing search"
+  },
+  {
+   "id": "e158",
+   "at": "2026-02-06",
+   "kind": "decision",
+   "statement": "The search on call runbook lives in docs/runbooks/search.md",
+   "key": "The search on call runbook lives in docs/runbooks/search.md"
+  },
+  {
+   "id": "e159",
+   "at": "2026-03-06",
+   "kind": "correction",
+   "statement": "Page the search on call rota through the search-oncall alias",
+   "key": "Page the search on call rota through the search-oncall alias"
+  },
+  {
+   "id": "e160",
+   "at": "2026-01-06",
+   "kind": "decision",
+   "statement": "Store search amounts as floats",
+   "key": "store search amounts as floats"
+  },
+  {
+   "id": "e161",
+   "at": "2026-04-06",
+   "kind": "decision",
+   "statement": "Store search amounts as integer cents",
+   "key": "store search amounts as integer cents",
+   "supersedes": "e160"
+  },
+  {
+   "id": "e162",
+   "at": "2026-01-06",
+   "kind": "decision",
+   "statement": "Store search identifiers as uuid v4",
+   "key": "store search identifiers as uuid v4"
+  },
+  {
+   "id": "e163",
+   "at": "2026-04-06",
+   "kind": "decision",
+   "statement": "Store search identifiers as ulid",
+   "key": "store search identifiers as ulid",
+   "supersedes": "e162"
+  },
+  {
+   "id": "e164",
+   "at": "2026-01-06",
+   "kind": "decision",
+   "statement": "Store search log level as debug",
+   "key": "store search log level as debug"
+  },
+  {
+   "id": "e165",
+   "at": "2026-04-06",
+   "kind": "decision",
+   "statement": "Store search log level as info",
+   "key": "store search log level as info",
+   "supersedes": "e164"
+  },
+  {
+   "id": "e166",
+   "at": "2026-01-06",
+   "kind": "decision",
+   "statement": "The search client pins API version 2024-01",
+   "key": "search client pins API version 2024-01"
+  },
+  {
+   "id": "e167",
+   "at": "2026-05-06",
+   "kind": "decision",
+   "statement": "The search client pins API version 2025-06",
+   "key": "search client pins API version 2025-06",
+   "supersedes": "e166"
+  },
+  {
+   "id": "e168",
+   "at": "2026-01-06",
+   "kind": "decision",
+   "statement": "The search client pins Node version 20",
+   "key": "search client pins Node version 20"
+  },
+  {
+   "id": "e169",
+   "at": "2026-05-06",
+   "kind": "decision",
+   "statement": "The search client pins Node version 22",
+   "key": "search client pins Node version 22",
+   "supersedes": "e168"
+  },
+  {
+   "id": "e170",
+   "at": "2026-01-06",
+   "kind": "decision",
+   "statement": "The search client pins retry backoff linear",
+   "key": "search client pins retry backoff linear"
+  },
+  {
+   "id": "e171",
+   "at": "2026-05-06",
+   "kind": "decision",
+   "statement": "The search client pins retry backoff exponential",
+   "key": "search client pins retry backoff exponential",
+   "supersedes": "e170"
+  },
+  {
+   "id": "e172",
+   "at": "2026-02-06",
+   "kind": "hazard",
+   "statement": "Never call search.charge() without holding the search row lock",
+   "key": "holding the search row lock",
+   "path": "src/search/charge.ts"
+  },
+  {
+   "id": "e173",
+   "at": "2026-02-06",
+   "kind": "hazard",
+   "statement": "Never call search.sync() without holding the search advisory lock",
+   "key": "holding the search advisory lock",
+   "path": "src/search/sync.ts"
+  },
+  {
+   "id": "e174",
+   "at": "2026-02-06",
+   "kind": "hazard",
+   "statement": "Never call search.flush() without holding the search write fence",
+   "key": "holding the search write fence",
+   "path": "src/search/flush.ts"
+  },
+  {
+   "id": "e175",
+   "at": "2026-01-06",
+   "kind": "hazard",
+   "statement": "The search rounding rule lives in legacy module 1",
+   "key": "search rounding rule lives in legacy module 1",
+   "path": "src/search/legacy-1.ts"
+  },
+  {
+   "id": "e176",
+   "at": "2026-04-06",
+   "kind": "code-change",
+   "statement": "Rewrote src/search/legacy-1.ts",
+   "path": "src/search/legacy-1.ts"
+  },
+  {
+   "id": "e177",
+   "at": "2026-01-06",
+   "kind": "hazard",
+   "statement": "The search currency table lives in legacy module 2",
+   "key": "search currency table lives in legacy module 2",
+   "path": "src/search/legacy-2.ts"
+  },
+  {
+   "id": "e178",
+   "at": "2026-04-06",
+   "kind": "code-change",
+   "statement": "Rewrote src/search/legacy-2.ts",
+   "path": "src/search/legacy-2.ts"
+  },
+  {
+   "id": "e179",
+   "at": "2026-01-06",
+   "kind": "hazard",
+   "statement": "The search tax lookup lives in legacy module 3",
+   "key": "search tax lookup lives in legacy module 3",
+   "path": "src/search/legacy-3.ts"
+  },
+  {
+   "id": "e180",
+   "at": "2026-04-06",
+   "kind": "code-change",
+   "statement": "Rewrote src/search/legacy-3.ts",
+   "path": "src/search/legacy-3.ts"
+  },
+  {
+   "id": "e181",
+   "at": "2026-01-07",
+   "kind": "decision",
+   "statement": "The exports worker batch size is 160",
+   "key": "exports worker batch size is 160"
+  },
+  {
+   "id": "e182",
+   "at": "2026-01-07",
+   "kind": "lesson",
+   "statement": "exports requests time out after 4 seconds",
+   "key": "exports requests time out after 4 seconds"
+  },
+  {
+   "id": "e183",
+   "at": "2026-02-07",
+   "kind": "decision",
+   "statement": "The exports service publishes to the exports-events-v9 queue",
+   "key": "exports-events-v9"
+  },
+  {
+   "id": "e184",
+   "at": "2026-02-07",
+   "kind": "decision",
+   "statement": "Run the exports migration before deploying exports",
+   "key": "Run the exports migration before deploying exports"
+  },
+  {
+   "id": "e185",
+   "at": "2026-03-07",
+   "kind": "correction",
+   "statement": "Flush the exports cache after deploying exports",
+   "key": "Flush the exports cache after deploying exports"
+  },
+  {
+   "id": "e186",
+   "at": "2026-02-07",
+   "kind": "decision",
+   "statement": "Write the exports changelog entry before releasing exports",
+   "key": "Write the exports changelog entry before releasing exports"
+  },
+  {
+   "id": "e187",
+   "at": "2026-03-07",
+   "kind": "correction",
+   "statement": "Turn the exports feature flag on only after releasing exports",
+   "key": "Turn the exports feature flag on only after releasing exports"
+  },
+  {
+   "id": "e188",
+   "at": "2026-02-07",
+   "kind": "decision",
+   "statement": "The exports on call runbook lives in docs/runbooks/exports.md",
+   "key": "The exports on call runbook lives in docs/runbooks/exports.md"
+  },
+  {
+   "id": "e189",
+   "at": "2026-03-07",
+   "kind": "correction",
+   "statement": "Page the exports on call rota through the exports-oncall alias",
+   "key": "Page the exports on call rota through the exports-oncall alias"
+  },
+  {
+   "id": "e190",
+   "at": "2026-01-07",
+   "kind": "decision",
+   "statement": "Store exports amounts as floats",
+   "key": "store exports amounts as floats"
+  },
+  {
+   "id": "e191",
+   "at": "2026-04-07",
+   "kind": "decision",
+   "statement": "Store exports amounts as integer cents",
+   "key": "store exports amounts as integer cents",
+   "supersedes": "e190"
+  },
+  {
+   "id": "e192",
+   "at": "2026-01-07",
+   "kind": "decision",
+   "statement": "Store exports identifiers as uuid v4",
+   "key": "store exports identifiers as uuid v4"
+  },
+  {
+   "id": "e193",
+   "at": "2026-04-07",
+   "kind": "decision",
+   "statement": "Store exports identifiers as ulid",
+   "key": "store exports identifiers as ulid",
+   "supersedes": "e192"
+  },
+  {
+   "id": "e194",
+   "at": "2026-01-07",
+   "kind": "decision",
+   "statement": "Store exports log level as debug",
+   "key": "store exports log level as debug"
+  },
+  {
+   "id": "e195",
+   "at": "2026-04-07",
+   "kind": "decision",
+   "statement": "Store exports log level as info",
+   "key": "store exports log level as info",
+   "supersedes": "e194"
+  },
+  {
+   "id": "e196",
+   "at": "2026-01-07",
+   "kind": "decision",
+   "statement": "The exports client pins API version 2024-01",
+   "key": "exports client pins API version 2024-01"
+  },
+  {
+   "id": "e197",
+   "at": "2026-05-07",
+   "kind": "decision",
+   "statement": "The exports client pins API version 2025-06",
+   "key": "exports client pins API version 2025-06",
+   "supersedes": "e196"
+  },
+  {
+   "id": "e198",
+   "at": "2026-01-07",
+   "kind": "decision",
+   "statement": "The exports client pins Node version 20",
+   "key": "exports client pins Node version 20"
+  },
+  {
+   "id": "e199",
+   "at": "2026-05-07",
+   "kind": "decision",
+   "statement": "The exports client pins Node version 22",
+   "key": "exports client pins Node version 22",
+   "supersedes": "e198"
+  },
+  {
+   "id": "e200",
+   "at": "2026-01-07",
+   "kind": "decision",
+   "statement": "The exports client pins retry backoff linear",
+   "key": "exports client pins retry backoff linear"
+  },
+  {
+   "id": "e201",
+   "at": "2026-05-07",
+   "kind": "decision",
+   "statement": "The exports client pins retry backoff exponential",
+   "key": "exports client pins retry backoff exponential",
+   "supersedes": "e200"
+  },
+  {
+   "id": "e202",
+   "at": "2026-02-07",
+   "kind": "hazard",
+   "statement": "Never call exports.charge() without holding the exports row lock",
+   "key": "holding the exports row lock",
+   "path": "src/exports/charge.ts"
+  },
+  {
+   "id": "e203",
+   "at": "2026-02-07",
+   "kind": "hazard",
+   "statement": "Never call exports.sync() without holding the exports advisory lock",
+   "key": "holding the exports advisory lock",
+   "path": "src/exports/sync.ts"
+  },
+  {
+   "id": "e204",
+   "at": "2026-02-07",
+   "kind": "hazard",
+   "statement": "Never call exports.flush() without holding the exports write fence",
+   "key": "holding the exports write fence",
+   "path": "src/exports/flush.ts"
+  },
+  {
+   "id": "e205",
+   "at": "2026-01-07",
+   "kind": "hazard",
+   "statement": "The exports rounding rule lives in legacy module 1",
+   "key": "exports rounding rule lives in legacy module 1",
+   "path": "src/exports/legacy-1.ts"
+  },
+  {
+   "id": "e206",
+   "at": "2026-04-07",
+   "kind": "code-change",
+   "statement": "Rewrote src/exports/legacy-1.ts",
+   "path": "src/exports/legacy-1.ts"
+  },
+  {
+   "id": "e207",
+   "at": "2026-01-07",
+   "kind": "hazard",
+   "statement": "The exports currency table lives in legacy module 2",
+   "key": "exports currency table lives in legacy module 2",
+   "path": "src/exports/legacy-2.ts"
+  },
+  {
+   "id": "e208",
+   "at": "2026-04-07",
+   "kind": "code-change",
+   "statement": "Rewrote src/exports/legacy-2.ts",
+   "path": "src/exports/legacy-2.ts"
+  },
+  {
+   "id": "e209",
+   "at": "2026-01-07",
+   "kind": "hazard",
+   "statement": "The exports tax lookup lives in legacy module 3",
+   "key": "exports tax lookup lives in legacy module 3",
+   "path": "src/exports/legacy-3.ts"
+  },
+  {
+   "id": "e210",
+   "at": "2026-04-07",
+   "kind": "code-change",
+   "statement": "Rewrote src/exports/legacy-3.ts",
+   "path": "src/exports/legacy-3.ts"
+  },
+  {
+   "id": "e211",
+   "at": "2026-01-08",
+   "kind": "decision",
+   "statement": "The notifications worker batch size is 60",
+   "key": "notifications worker batch size is 60"
+  },
+  {
+   "id": "e212",
+   "at": "2026-01-08",
+   "kind": "lesson",
+   "statement": "notifications requests time out after 11 seconds",
+   "key": "notifications requests time out after 11 seconds"
+  },
+  {
+   "id": "e213",
+   "at": "2026-02-08",
+   "kind": "decision",
+   "statement": "The notifications service publishes to the notifications-events-v16 queue",
+   "key": "notifications-events-v16"
+  },
+  {
+   "id": "e214",
+   "at": "2026-02-08",
+   "kind": "decision",
+   "statement": "Run the notifications migration before deploying notifications",
+   "key": "Run the notifications migration before deploying notifications"
+  },
+  {
+   "id": "e215",
+   "at": "2026-03-08",
+   "kind": "correction",
+   "statement": "Flush the notifications cache after deploying notifications",
+   "key": "Flush the notifications cache after deploying notifications"
+  },
+  {
+   "id": "e216",
+   "at": "2026-02-08",
+   "kind": "decision",
+   "statement": "Write the notifications changelog entry before releasing notifications",
+   "key": "Write the notifications changelog entry before releasing notifications"
+  },
+  {
+   "id": "e217",
+   "at": "2026-03-08",
+   "kind": "correction",
+   "statement": "Turn the notifications feature flag on only after releasing notifications",
+   "key": "Turn the notifications feature flag on only after releasing notifications"
+  },
+  {
+   "id": "e218",
+   "at": "2026-02-08",
+   "kind": "decision",
+   "statement": "The notifications on call runbook lives in docs/runbooks/notifications.md",
+   "key": "The notifications on call runbook lives in docs/runbooks/notifications.md"
+  },
+  {
+   "id": "e219",
+   "at": "2026-03-08",
+   "kind": "correction",
+   "statement": "Page the notifications on call rota through the notifications-oncall alias",
+   "key": "Page the notifications on call rota through the notifications-oncall alias"
+  },
+  {
+   "id": "e220",
+   "at": "2026-01-08",
+   "kind": "decision",
+   "statement": "Store notifications amounts as floats",
+   "key": "store notifications amounts as floats"
+  },
+  {
+   "id": "e221",
+   "at": "2026-04-08",
+   "kind": "decision",
+   "statement": "Store notifications amounts as integer cents",
+   "key": "store notifications amounts as integer cents",
+   "supersedes": "e220"
+  },
+  {
+   "id": "e222",
+   "at": "2026-01-08",
+   "kind": "decision",
+   "statement": "Store notifications identifiers as uuid v4",
+   "key": "store notifications identifiers as uuid v4"
+  },
+  {
+   "id": "e223",
+   "at": "2026-04-08",
+   "kind": "decision",
+   "statement": "Store notifications identifiers as ulid",
+   "key": "store notifications identifiers as ulid",
+   "supersedes": "e222"
+  },
+  {
+   "id": "e224",
+   "at": "2026-01-08",
+   "kind": "decision",
+   "statement": "Store notifications log level as debug",
+   "key": "store notifications log level as debug"
+  },
+  {
+   "id": "e225",
+   "at": "2026-04-08",
+   "kind": "decision",
+   "statement": "Store notifications log level as info",
+   "key": "store notifications log level as info",
+   "supersedes": "e224"
+  },
+  {
+   "id": "e226",
+   "at": "2026-01-08",
+   "kind": "decision",
+   "statement": "The notifications client pins API version 2024-01",
+   "key": "notifications client pins API version 2024-01"
+  },
+  {
+   "id": "e227",
+   "at": "2026-05-08",
+   "kind": "decision",
+   "statement": "The notifications client pins API version 2025-06",
+   "key": "notifications client pins API version 2025-06",
+   "supersedes": "e226"
+  },
+  {
+   "id": "e228",
+   "at": "2026-01-08",
+   "kind": "decision",
+   "statement": "The notifications client pins Node version 20",
+   "key": "notifications client pins Node version 20"
+  },
+  {
+   "id": "e229",
+   "at": "2026-05-08",
+   "kind": "decision",
+   "statement": "The notifications client pins Node version 22",
+   "key": "notifications client pins Node version 22",
+   "supersedes": "e228"
+  },
+  {
+   "id": "e230",
+   "at": "2026-01-08",
+   "kind": "decision",
+   "statement": "The notifications client pins retry backoff linear",
+   "key": "notifications client pins retry backoff linear"
+  },
+  {
+   "id": "e231",
+   "at": "2026-05-08",
+   "kind": "decision",
+   "statement": "The notifications client pins retry backoff exponential",
+   "key": "notifications client pins retry backoff exponential",
+   "supersedes": "e230"
+  },
+  {
+   "id": "e232",
+   "at": "2026-02-08",
+   "kind": "hazard",
+   "statement": "Never call notifications.charge() without holding the notifications row lock",
+   "key": "holding the notifications row lock",
+   "path": "src/notifications/charge.ts"
+  },
+  {
+   "id": "e233",
+   "at": "2026-02-08",
+   "kind": "hazard",
+   "statement": "Never call notifications.sync() without holding the notifications advisory lock",
+   "key": "holding the notifications advisory lock",
+   "path": "src/notifications/sync.ts"
+  },
+  {
+   "id": "e234",
+   "at": "2026-02-08",
+   "kind": "hazard",
+   "statement": "Never call notifications.flush() without holding the notifications write fence",
+   "key": "holding the notifications write fence",
+   "path": "src/notifications/flush.ts"
+  },
+  {
+   "id": "e235",
+   "at": "2026-01-08",
+   "kind": "hazard",
+   "statement": "The notifications rounding rule lives in legacy module 1",
+   "key": "notifications rounding rule lives in legacy module 1",
+   "path": "src/notifications/legacy-1.ts"
+  },
+  {
+   "id": "e236",
+   "at": "2026-04-08",
+   "kind": "code-change",
+   "statement": "Rewrote src/notifications/legacy-1.ts",
+   "path": "src/notifications/legacy-1.ts"
+  },
+  {
+   "id": "e237",
+   "at": "2026-01-08",
+   "kind": "hazard",
+   "statement": "The notifications currency table lives in legacy module 2",
+   "key": "notifications currency table lives in legacy module 2",
+   "path": "src/notifications/legacy-2.ts"
+  },
+  {
+   "id": "e238",
+   "at": "2026-04-08",
+   "kind": "code-change",
+   "statement": "Rewrote src/notifications/legacy-2.ts",
+   "path": "src/notifications/legacy-2.ts"
+  },
+  {
+   "id": "e239",
+   "at": "2026-01-08",
+   "kind": "hazard",
+   "statement": "The notifications tax lookup lives in legacy module 3",
+   "key": "notifications tax lookup lives in legacy module 3",
+   "path": "src/notifications/legacy-3.ts"
+  },
+  {
+   "id": "e240",
+   "at": "2026-04-08",
+   "kind": "code-change",
+   "statement": "Rewrote src/notifications/legacy-3.ts",
+   "path": "src/notifications/legacy-3.ts"
+  },
+  {
+   "id": "e241",
+   "at": "2026-01-09",
+   "kind": "decision",
+   "statement": "The billing worker batch size is 130",
+   "key": "billing worker batch size is 130"
+  },
+  {
+   "id": "e242",
+   "at": "2026-01-09",
+   "kind": "lesson",
+   "statement": "billing requests time out after 18 seconds",
+   "key": "billing requests time out after 18 seconds"
+  },
+  {
+   "id": "e243",
+   "at": "2026-02-09",
+   "kind": "decision",
+   "statement": "The billing service publishes to the billing-events-v6 queue",
+   "key": "billing-events-v6"
+  },
+  {
+   "id": "e244",
+   "at": "2026-02-09",
+   "kind": "decision",
+   "statement": "Run the billing migration before deploying billing",
+   "key": "Run the billing migration before deploying billing"
+  },
+  {
+   "id": "e245",
+   "at": "2026-03-09",
+   "kind": "correction",
+   "statement": "Flush the billing cache after deploying billing",
+   "key": "Flush the billing cache after deploying billing"
+  },
+  {
+   "id": "e246",
+   "at": "2026-02-09",
+   "kind": "decision",
+   "statement": "Write the billing changelog entry before releasing billing",
+   "key": "Write the billing changelog entry before releasing billing"
+  },
+  {
+   "id": "e247",
+   "at": "2026-03-09",
+   "kind": "correction",
+   "statement": "Turn the billing feature flag on only after releasing billing",
+   "key": "Turn the billing feature flag on only after releasing billing"
+  },
+  {
+   "id": "e248",
+   "at": "2026-02-09",
+   "kind": "decision",
+   "statement": "The billing on call runbook lives in docs/runbooks/billing.md",
+   "key": "The billing on call runbook lives in docs/runbooks/billing.md"
+  },
+  {
+   "id": "e249",
+   "at": "2026-03-09",
+   "kind": "correction",
+   "statement": "Page the billing on call rota through the billing-oncall alias",
+   "key": "Page the billing on call rota through the billing-oncall alias"
+  },
+  {
+   "id": "e250",
+   "at": "2026-01-09",
+   "kind": "decision",
+   "statement": "Store billing amounts as floats",
+   "key": "store billing amounts as floats"
+  },
+  {
+   "id": "e251",
+   "at": "2026-04-09",
+   "kind": "decision",
+   "statement": "Store billing amounts as integer cents",
+   "key": "store billing amounts as integer cents",
+   "supersedes": "e250"
+  },
+  {
+   "id": "e252",
+   "at": "2026-01-09",
+   "kind": "decision",
+   "statement": "Store billing identifiers as uuid v4",
+   "key": "store billing identifiers as uuid v4"
+  },
+  {
+   "id": "e253",
+   "at": "2026-04-09",
+   "kind": "decision",
+   "statement": "Store billing identifiers as ulid",
+   "key": "store billing identifiers as ulid",
+   "supersedes": "e252"
+  },
+  {
+   "id": "e254",
+   "at": "2026-01-09",
+   "kind": "decision",
+   "statement": "Store billing log level as debug",
+   "key": "store billing log level as debug"
+  },
+  {
+   "id": "e255",
+   "at": "2026-04-09",
+   "kind": "decision",
+   "statement": "Store billing log level as info",
+   "key": "store billing log level as info",
+   "supersedes": "e254"
+  },
+  {
+   "id": "e256",
+   "at": "2026-01-09",
+   "kind": "decision",
+   "statement": "The billing client pins API version 2024-01",
+   "key": "billing client pins API version 2024-01"
+  },
+  {
+   "id": "e257",
+   "at": "2026-05-09",
+   "kind": "decision",
+   "statement": "The billing client pins API version 2025-06",
+   "key": "billing client pins API version 2025-06",
+   "supersedes": "e256"
+  },
+  {
+   "id": "e258",
+   "at": "2026-01-09",
+   "kind": "decision",
+   "statement": "The billing client pins Node version 20",
+   "key": "billing client pins Node version 20"
+  },
+  {
+   "id": "e259",
+   "at": "2026-05-09",
+   "kind": "decision",
+   "statement": "The billing client pins Node version 22",
+   "key": "billing client pins Node version 22",
+   "supersedes": "e258"
+  },
+  {
+   "id": "e260",
+   "at": "2026-01-09",
+   "kind": "decision",
+   "statement": "The billing client pins retry backoff linear",
+   "key": "billing client pins retry backoff linear"
+  },
+  {
+   "id": "e261",
+   "at": "2026-05-09",
+   "kind": "decision",
+   "statement": "The billing client pins retry backoff exponential",
+   "key": "billing client pins retry backoff exponential",
+   "supersedes": "e260"
+  },
+  {
+   "id": "e262",
+   "at": "2026-02-09",
+   "kind": "hazard",
+   "statement": "Never call billing.charge() without holding the billing row lock",
+   "key": "holding the billing row lock",
+   "path": "src/billing/charge.ts"
+  },
+  {
+   "id": "e263",
+   "at": "2026-02-09",
+   "kind": "hazard",
+   "statement": "Never call billing.sync() without holding the billing advisory lock",
+   "key": "holding the billing advisory lock",
+   "path": "src/billing/sync.ts"
+  },
+  {
+   "id": "e264",
+   "at": "2026-02-09",
+   "kind": "hazard",
+   "statement": "Never call billing.flush() without holding the billing write fence",
+   "key": "holding the billing write fence",
+   "path": "src/billing/flush.ts"
+  },
+  {
+   "id": "e265",
+   "at": "2026-01-09",
+   "kind": "hazard",
+   "statement": "The billing rounding rule lives in legacy module 1",
+   "key": "billing rounding rule lives in legacy module 1",
+   "path": "src/billing/legacy-1.ts"
+  },
+  {
+   "id": "e266",
+   "at": "2026-04-09",
+   "kind": "code-change",
+   "statement": "Rewrote src/billing/legacy-1.ts",
+   "path": "src/billing/legacy-1.ts"
+  },
+  {
+   "id": "e267",
+   "at": "2026-01-09",
+   "kind": "hazard",
+   "statement": "The billing currency table lives in legacy module 2",
+   "key": "billing currency table lives in legacy module 2",
+   "path": "src/billing/legacy-2.ts"
+  },
+  {
+   "id": "e268",
+   "at": "2026-04-09",
+   "kind": "code-change",
+   "statement": "Rewrote src/billing/legacy-2.ts",
+   "path": "src/billing/legacy-2.ts"
+  },
+  {
+   "id": "e269",
+   "at": "2026-01-09",
+   "kind": "hazard",
+   "statement": "The billing tax lookup lives in legacy module 3",
+   "key": "billing tax lookup lives in legacy module 3",
+   "path": "src/billing/legacy-3.ts"
+  },
+  {
+   "id": "e270",
+   "at": "2026-04-09",
+   "kind": "code-change",
+   "statement": "Rewrote src/billing/legacy-3.ts",
+   "path": "src/billing/legacy-3.ts"
+  },
+  {
+   "id": "e271",
+   "at": "2026-01-10",
+   "kind": "decision",
+   "statement": "The reports worker batch size is 30",
+   "key": "reports worker batch size is 30"
+  },
+  {
+   "id": "e272",
+   "at": "2026-01-10",
+   "kind": "lesson",
+   "statement": "reports requests time out after 8 seconds",
+   "key": "reports requests time out after 8 seconds"
+  },
+  {
+   "id": "e273",
+   "at": "2026-02-10",
+   "kind": "decision",
+   "statement": "The reports service publishes to the reports-events-v13 queue",
+   "key": "reports-events-v13"
+  },
+  {
+   "id": "e274",
+   "at": "2026-02-10",
+   "kind": "decision",
+   "statement": "Run the reports migration before deploying reports",
+   "key": "Run the reports migration before deploying reports"
+  },
+  {
+   "id": "e275",
+   "at": "2026-03-10",
+   "kind": "correction",
+   "statement": "Flush the reports cache after deploying reports",
+   "key": "Flush the reports cache after deploying reports"
+  },
+  {
+   "id": "e276",
+   "at": "2026-02-10",
+   "kind": "decision",
+   "statement": "Write the reports changelog entry before releasing reports",
+   "key": "Write the reports changelog entry before releasing reports"
+  },
+  {
+   "id": "e277",
+   "at": "2026-03-10",
+   "kind": "correction",
+   "statement": "Turn the reports feature flag on only after releasing reports",
+   "key": "Turn the reports feature flag on only after releasing reports"
+  },
+  {
+   "id": "e278",
+   "at": "2026-02-10",
+   "kind": "decision",
+   "statement": "The reports on call runbook lives in docs/runbooks/reports.md",
+   "key": "The reports on call runbook lives in docs/runbooks/reports.md"
+  },
+  {
+   "id": "e279",
+   "at": "2026-03-10",
+   "kind": "correction",
+   "statement": "Page the reports on call rota through the reports-oncall alias",
+   "key": "Page the reports on call rota through the reports-oncall alias"
+  },
+  {
+   "id": "e280",
+   "at": "2026-01-10",
+   "kind": "decision",
+   "statement": "Store reports amounts as floats",
+   "key": "store reports amounts as floats"
+  },
+  {
+   "id": "e281",
+   "at": "2026-04-10",
+   "kind": "decision",
+   "statement": "Store reports amounts as integer cents",
+   "key": "store reports amounts as integer cents",
+   "supersedes": "e280"
+  },
+  {
+   "id": "e282",
+   "at": "2026-01-10",
+   "kind": "decision",
+   "statement": "Store reports identifiers as uuid v4",
+   "key": "store reports identifiers as uuid v4"
+  },
+  {
+   "id": "e283",
+   "at": "2026-04-10",
+   "kind": "decision",
+   "statement": "Store reports identifiers as ulid",
+   "key": "store reports identifiers as ulid",
+   "supersedes": "e282"
+  },
+  {
+   "id": "e284",
+   "at": "2026-01-10",
+   "kind": "decision",
+   "statement": "Store reports log level as debug",
+   "key": "store reports log level as debug"
+  },
+  {
+   "id": "e285",
+   "at": "2026-04-10",
+   "kind": "decision",
+   "statement": "Store reports log level as info",
+   "key": "store reports log level as info",
+   "supersedes": "e284"
+  },
+  {
+   "id": "e286",
+   "at": "2026-01-10",
+   "kind": "decision",
+   "statement": "The reports client pins API version 2024-01",
+   "key": "reports client pins API version 2024-01"
+  },
+  {
+   "id": "e287",
+   "at": "2026-05-10",
+   "kind": "decision",
+   "statement": "The reports client pins API version 2025-06",
+   "key": "reports client pins API version 2025-06",
+   "supersedes": "e286"
+  },
+  {
+   "id": "e288",
+   "at": "2026-01-10",
+   "kind": "decision",
+   "statement": "The reports client pins Node version 20",
+   "key": "reports client pins Node version 20"
+  },
+  {
+   "id": "e289",
+   "at": "2026-05-10",
+   "kind": "decision",
+   "statement": "The reports client pins Node version 22",
+   "key": "reports client pins Node version 22",
+   "supersedes": "e288"
+  },
+  {
+   "id": "e290",
+   "at": "2026-01-10",
+   "kind": "decision",
+   "statement": "The reports client pins retry backoff linear",
+   "key": "reports client pins retry backoff linear"
+  },
+  {
+   "id": "e291",
+   "at": "2026-05-10",
+   "kind": "decision",
+   "statement": "The reports client pins retry backoff exponential",
+   "key": "reports client pins retry backoff exponential",
+   "supersedes": "e290"
+  },
+  {
+   "id": "e292",
+   "at": "2026-02-10",
+   "kind": "hazard",
+   "statement": "Never call reports.charge() without holding the reports row lock",
+   "key": "holding the reports row lock",
+   "path": "src/reports/charge.ts"
+  },
+  {
+   "id": "e293",
+   "at": "2026-02-10",
+   "kind": "hazard",
+   "statement": "Never call reports.sync() without holding the reports advisory lock",
+   "key": "holding the reports advisory lock",
+   "path": "src/reports/sync.ts"
+  },
+  {
+   "id": "e294",
+   "at": "2026-02-10",
+   "kind": "hazard",
+   "statement": "Never call reports.flush() without holding the reports write fence",
+   "key": "holding the reports write fence",
+   "path": "src/reports/flush.ts"
+  },
+  {
+   "id": "e295",
+   "at": "2026-01-10",
+   "kind": "hazard",
+   "statement": "The reports rounding rule lives in legacy module 1",
+   "key": "reports rounding rule lives in legacy module 1",
+   "path": "src/reports/legacy-1.ts"
+  },
+  {
+   "id": "e296",
+   "at": "2026-04-10",
+   "kind": "code-change",
+   "statement": "Rewrote src/reports/legacy-1.ts",
+   "path": "src/reports/legacy-1.ts"
+  },
+  {
+   "id": "e297",
+   "at": "2026-01-10",
+   "kind": "hazard",
+   "statement": "The reports currency table lives in legacy module 2",
+   "key": "reports currency table lives in legacy module 2",
+   "path": "src/reports/legacy-2.ts"
+  },
+  {
+   "id": "e298",
+   "at": "2026-04-10",
+   "kind": "code-change",
+   "statement": "Rewrote src/reports/legacy-2.ts",
+   "path": "src/reports/legacy-2.ts"
+  },
+  {
+   "id": "e299",
+   "at": "2026-01-10",
+   "kind": "hazard",
+   "statement": "The reports tax lookup lives in legacy module 3",
+   "key": "reports tax lookup lives in legacy module 3",
+   "path": "src/reports/legacy-3.ts"
+  },
+  {
+   "id": "e300",
+   "at": "2026-04-10",
+   "kind": "code-change",
+   "statement": "Rewrote src/reports/legacy-3.ts",
+   "path": "src/reports/legacy-3.ts"
+  },
+  {
+   "id": "e301",
+   "at": "2026-01-11",
+   "kind": "decision",
+   "statement": "The uploads worker batch size is 100",
+   "key": "uploads worker batch size is 100"
+  },
+  {
+   "id": "e302",
+   "at": "2026-01-11",
+   "kind": "lesson",
+   "statement": "uploads requests time out after 15 seconds",
+   "key": "uploads requests time out after 15 seconds"
+  },
+  {
+   "id": "e303",
+   "at": "2026-02-11",
+   "kind": "decision",
+   "statement": "The uploads service publishes to the uploads-events-v3 queue",
+   "key": "uploads-events-v3"
+  },
+  {
+   "id": "e304",
+   "at": "2026-02-11",
+   "kind": "decision",
+   "statement": "Run the uploads migration before deploying uploads",
+   "key": "Run the uploads migration before deploying uploads"
+  },
+  {
+   "id": "e305",
+   "at": "2026-03-11",
+   "kind": "correction",
+   "statement": "Flush the uploads cache after deploying uploads",
+   "key": "Flush the uploads cache after deploying uploads"
+  },
+  {
+   "id": "e306",
+   "at": "2026-02-11",
+   "kind": "decision",
+   "statement": "Write the uploads changelog entry before releasing uploads",
+   "key": "Write the uploads changelog entry before releasing uploads"
+  },
+  {
+   "id": "e307",
+   "at": "2026-03-11",
+   "kind": "correction",
+   "statement": "Turn the uploads feature flag on only after releasing uploads",
+   "key": "Turn the uploads feature flag on only after releasing uploads"
+  },
+  {
+   "id": "e308",
+   "at": "2026-02-11",
+   "kind": "decision",
+   "statement": "The uploads on call runbook lives in docs/runbooks/uploads.md",
+   "key": "The uploads on call runbook lives in docs/runbooks/uploads.md"
+  },
+  {
+   "id": "e309",
+   "at": "2026-03-11",
+   "kind": "correction",
+   "statement": "Page the uploads on call rota through the uploads-oncall alias",
+   "key": "Page the uploads on call rota through the uploads-oncall alias"
+  },
+  {
+   "id": "e310",
+   "at": "2026-01-11",
+   "kind": "decision",
+   "statement": "Store uploads amounts as floats",
+   "key": "store uploads amounts as floats"
+  },
+  {
+   "id": "e311",
+   "at": "2026-04-11",
+   "kind": "decision",
+   "statement": "Store uploads amounts as integer cents",
+   "key": "store uploads amounts as integer cents",
+   "supersedes": "e310"
+  },
+  {
+   "id": "e312",
+   "at": "2026-01-11",
+   "kind": "decision",
+   "statement": "Store uploads identifiers as uuid v4",
+   "key": "store uploads identifiers as uuid v4"
+  },
+  {
+   "id": "e313",
+   "at": "2026-04-11",
+   "kind": "decision",
+   "statement": "Store uploads identifiers as ulid",
+   "key": "store uploads identifiers as ulid",
+   "supersedes": "e312"
+  },
+  {
+   "id": "e314",
+   "at": "2026-01-11",
+   "kind": "decision",
+   "statement": "Store uploads log level as debug",
+   "key": "store uploads log level as debug"
+  },
+  {
+   "id": "e315",
+   "at": "2026-04-11",
+   "kind": "decision",
+   "statement": "Store uploads log level as info",
+   "key": "store uploads log level as info",
+   "supersedes": "e314"
+  },
+  {
+   "id": "e316",
+   "at": "2026-01-11",
+   "kind": "decision",
+   "statement": "The uploads client pins API version 2024-01",
+   "key": "uploads client pins API version 2024-01"
+  },
+  {
+   "id": "e317",
+   "at": "2026-05-11",
+   "kind": "decision",
+   "statement": "The uploads client pins API version 2025-06",
+   "key": "uploads client pins API version 2025-06",
+   "supersedes": "e316"
+  },
+  {
+   "id": "e318",
+   "at": "2026-01-11",
+   "kind": "decision",
+   "statement": "The uploads client pins Node version 20",
+   "key": "uploads client pins Node version 20"
+  },
+  {
+   "id": "e319",
+   "at": "2026-05-11",
+   "kind": "decision",
+   "statement": "The uploads client pins Node version 22",
+   "key": "uploads client pins Node version 22",
+   "supersedes": "e318"
+  },
+  {
+   "id": "e320",
+   "at": "2026-01-11",
+   "kind": "decision",
+   "statement": "The uploads client pins retry backoff linear",
+   "key": "uploads client pins retry backoff linear"
+  },
+  {
+   "id": "e321",
+   "at": "2026-05-11",
+   "kind": "decision",
+   "statement": "The uploads client pins retry backoff exponential",
+   "key": "uploads client pins retry backoff exponential",
+   "supersedes": "e320"
+  },
+  {
+   "id": "e322",
+   "at": "2026-02-11",
+   "kind": "hazard",
+   "statement": "Never call uploads.charge() without holding the uploads row lock",
+   "key": "holding the uploads row lock",
+   "path": "src/uploads/charge.ts"
+  },
+  {
+   "id": "e323",
+   "at": "2026-02-11",
+   "kind": "hazard",
+   "statement": "Never call uploads.sync() without holding the uploads advisory lock",
+   "key": "holding the uploads advisory lock",
+   "path": "src/uploads/sync.ts"
+  },
+  {
+   "id": "e324",
+   "at": "2026-02-11",
+   "kind": "hazard",
+   "statement": "Never call uploads.flush() without holding the uploads write fence",
+   "key": "holding the uploads write fence",
+   "path": "src/uploads/flush.ts"
+  },
+  {
+   "id": "e325",
+   "at": "2026-01-11",
+   "kind": "hazard",
+   "statement": "The uploads rounding rule lives in legacy module 1",
+   "key": "uploads rounding rule lives in legacy module 1",
+   "path": "src/uploads/legacy-1.ts"
+  },
+  {
+   "id": "e326",
+   "at": "2026-04-11",
+   "kind": "code-change",
+   "statement": "Rewrote src/uploads/legacy-1.ts",
+   "path": "src/uploads/legacy-1.ts"
+  },
+  {
+   "id": "e327",
+   "at": "2026-01-11",
+   "kind": "hazard",
+   "statement": "The uploads currency table lives in legacy module 2",
+   "key": "uploads currency table lives in legacy module 2",
+   "path": "src/uploads/legacy-2.ts"
+  },
+  {
+   "id": "e328",
+   "at": "2026-04-11",
+   "kind": "code-change",
+   "statement": "Rewrote src/uploads/legacy-2.ts",
+   "path": "src/uploads/legacy-2.ts"
+  },
+  {
+   "id": "e329",
+   "at": "2026-01-11",
+   "kind": "hazard",
+   "statement": "The uploads tax lookup lives in legacy module 3",
+   "key": "uploads tax lookup lives in legacy module 3",
+   "path": "src/uploads/legacy-3.ts"
+  },
+  {
+   "id": "e330",
+   "at": "2026-04-11",
+   "kind": "code-change",
+   "statement": "Rewrote src/uploads/legacy-3.ts",
+   "path": "src/uploads/legacy-3.ts"
+  },
+  {
+   "id": "e331",
+   "at": "2026-01-12",
+   "kind": "decision",
+   "statement": "The sessions worker batch size is 170",
+   "key": "sessions worker batch size is 170"
+  },
+  {
+   "id": "e332",
+   "at": "2026-01-12",
+   "kind": "lesson",
+   "statement": "sessions requests time out after 5 seconds",
+   "key": "sessions requests time out after 5 seconds"
+  },
+  {
+   "id": "e333",
+   "at": "2026-02-12",
+   "kind": "decision",
+   "statement": "The sessions service publishes to the sessions-events-v10 queue",
+   "key": "sessions-events-v10"
+  },
+  {
+   "id": "e334",
+   "at": "2026-02-12",
+   "kind": "decision",
+   "statement": "Run the sessions migration before deploying sessions",
+   "key": "Run the sessions migration before deploying sessions"
+  },
+  {
+   "id": "e335",
+   "at": "2026-03-12",
+   "kind": "correction",
+   "statement": "Flush the sessions cache after deploying sessions",
+   "key": "Flush the sessions cache after deploying sessions"
+  },
+  {
+   "id": "e336",
+   "at": "2026-02-12",
+   "kind": "decision",
+   "statement": "Write the sessions changelog entry before releasing sessions",
+   "key": "Write the sessions changelog entry before releasing sessions"
+  },
+  {
+   "id": "e337",
+   "at": "2026-03-12",
+   "kind": "correction",
+   "statement": "Turn the sessions feature flag on only after releasing sessions",
+   "key": "Turn the sessions feature flag on only after releasing sessions"
+  },
+  {
+   "id": "e338",
+   "at": "2026-02-12",
+   "kind": "decision",
+   "statement": "The sessions on call runbook lives in docs/runbooks/sessions.md",
+   "key": "The sessions on call runbook lives in docs/runbooks/sessions.md"
+  },
+  {
+   "id": "e339",
+   "at": "2026-03-12",
+   "kind": "correction",
+   "statement": "Page the sessions on call rota through the sessions-oncall alias",
+   "key": "Page the sessions on call rota through the sessions-oncall alias"
+  },
+  {
+   "id": "e340",
+   "at": "2026-01-12",
+   "kind": "decision",
+   "statement": "Store sessions amounts as floats",
+   "key": "store sessions amounts as floats"
+  },
+  {
+   "id": "e341",
+   "at": "2026-04-12",
+   "kind": "decision",
+   "statement": "Store sessions amounts as integer cents",
+   "key": "store sessions amounts as integer cents",
+   "supersedes": "e340"
+  },
+  {
+   "id": "e342",
+   "at": "2026-01-12",
+   "kind": "decision",
+   "statement": "Store sessions identifiers as uuid v4",
+   "key": "store sessions identifiers as uuid v4"
+  },
+  {
+   "id": "e343",
+   "at": "2026-04-12",
+   "kind": "decision",
+   "statement": "Store sessions identifiers as ulid",
+   "key": "store sessions identifiers as ulid",
+   "supersedes": "e342"
+  },
+  {
+   "id": "e344",
+   "at": "2026-01-12",
+   "kind": "decision",
+   "statement": "Store sessions log level as debug",
+   "key": "store sessions log level as debug"
+  },
+  {
+   "id": "e345",
+   "at": "2026-04-12",
+   "kind": "decision",
+   "statement": "Store sessions log level as info",
+   "key": "store sessions log level as info",
+   "supersedes": "e344"
+  },
+  {
+   "id": "e346",
+   "at": "2026-01-12",
+   "kind": "decision",
+   "statement": "The sessions client pins API version 2024-01",
+   "key": "sessions client pins API version 2024-01"
+  },
+  {
+   "id": "e347",
+   "at": "2026-05-12",
+   "kind": "decision",
+   "statement": "The sessions client pins API version 2025-06",
+   "key": "sessions client pins API version 2025-06",
+   "supersedes": "e346"
+  },
+  {
+   "id": "e348",
+   "at": "2026-01-12",
+   "kind": "decision",
+   "statement": "The sessions client pins Node version 20",
+   "key": "sessions client pins Node version 20"
+  },
+  {
+   "id": "e349",
+   "at": "2026-05-12",
+   "kind": "decision",
+   "statement": "The sessions client pins Node version 22",
+   "key": "sessions client pins Node version 22",
+   "supersedes": "e348"
+  },
+  {
+   "id": "e350",
+   "at": "2026-01-12",
+   "kind": "decision",
+   "statement": "The sessions client pins retry backoff linear",
+   "key": "sessions client pins retry backoff linear"
+  },
+  {
+   "id": "e351",
+   "at": "2026-05-12",
+   "kind": "decision",
+   "statement": "The sessions client pins retry backoff exponential",
+   "key": "sessions client pins retry backoff exponential",
+   "supersedes": "e350"
+  },
+  {
+   "id": "e352",
+   "at": "2026-02-12",
+   "kind": "hazard",
+   "statement": "Never call sessions.charge() without holding the sessions row lock",
+   "key": "holding the sessions row lock",
+   "path": "src/sessions/charge.ts"
+  },
+  {
+   "id": "e353",
+   "at": "2026-02-12",
+   "kind": "hazard",
+   "statement": "Never call sessions.sync() without holding the sessions advisory lock",
+   "key": "holding the sessions advisory lock",
+   "path": "src/sessions/sync.ts"
+  },
+  {
+   "id": "e354",
+   "at": "2026-02-12",
+   "kind": "hazard",
+   "statement": "Never call sessions.flush() without holding the sessions write fence",
+   "key": "holding the sessions write fence",
+   "path": "src/sessions/flush.ts"
+  },
+  {
+   "id": "e355",
+   "at": "2026-01-12",
+   "kind": "hazard",
+   "statement": "The sessions rounding rule lives in legacy module 1",
+   "key": "sessions rounding rule lives in legacy module 1",
+   "path": "src/sessions/legacy-1.ts"
+  },
+  {
+   "id": "e356",
+   "at": "2026-04-12",
+   "kind": "code-change",
+   "statement": "Rewrote src/sessions/legacy-1.ts",
+   "path": "src/sessions/legacy-1.ts"
+  },
+  {
+   "id": "e357",
+   "at": "2026-01-12",
+   "kind": "hazard",
+   "statement": "The sessions currency table lives in legacy module 2",
+   "key": "sessions currency table lives in legacy module 2",
+   "path": "src/sessions/legacy-2.ts"
+  },
+  {
+   "id": "e358",
+   "at": "2026-04-12",
+   "kind": "code-change",
+   "statement": "Rewrote src/sessions/legacy-2.ts",
+   "path": "src/sessions/legacy-2.ts"
+  },
+  {
+   "id": "e359",
+   "at": "2026-01-12",
+   "kind": "hazard",
+   "statement": "The sessions tax lookup lives in legacy module 3",
+   "key": "sessions tax lookup lives in legacy module 3",
+   "path": "src/sessions/legacy-3.ts"
+  },
+  {
+   "id": "e360",
+   "at": "2026-04-12",
+   "kind": "code-change",
+   "statement": "Rewrote src/sessions/legacy-3.ts",
+   "path": "src/sessions/legacy-3.ts"
+  },
+  {
+   "id": "e361",
+   "at": "2026-01-13",
+   "kind": "decision",
+   "statement": "The audit worker batch size is 70",
+   "key": "audit worker batch size is 70"
+  },
+  {
+   "id": "e362",
+   "at": "2026-01-13",
+   "kind": "lesson",
+   "statement": "audit requests time out after 12 seconds",
+   "key": "audit requests time out after 12 seconds"
+  },
+  {
+   "id": "e363",
+   "at": "2026-02-13",
+   "kind": "decision",
+   "statement": "The audit service publishes to the audit-events-v17 queue",
+   "key": "audit-events-v17"
+  },
+  {
+   "id": "e364",
+   "at": "2026-02-13",
+   "kind": "decision",
+   "statement": "Run the audit migration before deploying audit",
+   "key": "Run the audit migration before deploying audit"
+  },
+  {
+   "id": "e365",
+   "at": "2026-03-13",
+   "kind": "correction",
+   "statement": "Flush the audit cache after deploying audit",
+   "key": "Flush the audit cache after deploying audit"
+  },
+  {
+   "id": "e366",
+   "at": "2026-02-13",
+   "kind": "decision",
+   "statement": "Write the audit changelog entry before releasing audit",
+   "key": "Write the audit changelog entry before releasing audit"
+  },
+  {
+   "id": "e367",
+   "at": "2026-03-13",
+   "kind": "correction",
+   "statement": "Turn the audit feature flag on only after releasing audit",
+   "key": "Turn the audit feature flag on only after releasing audit"
+  },
+  {
+   "id": "e368",
+   "at": "2026-02-13",
+   "kind": "decision",
+   "statement": "The audit on call runbook lives in docs/runbooks/audit.md",
+   "key": "The audit on call runbook lives in docs/runbooks/audit.md"
+  },
+  {
+   "id": "e369",
+   "at": "2026-03-13",
+   "kind": "correction",
+   "statement": "Page the audit on call rota through the audit-oncall alias",
+   "key": "Page the audit on call rota through the audit-oncall alias"
+  },
+  {
+   "id": "e370",
+   "at": "2026-01-13",
+   "kind": "decision",
+   "statement": "Store audit amounts as floats",
+   "key": "store audit amounts as floats"
+  },
+  {
+   "id": "e371",
+   "at": "2026-04-13",
+   "kind": "decision",
+   "statement": "Store audit amounts as integer cents",
+   "key": "store audit amounts as integer cents",
+   "supersedes": "e370"
+  },
+  {
+   "id": "e372",
+   "at": "2026-01-13",
+   "kind": "decision",
+   "statement": "Store audit identifiers as uuid v4",
+   "key": "store audit identifiers as uuid v4"
+  },
+  {
+   "id": "e373",
+   "at": "2026-04-13",
+   "kind": "decision",
+   "statement": "Store audit identifiers as ulid",
+   "key": "store audit identifiers as ulid",
+   "supersedes": "e372"
+  },
+  {
+   "id": "e374",
+   "at": "2026-01-13",
+   "kind": "decision",
+   "statement": "Store audit log level as debug",
+   "key": "store audit log level as debug"
+  },
+  {
+   "id": "e375",
+   "at": "2026-04-13",
+   "kind": "decision",
+   "statement": "Store audit log level as info",
+   "key": "store audit log level as info",
+   "supersedes": "e374"
+  },
+  {
+   "id": "e376",
+   "at": "2026-01-13",
+   "kind": "decision",
+   "statement": "The audit client pins API version 2024-01",
+   "key": "audit client pins API version 2024-01"
+  },
+  {
+   "id": "e377",
+   "at": "2026-05-13",
+   "kind": "decision",
+   "statement": "The audit client pins API version 2025-06",
+   "key": "audit client pins API version 2025-06",
+   "supersedes": "e376"
+  },
+  {
+   "id": "e378",
+   "at": "2026-01-13",
+   "kind": "decision",
+   "statement": "The audit client pins Node version 20",
+   "key": "audit client pins Node version 20"
+  },
+  {
+   "id": "e379",
+   "at": "2026-05-13",
+   "kind": "decision",
+   "statement": "The audit client pins Node version 22",
+   "key": "audit client pins Node version 22",
+   "supersedes": "e378"
+  },
+  {
+   "id": "e380",
+   "at": "2026-01-13",
+   "kind": "decision",
+   "statement": "The audit client pins retry backoff linear",
+   "key": "audit client pins retry backoff linear"
+  },
+  {
+   "id": "e381",
+   "at": "2026-05-13",
+   "kind": "decision",
+   "statement": "The audit client pins retry backoff exponential",
+   "key": "audit client pins retry backoff exponential",
+   "supersedes": "e380"
+  },
+  {
+   "id": "e382",
+   "at": "2026-02-13",
+   "kind": "hazard",
+   "statement": "Never call audit.charge() without holding the audit row lock",
+   "key": "holding the audit row lock",
+   "path": "src/audit/charge.ts"
+  },
+  {
+   "id": "e383",
+   "at": "2026-02-13",
+   "kind": "hazard",
+   "statement": "Never call audit.sync() without holding the audit advisory lock",
+   "key": "holding the audit advisory lock",
+   "path": "src/audit/sync.ts"
+  },
+  {
+   "id": "e384",
+   "at": "2026-02-13",
+   "kind": "hazard",
+   "statement": "Never call audit.flush() without holding the audit write fence",
+   "key": "holding the audit write fence",
+   "path": "src/audit/flush.ts"
+  },
+  {
+   "id": "e385",
+   "at": "2026-01-13",
+   "kind": "hazard",
+   "statement": "The audit rounding rule lives in legacy module 1",
+   "key": "audit rounding rule lives in legacy module 1",
+   "path": "src/audit/legacy-1.ts"
+  },
+  {
+   "id": "e386",
+   "at": "2026-04-13",
+   "kind": "code-change",
+   "statement": "Rewrote src/audit/legacy-1.ts",
+   "path": "src/audit/legacy-1.ts"
+  },
+  {
+   "id": "e387",
+   "at": "2026-01-13",
+   "kind": "hazard",
+   "statement": "The audit currency table lives in legacy module 2",
+   "key": "audit currency table lives in legacy module 2",
+   "path": "src/audit/legacy-2.ts"
+  },
+  {
+   "id": "e388",
+   "at": "2026-04-13",
+   "kind": "code-change",
+   "statement": "Rewrote src/audit/legacy-2.ts",
+   "path": "src/audit/legacy-2.ts"
+  },
+  {
+   "id": "e389",
+   "at": "2026-01-13",
+   "kind": "hazard",
+   "statement": "The audit tax lookup lives in legacy module 3",
+   "key": "audit tax lookup lives in legacy module 3",
+   "path": "src/audit/legacy-3.ts"
+  },
+  {
+   "id": "e390",
+   "at": "2026-04-13",
+   "kind": "code-change",
+   "statement": "Rewrote src/audit/legacy-3.ts",
+   "path": "src/audit/legacy-3.ts"
+  },
+  {
+   "id": "e391",
+   "at": "2026-01-14",
+   "kind": "decision",
+   "statement": "The pricing worker batch size is 140",
+   "key": "pricing worker batch size is 140"
+  },
+  {
+   "id": "e392",
+   "at": "2026-01-14",
+   "kind": "lesson",
+   "statement": "pricing requests time out after 19 seconds",
+   "key": "pricing requests time out after 19 seconds"
+  },
+  {
+   "id": "e393",
+   "at": "2026-02-14",
+   "kind": "decision",
+   "statement": "The pricing service publishes to the pricing-events-v7 queue",
+   "key": "pricing-events-v7"
+  },
+  {
+   "id": "e394",
+   "at": "2026-02-14",
+   "kind": "decision",
+   "statement": "Run the pricing migration before deploying pricing",
+   "key": "Run the pricing migration before deploying pricing"
+  },
+  {
+   "id": "e395",
+   "at": "2026-03-14",
+   "kind": "correction",
+   "statement": "Flush the pricing cache after deploying pricing",
+   "key": "Flush the pricing cache after deploying pricing"
+  },
+  {
+   "id": "e396",
+   "at": "2026-02-14",
+   "kind": "decision",
+   "statement": "Write the pricing changelog entry before releasing pricing",
+   "key": "Write the pricing changelog entry before releasing pricing"
+  },
+  {
+   "id": "e397",
+   "at": "2026-03-14",
+   "kind": "correction",
+   "statement": "Turn the pricing feature flag on only after releasing pricing",
+   "key": "Turn the pricing feature flag on only after releasing pricing"
+  },
+  {
+   "id": "e398",
+   "at": "2026-02-14",
+   "kind": "decision",
+   "statement": "The pricing on call runbook lives in docs/runbooks/pricing.md",
+   "key": "The pricing on call runbook lives in docs/runbooks/pricing.md"
+  },
+  {
+   "id": "e399",
+   "at": "2026-03-14",
+   "kind": "correction",
+   "statement": "Page the pricing on call rota through the pricing-oncall alias",
+   "key": "Page the pricing on call rota through the pricing-oncall alias"
+  },
+  {
+   "id": "e400",
+   "at": "2026-01-14",
+   "kind": "decision",
+   "statement": "Store pricing amounts as floats",
+   "key": "store pricing amounts as floats"
+  },
+  {
+   "id": "e401",
+   "at": "2026-04-14",
+   "kind": "decision",
+   "statement": "Store pricing amounts as integer cents",
+   "key": "store pricing amounts as integer cents",
+   "supersedes": "e400"
+  },
+  {
+   "id": "e402",
+   "at": "2026-01-14",
+   "kind": "decision",
+   "statement": "Store pricing identifiers as uuid v4",
+   "key": "store pricing identifiers as uuid v4"
+  },
+  {
+   "id": "e403",
+   "at": "2026-04-14",
+   "kind": "decision",
+   "statement": "Store pricing identifiers as ulid",
+   "key": "store pricing identifiers as ulid",
+   "supersedes": "e402"
+  },
+  {
+   "id": "e404",
+   "at": "2026-01-14",
+   "kind": "decision",
+   "statement": "Store pricing log level as debug",
+   "key": "store pricing log level as debug"
+  },
+  {
+   "id": "e405",
+   "at": "2026-04-14",
+   "kind": "decision",
+   "statement": "Store pricing log level as info",
+   "key": "store pricing log level as info",
+   "supersedes": "e404"
+  },
+  {
+   "id": "e406",
+   "at": "2026-01-14",
+   "kind": "decision",
+   "statement": "The pricing client pins API version 2024-01",
+   "key": "pricing client pins API version 2024-01"
+  },
+  {
+   "id": "e407",
+   "at": "2026-05-14",
+   "kind": "decision",
+   "statement": "The pricing client pins API version 2025-06",
+   "key": "pricing client pins API version 2025-06",
+   "supersedes": "e406"
+  },
+  {
+   "id": "e408",
+   "at": "2026-01-14",
+   "kind": "decision",
+   "statement": "The pricing client pins Node version 20",
+   "key": "pricing client pins Node version 20"
+  },
+  {
+   "id": "e409",
+   "at": "2026-05-14",
+   "kind": "decision",
+   "statement": "The pricing client pins Node version 22",
+   "key": "pricing client pins Node version 22",
+   "supersedes": "e408"
+  },
+  {
+   "id": "e410",
+   "at": "2026-01-14",
+   "kind": "decision",
+   "statement": "The pricing client pins retry backoff linear",
+   "key": "pricing client pins retry backoff linear"
+  },
+  {
+   "id": "e411",
+   "at": "2026-05-14",
+   "kind": "decision",
+   "statement": "The pricing client pins retry backoff exponential",
+   "key": "pricing client pins retry backoff exponential",
+   "supersedes": "e410"
+  },
+  {
+   "id": "e412",
+   "at": "2026-02-14",
+   "kind": "hazard",
+   "statement": "Never call pricing.charge() without holding the pricing row lock",
+   "key": "holding the pricing row lock",
+   "path": "src/pricing/charge.ts"
+  },
+  {
+   "id": "e413",
+   "at": "2026-02-14",
+   "kind": "hazard",
+   "statement": "Never call pricing.sync() without holding the pricing advisory lock",
+   "key": "holding the pricing advisory lock",
+   "path": "src/pricing/sync.ts"
+  },
+  {
+   "id": "e414",
+   "at": "2026-02-14",
+   "kind": "hazard",
+   "statement": "Never call pricing.flush() without holding the pricing write fence",
+   "key": "holding the pricing write fence",
+   "path": "src/pricing/flush.ts"
+  },
+  {
+   "id": "e415",
+   "at": "2026-01-14",
+   "kind": "hazard",
+   "statement": "The pricing rounding rule lives in legacy module 1",
+   "key": "pricing rounding rule lives in legacy module 1",
+   "path": "src/pricing/legacy-1.ts"
+  },
+  {
+   "id": "e416",
+   "at": "2026-04-14",
+   "kind": "code-change",
+   "statement": "Rewrote src/pricing/legacy-1.ts",
+   "path": "src/pricing/legacy-1.ts"
+  },
+  {
+   "id": "e417",
+   "at": "2026-01-14",
+   "kind": "hazard",
+   "statement": "The pricing currency table lives in legacy module 2",
+   "key": "pricing currency table lives in legacy module 2",
+   "path": "src/pricing/legacy-2.ts"
+  },
+  {
+   "id": "e418",
+   "at": "2026-04-14",
+   "kind": "code-change",
+   "statement": "Rewrote src/pricing/legacy-2.ts",
+   "path": "src/pricing/legacy-2.ts"
+  },
+  {
+   "id": "e419",
+   "at": "2026-01-14",
+   "kind": "hazard",
+   "statement": "The pricing tax lookup lives in legacy module 3",
+   "key": "pricing tax lookup lives in legacy module 3",
+   "path": "src/pricing/legacy-3.ts"
+  },
+  {
+   "id": "e420",
+   "at": "2026-04-14",
+   "kind": "code-change",
+   "statement": "Rewrote src/pricing/legacy-3.ts",
+   "path": "src/pricing/legacy-3.ts"
+  },
+  {
+   "id": "e421",
+   "at": "2026-01-15",
+   "kind": "decision",
+   "statement": "The refunds worker batch size is 40",
+   "key": "refunds worker batch size is 40"
+  },
+  {
+   "id": "e422",
+   "at": "2026-01-15",
+   "kind": "lesson",
+   "statement": "refunds requests time out after 9 seconds",
+   "key": "refunds requests time out after 9 seconds"
+  },
+  {
+   "id": "e423",
+   "at": "2026-02-15",
+   "kind": "decision",
+   "statement": "The refunds service publishes to the refunds-events-v14 queue",
+   "key": "refunds-events-v14"
+  },
+  {
+   "id": "e424",
+   "at": "2026-02-15",
+   "kind": "decision",
+   "statement": "Run the refunds migration before deploying refunds",
+   "key": "Run the refunds migration before deploying refunds"
+  },
+  {
+   "id": "e425",
+   "at": "2026-03-15",
+   "kind": "correction",
+   "statement": "Flush the refunds cache after deploying refunds",
+   "key": "Flush the refunds cache after deploying refunds"
+  },
+  {
+   "id": "e426",
+   "at": "2026-02-15",
+   "kind": "decision",
+   "statement": "Write the refunds changelog entry before releasing refunds",
+   "key": "Write the refunds changelog entry before releasing refunds"
+  },
+  {
+   "id": "e427",
+   "at": "2026-03-15",
+   "kind": "correction",
+   "statement": "Turn the refunds feature flag on only after releasing refunds",
+   "key": "Turn the refunds feature flag on only after releasing refunds"
+  },
+  {
+   "id": "e428",
+   "at": "2026-02-15",
+   "kind": "decision",
+   "statement": "The refunds on call runbook lives in docs/runbooks/refunds.md",
+   "key": "The refunds on call runbook lives in docs/runbooks/refunds.md"
+  },
+  {
+   "id": "e429",
+   "at": "2026-03-15",
+   "kind": "correction",
+   "statement": "Page the refunds on call rota through the refunds-oncall alias",
+   "key": "Page the refunds on call rota through the refunds-oncall alias"
+  },
+  {
+   "id": "e430",
+   "at": "2026-01-15",
+   "kind": "decision",
+   "statement": "Store refunds amounts as floats",
+   "key": "store refunds amounts as floats"
+  },
+  {
+   "id": "e431",
+   "at": "2026-04-15",
+   "kind": "decision",
+   "statement": "Store refunds amounts as integer cents",
+   "key": "store refunds amounts as integer cents",
+   "supersedes": "e430"
+  },
+  {
+   "id": "e432",
+   "at": "2026-01-15",
+   "kind": "decision",
+   "statement": "Store refunds identifiers as uuid v4",
+   "key": "store refunds identifiers as uuid v4"
+  },
+  {
+   "id": "e433",
+   "at": "2026-04-15",
+   "kind": "decision",
+   "statement": "Store refunds identifiers as ulid",
+   "key": "store refunds identifiers as ulid",
+   "supersedes": "e432"
+  },
+  {
+   "id": "e434",
+   "at": "2026-01-15",
+   "kind": "decision",
+   "statement": "Store refunds log level as debug",
+   "key": "store refunds log level as debug"
+  },
+  {
+   "id": "e435",
+   "at": "2026-04-15",
+   "kind": "decision",
+   "statement": "Store refunds log level as info",
+   "key": "store refunds log level as info",
+   "supersedes": "e434"
+  },
+  {
+   "id": "e436",
+   "at": "2026-01-15",
+   "kind": "decision",
+   "statement": "The refunds client pins API version 2024-01",
+   "key": "refunds client pins API version 2024-01"
+  },
+  {
+   "id": "e437",
+   "at": "2026-05-15",
+   "kind": "decision",
+   "statement": "The refunds client pins API version 2025-06",
+   "key": "refunds client pins API version 2025-06",
+   "supersedes": "e436"
+  },
+  {
+   "id": "e438",
+   "at": "2026-01-15",
+   "kind": "decision",
+   "statement": "The refunds client pins Node version 20",
+   "key": "refunds client pins Node version 20"
+  },
+  {
+   "id": "e439",
+   "at": "2026-05-15",
+   "kind": "decision",
+   "statement": "The refunds client pins Node version 22",
+   "key": "refunds client pins Node version 22",
+   "supersedes": "e438"
+  },
+  {
+   "id": "e440",
+   "at": "2026-01-15",
+   "kind": "decision",
+   "statement": "The refunds client pins retry backoff linear",
+   "key": "refunds client pins retry backoff linear"
+  },
+  {
+   "id": "e441",
+   "at": "2026-05-15",
+   "kind": "decision",
+   "statement": "The refunds client pins retry backoff exponential",
+   "key": "refunds client pins retry backoff exponential",
+   "supersedes": "e440"
+  },
+  {
+   "id": "e442",
+   "at": "2026-02-15",
+   "kind": "hazard",
+   "statement": "Never call refunds.charge() without holding the refunds row lock",
+   "key": "holding the refunds row lock",
+   "path": "src/refunds/charge.ts"
+  },
+  {
+   "id": "e443",
+   "at": "2026-02-15",
+   "kind": "hazard",
+   "statement": "Never call refunds.sync() without holding the refunds advisory lock",
+   "key": "holding the refunds advisory lock",
+   "path": "src/refunds/sync.ts"
+  },
+  {
+   "id": "e444",
+   "at": "2026-02-15",
+   "kind": "hazard",
+   "statement": "Never call refunds.flush() without holding the refunds write fence",
+   "key": "holding the refunds write fence",
+   "path": "src/refunds/flush.ts"
+  },
+  {
+   "id": "e445",
+   "at": "2026-01-15",
+   "kind": "hazard",
+   "statement": "The refunds rounding rule lives in legacy module 1",
+   "key": "refunds rounding rule lives in legacy module 1",
+   "path": "src/refunds/legacy-1.ts"
+  },
+  {
+   "id": "e446",
+   "at": "2026-04-15",
+   "kind": "code-change",
+   "statement": "Rewrote src/refunds/legacy-1.ts",
+   "path": "src/refunds/legacy-1.ts"
+  },
+  {
+   "id": "e447",
+   "at": "2026-01-15",
+   "kind": "hazard",
+   "statement": "The refunds currency table lives in legacy module 2",
+   "key": "refunds currency table lives in legacy module 2",
+   "path": "src/refunds/legacy-2.ts"
+  },
+  {
+   "id": "e448",
+   "at": "2026-04-15",
+   "kind": "code-change",
+   "statement": "Rewrote src/refunds/legacy-2.ts",
+   "path": "src/refunds/legacy-2.ts"
+  },
+  {
+   "id": "e449",
+   "at": "2026-01-15",
+   "kind": "hazard",
+   "statement": "The refunds tax lookup lives in legacy module 3",
+   "key": "refunds tax lookup lives in legacy module 3",
+   "path": "src/refunds/legacy-3.ts"
+  },
+  {
+   "id": "e450",
+   "at": "2026-04-15",
+   "kind": "code-change",
+   "statement": "Rewrote src/refunds/legacy-3.ts",
+   "path": "src/refunds/legacy-3.ts"
+  },
+  {
+   "id": "e451",
+   "at": "2026-06-10",
+   "kind": "decision",
+   "statement": "The payments archive keeps 14 months",
+   "key": "payments archive keeps 14 months"
+  },
+  {
+   "id": "e452",
+   "at": "2026-06-11",
+   "kind": "decision",
+   "statement": "The invoices archive keeps 4 months",
+   "key": "invoices archive keeps 4 months"
+  },
+  {
+   "id": "e453",
+   "at": "2026-06-12",
+   "kind": "decision",
+   "statement": "The ledger archive keeps 11 months",
+   "key": "ledger archive keeps 11 months"
+  },
+  {
+   "id": "e454",
+   "at": "2026-06-13",
+   "kind": "decision",
+   "statement": "The webhooks archive keeps 18 months",
+   "key": "webhooks archive keeps 18 months"
+  },
+  {
+   "id": "e455",
+   "at": "2026-06-14",
+   "kind": "decision",
+   "statement": "The auth archive keeps 8 months",
+   "key": "auth archive keeps 8 months"
+  }
+ ],
+ "events": [
+  {
+   "id": "q001",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "What batch size does the payments worker use?",
+   "answers": [
+    "e001"
+   ]
+  },
+  {
+   "id": "q002",
+   "at": "2026-08-03",
+   "kind": "failure",
+   "question": "How patient are we with slow card charges?",
+   "answers": [
+    "e002"
+   ]
+  },
+  {
+   "id": "q003",
+   "at": "2026-06-04",
+   "kind": "decision",
+   "question": "Which queue does the payments service publish to?",
+   "answers": [
+    "e003"
+   ]
+  },
+  {
+   "id": "q004",
+   "at": "2026-07-05",
+   "kind": "decision",
+   "question": "What must we do about payments when deploying?",
+   "answers": [
+    "e004",
+    "e005"
+   ]
+  },
+  {
+   "id": "q005",
+   "at": "2026-08-06",
+   "kind": "decision",
+   "question": "What must we do about payments when releasing?",
+   "answers": [
+    "e006",
+    "e007"
+   ]
+  },
+  {
+   "id": "q006",
+   "at": "2026-06-07",
+   "kind": "decision",
+   "question": "What must we do about payments when on call?",
+   "answers": [
+    "e008",
+    "e009"
+   ]
+  },
+  {
+   "id": "q007",
+   "at": "2026-07-08",
+   "kind": "correction",
+   "question": "How do we store payments amounts?",
+   "answers": [
+    "e011"
+   ]
+  },
+  {
+   "id": "q008",
+   "at": "2026-08-09",
+   "kind": "correction",
+   "question": "How do we store payments identifiers?",
+   "answers": [
+    "e013"
+   ]
+  },
+  {
+   "id": "q009",
+   "at": "2026-06-10",
+   "kind": "correction",
+   "question": "How do we store payments log level?",
+   "answers": [
+    "e015"
+   ]
+  },
+  {
+   "id": "q010",
+   "at": "2026-07-11",
+   "kind": "failure",
+   "question": "Which API version did the payments client pin at commit c011?",
+   "asOf": "2026-03-01",
+   "answers": [
+    "e016"
+   ]
+  },
+  {
+   "id": "q011",
+   "at": "2026-08-12",
+   "kind": "failure",
+   "question": "Which Node version did the payments client pin at commit c012?",
+   "asOf": "2026-03-01",
+   "answers": [
+    "e018"
+   ]
+  },
+  {
+   "id": "q012",
+   "at": "2026-06-13",
+   "kind": "failure",
+   "question": "Which retry backoff did the payments client pin at commit c013?",
+   "asOf": "2026-03-01",
+   "answers": [
+    "e020"
+   ]
+  },
+  {
+   "id": "q013",
+   "at": "2026-07-14",
+   "kind": "correction",
+   "question": "What batch size does the warehouse worker use?",
+   "answers": []
+  },
+  {
+   "id": "q014",
+   "at": "2026-08-15",
+   "kind": "decision",
+   "question": "Who approves warehouse forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q015",
+   "at": "2026-06-16",
+   "kind": "failure",
+   "question": "Is the warehouse gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q016",
+   "at": "2026-07-17",
+   "kind": "failure",
+   "question": "Editing src/payments/charge.ts: anything to watch for?",
+   "path": "src/payments/charge.ts",
+   "answers": [
+    "e022"
+   ]
+  },
+  {
+   "id": "q017",
+   "at": "2026-08-18",
+   "kind": "failure",
+   "question": "Editing src/payments/sync.ts: anything to watch for?",
+   "path": "src/payments/sync.ts",
+   "answers": [
+    "e023"
+   ]
+  },
+  {
+   "id": "q018",
+   "at": "2026-06-19",
+   "kind": "failure",
+   "question": "Editing src/payments/flush.ts: anything to watch for?",
+   "path": "src/payments/flush.ts",
+   "answers": [
+    "e024"
+   ]
+  },
+  {
+   "id": "q019",
+   "at": "2026-07-20",
+   "kind": "correction",
+   "question": "Where does the payments rounding rule live?",
+   "answers": [
+    "e025"
+   ]
+  },
+  {
+   "id": "q020",
+   "at": "2026-08-21",
+   "kind": "correction",
+   "question": "Where does the payments currency table live?",
+   "answers": [
+    "e027"
+   ]
+  },
+  {
+   "id": "q021",
+   "at": "2026-06-22",
+   "kind": "correction",
+   "question": "Where does the payments tax lookup live?",
+   "answers": [
+    "e029"
+   ]
+  },
+  {
+   "id": "q022",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "What batch size does the invoices worker use?",
+   "answers": [
+    "e031"
+   ]
+  },
+  {
+   "id": "q023",
+   "at": "2026-08-24",
+   "kind": "failure",
+   "question": "How long before invoices requests time out?",
+   "answers": [
+    "e032"
+   ]
+  },
+  {
+   "id": "q024",
+   "at": "2026-06-25",
+   "kind": "decision",
+   "question": "Which queue does the invoices service publish to?",
+   "answers": [
+    "e033"
+   ]
+  },
+  {
+   "id": "q025",
+   "at": "2026-07-26",
+   "kind": "decision",
+   "question": "What must we do about invoices when deploying?",
+   "answers": [
+    "e034",
+    "e035"
+   ]
+  },
+  {
+   "id": "q026",
+   "at": "2026-08-27",
+   "kind": "decision",
+   "question": "What must we do about invoices when releasing?",
+   "answers": [
+    "e036",
+    "e037"
+   ]
+  },
+  {
+   "id": "q027",
+   "at": "2026-06-01",
+   "kind": "decision",
+   "question": "What must we do about invoices when on call?",
+   "answers": [
+    "e038",
+    "e039"
+   ]
+  },
+  {
+   "id": "q028",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "How do we store invoices amounts?",
+   "answers": [
+    "e041"
+   ]
+  },
+  {
+   "id": "q029",
+   "at": "2026-08-03",
+   "kind": "correction",
+   "question": "How do we store invoices identifiers?",
+   "answers": [
+    "e043"
+   ]
+  },
+  {
+   "id": "q030",
+   "at": "2026-06-04",
+   "kind": "correction",
+   "question": "How do we store invoices log level?",
+   "answers": [
+    "e045"
+   ]
+  },
+  {
+   "id": "q031",
+   "at": "2026-07-05",
+   "kind": "failure",
+   "question": "Which API version did the invoices client pin at commit c111?",
+   "asOf": "2026-03-02",
+   "answers": [
+    "e046"
+   ]
+  },
+  {
+   "id": "q032",
+   "at": "2026-08-06",
+   "kind": "failure",
+   "question": "Which Node version did the invoices client pin at commit c112?",
+   "asOf": "2026-03-02",
+   "answers": [
+    "e048"
+   ]
+  },
+  {
+   "id": "q033",
+   "at": "2026-06-07",
+   "kind": "failure",
+   "question": "Which retry backoff did the invoices client pin at commit c113?",
+   "asOf": "2026-03-02",
+   "answers": [
+    "e050"
+   ]
+  },
+  {
+   "id": "q034",
+   "at": "2026-07-08",
+   "kind": "correction",
+   "question": "What batch size does the loyalty worker use?",
+   "answers": []
+  },
+  {
+   "id": "q035",
+   "at": "2026-08-09",
+   "kind": "decision",
+   "question": "Who approves loyalty forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q036",
+   "at": "2026-06-10",
+   "kind": "failure",
+   "question": "Is the loyalty gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q037",
+   "at": "2026-07-11",
+   "kind": "failure",
+   "question": "Editing src/invoices/charge.ts: anything to watch for?",
+   "path": "src/invoices/charge.ts",
+   "answers": [
+    "e052"
+   ]
+  },
+  {
+   "id": "q038",
+   "at": "2026-08-12",
+   "kind": "failure",
+   "question": "Editing src/invoices/sync.ts: anything to watch for?",
+   "path": "src/invoices/sync.ts",
+   "answers": [
+    "e053"
+   ]
+  },
+  {
+   "id": "q039",
+   "at": "2026-06-13",
+   "kind": "failure",
+   "question": "Editing src/invoices/flush.ts: anything to watch for?",
+   "path": "src/invoices/flush.ts",
+   "answers": [
+    "e054"
+   ]
+  },
+  {
+   "id": "q040",
+   "at": "2026-07-14",
+   "kind": "correction",
+   "question": "Where does the invoices rounding rule live?",
+   "answers": [
+    "e055"
+   ]
+  },
+  {
+   "id": "q041",
+   "at": "2026-08-15",
+   "kind": "correction",
+   "question": "Where does the invoices currency table live?",
+   "answers": [
+    "e057"
+   ]
+  },
+  {
+   "id": "q042",
+   "at": "2026-06-16",
+   "kind": "correction",
+   "question": "Where does the invoices tax lookup live?",
+   "answers": [
+    "e059"
+   ]
+  },
+  {
+   "id": "q043",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "What batch size does the ledger worker use?",
+   "answers": [
+    "e061"
+   ]
+  },
+  {
+   "id": "q044",
+   "at": "2026-08-18",
+   "kind": "failure",
+   "question": "How patient are we with slow bookkeeping?",
+   "answers": [
+    "e062"
+   ]
+  },
+  {
+   "id": "q045",
+   "at": "2026-06-19",
+   "kind": "decision",
+   "question": "Which queue does the ledger service publish to?",
+   "answers": [
+    "e063"
+   ]
+  },
+  {
+   "id": "q046",
+   "at": "2026-07-20",
+   "kind": "decision",
+   "question": "What must we do about ledger when deploying?",
+   "answers": [
+    "e064",
+    "e065"
+   ]
+  },
+  {
+   "id": "q047",
+   "at": "2026-08-21",
+   "kind": "decision",
+   "question": "What must we do about ledger when releasing?",
+   "answers": [
+    "e066",
+    "e067"
+   ]
+  },
+  {
+   "id": "q048",
+   "at": "2026-06-22",
+   "kind": "decision",
+   "question": "What must we do about ledger when on call?",
+   "answers": [
+    "e068",
+    "e069"
+   ]
+  },
+  {
+   "id": "q049",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "How do we store ledger amounts?",
+   "answers": [
+    "e071"
+   ]
+  },
+  {
+   "id": "q050",
+   "at": "2026-08-24",
+   "kind": "correction",
+   "question": "How do we store ledger identifiers?",
+   "answers": [
+    "e073"
+   ]
+  },
+  {
+   "id": "q051",
+   "at": "2026-06-25",
+   "kind": "correction",
+   "question": "How do we store ledger log level?",
+   "answers": [
+    "e075"
+   ]
+  },
+  {
+   "id": "q052",
+   "at": "2026-07-26",
+   "kind": "failure",
+   "question": "Which API version did the ledger client pin at commit c211?",
+   "asOf": "2026-03-03",
+   "answers": [
+    "e076"
+   ]
+  },
+  {
+   "id": "q053",
+   "at": "2026-08-27",
+   "kind": "failure",
+   "question": "Which Node version did the ledger client pin at commit c212?",
+   "asOf": "2026-03-03",
+   "answers": [
+    "e078"
+   ]
+  },
+  {
+   "id": "q054",
+   "at": "2026-06-01",
+   "kind": "failure",
+   "question": "Which retry backoff did the ledger client pin at commit c213?",
+   "asOf": "2026-03-03",
+   "answers": [
+    "e080"
+   ]
+  },
+  {
+   "id": "q055",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "What batch size does the chat worker use?",
+   "answers": []
+  },
+  {
+   "id": "q056",
+   "at": "2026-08-03",
+   "kind": "decision",
+   "question": "Who approves chat forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q057",
+   "at": "2026-06-04",
+   "kind": "failure",
+   "question": "Is the chat gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q058",
+   "at": "2026-07-05",
+   "kind": "failure",
+   "question": "Editing src/ledger/charge.ts: anything to watch for?",
+   "path": "src/ledger/charge.ts",
+   "answers": [
+    "e082"
+   ]
+  },
+  {
+   "id": "q059",
+   "at": "2026-08-06",
+   "kind": "failure",
+   "question": "Editing src/ledger/sync.ts: anything to watch for?",
+   "path": "src/ledger/sync.ts",
+   "answers": [
+    "e083"
+   ]
+  },
+  {
+   "id": "q060",
+   "at": "2026-06-07",
+   "kind": "failure",
+   "question": "Editing src/ledger/flush.ts: anything to watch for?",
+   "path": "src/ledger/flush.ts",
+   "answers": [
+    "e084"
+   ]
+  },
+  {
+   "id": "q061",
+   "at": "2026-07-08",
+   "kind": "correction",
+   "question": "Where does the ledger rounding rule live?",
+   "answers": [
+    "e085"
+   ]
+  },
+  {
+   "id": "q062",
+   "at": "2026-08-09",
+   "kind": "correction",
+   "question": "Where does the ledger currency table live?",
+   "answers": [
+    "e087"
+   ]
+  },
+  {
+   "id": "q063",
+   "at": "2026-06-10",
+   "kind": "correction",
+   "question": "Where does the ledger tax lookup live?",
+   "answers": [
+    "e089"
+   ]
+  },
+  {
+   "id": "q064",
+   "at": "2026-07-11",
+   "kind": "correction",
+   "question": "What batch size does the webhooks worker use?",
+   "answers": [
+    "e091"
+   ]
+  },
+  {
+   "id": "q065",
+   "at": "2026-08-12",
+   "kind": "failure",
+   "question": "How long before webhooks requests time out?",
+   "answers": [
+    "e092"
+   ]
+  },
+  {
+   "id": "q066",
+   "at": "2026-06-13",
+   "kind": "decision",
+   "question": "Which queue does the webhooks service publish to?",
+   "answers": [
+    "e093"
+   ]
+  },
+  {
+   "id": "q067",
+   "at": "2026-07-14",
+   "kind": "decision",
+   "question": "What must we do about webhooks when deploying?",
+   "answers": [
+    "e094",
+    "e095"
+   ]
+  },
+  {
+   "id": "q068",
+   "at": "2026-08-15",
+   "kind": "decision",
+   "question": "What must we do about webhooks when releasing?",
+   "answers": [
+    "e096",
+    "e097"
+   ]
+  },
+  {
+   "id": "q069",
+   "at": "2026-06-16",
+   "kind": "decision",
+   "question": "What must we do about webhooks when on call?",
+   "answers": [
+    "e098",
+    "e099"
+   ]
+  },
+  {
+   "id": "q070",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "How do we store webhooks amounts?",
+   "answers": [
+    "e101"
+   ]
+  },
+  {
+   "id": "q071",
+   "at": "2026-08-18",
+   "kind": "correction",
+   "question": "How do we store webhooks identifiers?",
+   "answers": [
+    "e103"
+   ]
+  },
+  {
+   "id": "q072",
+   "at": "2026-06-19",
+   "kind": "correction",
+   "question": "How do we store webhooks log level?",
+   "answers": [
+    "e105"
+   ]
+  },
+  {
+   "id": "q073",
+   "at": "2026-07-20",
+   "kind": "failure",
+   "question": "Which API version did the webhooks client pin at commit c311?",
+   "asOf": "2026-03-04",
+   "answers": [
+    "e106"
+   ]
+  },
+  {
+   "id": "q074",
+   "at": "2026-08-21",
+   "kind": "failure",
+   "question": "Which Node version did the webhooks client pin at commit c312?",
+   "asOf": "2026-03-04",
+   "answers": [
+    "e108"
+   ]
+  },
+  {
+   "id": "q075",
+   "at": "2026-06-22",
+   "kind": "failure",
+   "question": "Which retry backoff did the webhooks client pin at commit c313?",
+   "asOf": "2026-03-04",
+   "answers": [
+    "e110"
+   ]
+  },
+  {
+   "id": "q076",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "What batch size does the maps worker use?",
+   "answers": []
+  },
+  {
+   "id": "q077",
+   "at": "2026-08-24",
+   "kind": "decision",
+   "question": "Who approves maps forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q078",
+   "at": "2026-06-25",
+   "kind": "failure",
+   "question": "Is the maps gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q079",
+   "at": "2026-07-26",
+   "kind": "failure",
+   "question": "Editing src/webhooks/charge.ts: anything to watch for?",
+   "path": "src/webhooks/charge.ts",
+   "answers": [
+    "e112"
+   ]
+  },
+  {
+   "id": "q080",
+   "at": "2026-08-27",
+   "kind": "failure",
+   "question": "Editing src/webhooks/sync.ts: anything to watch for?",
+   "path": "src/webhooks/sync.ts",
+   "answers": [
+    "e113"
+   ]
+  },
+  {
+   "id": "q081",
+   "at": "2026-06-01",
+   "kind": "failure",
+   "question": "Editing src/webhooks/flush.ts: anything to watch for?",
+   "path": "src/webhooks/flush.ts",
+   "answers": [
+    "e114"
+   ]
+  },
+  {
+   "id": "q082",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "Where does the webhooks rounding rule live?",
+   "answers": [
+    "e115"
+   ]
+  },
+  {
+   "id": "q083",
+   "at": "2026-08-03",
+   "kind": "correction",
+   "question": "Where does the webhooks currency table live?",
+   "answers": [
+    "e117"
+   ]
+  },
+  {
+   "id": "q084",
+   "at": "2026-06-04",
+   "kind": "correction",
+   "question": "Where does the webhooks tax lookup live?",
+   "answers": [
+    "e119"
+   ]
+  },
+  {
+   "id": "q085",
+   "at": "2026-07-05",
+   "kind": "correction",
+   "question": "What batch size does the auth worker use?",
+   "answers": [
+    "e121"
+   ]
+  },
+  {
+   "id": "q086",
+   "at": "2026-08-06",
+   "kind": "failure",
+   "question": "How patient are we with slow sign-in?",
+   "answers": [
+    "e122"
+   ]
+  },
+  {
+   "id": "q087",
+   "at": "2026-06-07",
+   "kind": "decision",
+   "question": "Which queue does the auth service publish to?",
+   "answers": [
+    "e123"
+   ]
+  },
+  {
+   "id": "q088",
+   "at": "2026-07-08",
+   "kind": "decision",
+   "question": "What must we do about auth when deploying?",
+   "answers": [
+    "e124",
+    "e125"
+   ]
+  },
+  {
+   "id": "q089",
+   "at": "2026-08-09",
+   "kind": "decision",
+   "question": "What must we do about auth when releasing?",
+   "answers": [
+    "e126",
+    "e127"
+   ]
+  },
+  {
+   "id": "q090",
+   "at": "2026-06-10",
+   "kind": "decision",
+   "question": "What must we do about auth when on call?",
+   "answers": [
+    "e128",
+    "e129"
+   ]
+  },
+  {
+   "id": "q091",
+   "at": "2026-07-11",
+   "kind": "correction",
+   "question": "How do we store auth amounts?",
+   "answers": [
+    "e131"
+   ]
+  },
+  {
+   "id": "q092",
+   "at": "2026-08-12",
+   "kind": "correction",
+   "question": "How do we store auth identifiers?",
+   "answers": [
+    "e133"
+   ]
+  },
+  {
+   "id": "q093",
+   "at": "2026-06-13",
+   "kind": "correction",
+   "question": "How do we store auth log level?",
+   "answers": [
+    "e135"
+   ]
+  },
+  {
+   "id": "q094",
+   "at": "2026-07-14",
+   "kind": "failure",
+   "question": "Which API version did the auth client pin at commit c411?",
+   "asOf": "2026-03-05",
+   "answers": [
+    "e136"
+   ]
+  },
+  {
+   "id": "q095",
+   "at": "2026-08-15",
+   "kind": "failure",
+   "question": "Which Node version did the auth client pin at commit c412?",
+   "asOf": "2026-03-05",
+   "answers": [
+    "e138"
+   ]
+  },
+  {
+   "id": "q096",
+   "at": "2026-06-16",
+   "kind": "failure",
+   "question": "Which retry backoff did the auth client pin at commit c413?",
+   "asOf": "2026-03-05",
+   "answers": [
+    "e140"
+   ]
+  },
+  {
+   "id": "q097",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "What batch size does the kiosk worker use?",
+   "answers": []
+  },
+  {
+   "id": "q098",
+   "at": "2026-08-18",
+   "kind": "decision",
+   "question": "Who approves kiosk forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q099",
+   "at": "2026-06-19",
+   "kind": "failure",
+   "question": "Is the kiosk gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q100",
+   "at": "2026-07-20",
+   "kind": "failure",
+   "question": "Editing src/auth/charge.ts: anything to watch for?",
+   "path": "src/auth/charge.ts",
+   "answers": [
+    "e142"
+   ]
+  },
+  {
+   "id": "q101",
+   "at": "2026-08-21",
+   "kind": "failure",
+   "question": "Editing src/auth/sync.ts: anything to watch for?",
+   "path": "src/auth/sync.ts",
+   "answers": [
+    "e143"
+   ]
+  },
+  {
+   "id": "q102",
+   "at": "2026-06-22",
+   "kind": "failure",
+   "question": "Editing src/auth/flush.ts: anything to watch for?",
+   "path": "src/auth/flush.ts",
+   "answers": [
+    "e144"
+   ]
+  },
+  {
+   "id": "q103",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "Where does the auth rounding rule live?",
+   "answers": [
+    "e145"
+   ]
+  },
+  {
+   "id": "q104",
+   "at": "2026-08-24",
+   "kind": "correction",
+   "question": "Where does the auth currency table live?",
+   "answers": [
+    "e147"
+   ]
+  },
+  {
+   "id": "q105",
+   "at": "2026-06-25",
+   "kind": "correction",
+   "question": "Where does the auth tax lookup live?",
+   "answers": [
+    "e149"
+   ]
+  },
+  {
+   "id": "q106",
+   "at": "2026-07-26",
+   "kind": "correction",
+   "question": "What batch size does the search worker use?",
+   "answers": [
+    "e151"
+   ]
+  },
+  {
+   "id": "q107",
+   "at": "2026-08-27",
+   "kind": "failure",
+   "question": "How long before search requests time out?",
+   "answers": [
+    "e152"
+   ]
+  },
+  {
+   "id": "q108",
+   "at": "2026-06-01",
+   "kind": "decision",
+   "question": "Which queue does the search service publish to?",
+   "answers": [
+    "e153"
+   ]
+  },
+  {
+   "id": "q109",
+   "at": "2026-07-02",
+   "kind": "decision",
+   "question": "What must we do about search when deploying?",
+   "answers": [
+    "e154",
+    "e155"
+   ]
+  },
+  {
+   "id": "q110",
+   "at": "2026-08-03",
+   "kind": "decision",
+   "question": "What must we do about search when releasing?",
+   "answers": [
+    "e156",
+    "e157"
+   ]
+  },
+  {
+   "id": "q111",
+   "at": "2026-06-04",
+   "kind": "decision",
+   "question": "What must we do about search when on call?",
+   "answers": [
+    "e158",
+    "e159"
+   ]
+  },
+  {
+   "id": "q112",
+   "at": "2026-07-05",
+   "kind": "correction",
+   "question": "How do we store search amounts?",
+   "answers": [
+    "e161"
+   ]
+  },
+  {
+   "id": "q113",
+   "at": "2026-08-06",
+   "kind": "correction",
+   "question": "How do we store search identifiers?",
+   "answers": [
+    "e163"
+   ]
+  },
+  {
+   "id": "q114",
+   "at": "2026-06-07",
+   "kind": "correction",
+   "question": "How do we store search log level?",
+   "answers": [
+    "e165"
+   ]
+  },
+  {
+   "id": "q115",
+   "at": "2026-07-08",
+   "kind": "failure",
+   "question": "Which API version did the search client pin at commit c511?",
+   "asOf": "2026-03-06",
+   "answers": [
+    "e166"
+   ]
+  },
+  {
+   "id": "q116",
+   "at": "2026-08-09",
+   "kind": "failure",
+   "question": "Which Node version did the search client pin at commit c512?",
+   "asOf": "2026-03-06",
+   "answers": [
+    "e168"
+   ]
+  },
+  {
+   "id": "q117",
+   "at": "2026-06-10",
+   "kind": "failure",
+   "question": "Which retry backoff did the search client pin at commit c513?",
+   "asOf": "2026-03-06",
+   "answers": [
+    "e170"
+   ]
+  },
+  {
+   "id": "q118",
+   "at": "2026-07-11",
+   "kind": "correction",
+   "question": "What batch size does the ocr worker use?",
+   "answers": []
+  },
+  {
+   "id": "q119",
+   "at": "2026-08-12",
+   "kind": "decision",
+   "question": "Who approves ocr forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q120",
+   "at": "2026-06-13",
+   "kind": "failure",
+   "question": "Is the ocr gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q121",
+   "at": "2026-07-14",
+   "kind": "failure",
+   "question": "Editing src/search/charge.ts: anything to watch for?",
+   "path": "src/search/charge.ts",
+   "answers": [
+    "e172"
+   ]
+  },
+  {
+   "id": "q122",
+   "at": "2026-08-15",
+   "kind": "failure",
+   "question": "Editing src/search/sync.ts: anything to watch for?",
+   "path": "src/search/sync.ts",
+   "answers": [
+    "e173"
+   ]
+  },
+  {
+   "id": "q123",
+   "at": "2026-06-16",
+   "kind": "failure",
+   "question": "Editing src/search/flush.ts: anything to watch for?",
+   "path": "src/search/flush.ts",
+   "answers": [
+    "e174"
+   ]
+  },
+  {
+   "id": "q124",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "Where does the search rounding rule live?",
+   "answers": [
+    "e175"
+   ]
+  },
+  {
+   "id": "q125",
+   "at": "2026-08-18",
+   "kind": "correction",
+   "question": "Where does the search currency table live?",
+   "answers": [
+    "e177"
+   ]
+  },
+  {
+   "id": "q126",
+   "at": "2026-06-19",
+   "kind": "correction",
+   "question": "Where does the search tax lookup live?",
+   "answers": [
+    "e179"
+   ]
+  },
+  {
+   "id": "q127",
+   "at": "2026-07-20",
+   "kind": "correction",
+   "question": "What batch size does the exports worker use?",
+   "answers": [
+    "e181"
+   ]
+  },
+  {
+   "id": "q128",
+   "at": "2026-08-21",
+   "kind": "failure",
+   "question": "How patient are we with slow downloads?",
+   "answers": [
+    "e182"
+   ]
+  },
+  {
+   "id": "q129",
+   "at": "2026-06-22",
+   "kind": "decision",
+   "question": "Which queue does the exports service publish to?",
+   "answers": [
+    "e183"
+   ]
+  },
+  {
+   "id": "q130",
+   "at": "2026-07-23",
+   "kind": "decision",
+   "question": "What must we do about exports when deploying?",
+   "answers": [
+    "e184",
+    "e185"
+   ]
+  },
+  {
+   "id": "q131",
+   "at": "2026-08-24",
+   "kind": "decision",
+   "question": "What must we do about exports when releasing?",
+   "answers": [
+    "e186",
+    "e187"
+   ]
+  },
+  {
+   "id": "q132",
+   "at": "2026-06-25",
+   "kind": "decision",
+   "question": "What must we do about exports when on call?",
+   "answers": [
+    "e188",
+    "e189"
+   ]
+  },
+  {
+   "id": "q133",
+   "at": "2026-07-26",
+   "kind": "correction",
+   "question": "How do we store exports amounts?",
+   "answers": [
+    "e191"
+   ]
+  },
+  {
+   "id": "q134",
+   "at": "2026-08-27",
+   "kind": "correction",
+   "question": "How do we store exports identifiers?",
+   "answers": [
+    "e193"
+   ]
+  },
+  {
+   "id": "q135",
+   "at": "2026-06-01",
+   "kind": "correction",
+   "question": "How do we store exports log level?",
+   "answers": [
+    "e195"
+   ]
+  },
+  {
+   "id": "q136",
+   "at": "2026-07-02",
+   "kind": "failure",
+   "question": "Which API version did the exports client pin at commit c611?",
+   "asOf": "2026-03-07",
+   "answers": [
+    "e196"
+   ]
+  },
+  {
+   "id": "q137",
+   "at": "2026-08-03",
+   "kind": "failure",
+   "question": "Which Node version did the exports client pin at commit c612?",
+   "asOf": "2026-03-07",
+   "answers": [
+    "e198"
+   ]
+  },
+  {
+   "id": "q138",
+   "at": "2026-06-04",
+   "kind": "failure",
+   "question": "Which retry backoff did the exports client pin at commit c613?",
+   "asOf": "2026-03-07",
+   "answers": [
+    "e200"
+   ]
+  },
+  {
+   "id": "q139",
+   "at": "2026-07-05",
+   "kind": "correction",
+   "question": "What batch size does the printing worker use?",
+   "answers": []
+  },
+  {
+   "id": "q140",
+   "at": "2026-08-06",
+   "kind": "decision",
+   "question": "Who approves printing forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q141",
+   "at": "2026-06-07",
+   "kind": "failure",
+   "question": "Is the printing gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q142",
+   "at": "2026-07-08",
+   "kind": "failure",
+   "question": "Editing src/exports/charge.ts: anything to watch for?",
+   "path": "src/exports/charge.ts",
+   "answers": [
+    "e202"
+   ]
+  },
+  {
+   "id": "q143",
+   "at": "2026-08-09",
+   "kind": "failure",
+   "question": "Editing src/exports/sync.ts: anything to watch for?",
+   "path": "src/exports/sync.ts",
+   "answers": [
+    "e203"
+   ]
+  },
+  {
+   "id": "q144",
+   "at": "2026-06-10",
+   "kind": "failure",
+   "question": "Editing src/exports/flush.ts: anything to watch for?",
+   "path": "src/exports/flush.ts",
+   "answers": [
+    "e204"
+   ]
+  },
+  {
+   "id": "q145",
+   "at": "2026-07-11",
+   "kind": "correction",
+   "question": "Where does the exports rounding rule live?",
+   "answers": [
+    "e205"
+   ]
+  },
+  {
+   "id": "q146",
+   "at": "2026-08-12",
+   "kind": "correction",
+   "question": "Where does the exports currency table live?",
+   "answers": [
+    "e207"
+   ]
+  },
+  {
+   "id": "q147",
+   "at": "2026-06-13",
+   "kind": "correction",
+   "question": "Where does the exports tax lookup live?",
+   "answers": [
+    "e209"
+   ]
+  },
+  {
+   "id": "q148",
+   "at": "2026-07-14",
+   "kind": "correction",
+   "question": "What batch size does the notifications worker use?",
+   "answers": [
+    "e211"
+   ]
+  },
+  {
+   "id": "q149",
+   "at": "2026-08-15",
+   "kind": "failure",
+   "question": "How long before notifications requests time out?",
+   "answers": [
+    "e212"
+   ]
+  },
+  {
+   "id": "q150",
+   "at": "2026-06-16",
+   "kind": "decision",
+   "question": "Which queue does the notifications service publish to?",
+   "answers": [
+    "e213"
+   ]
+  },
+  {
+   "id": "q151",
+   "at": "2026-07-17",
+   "kind": "decision",
+   "question": "What must we do about notifications when deploying?",
+   "answers": [
+    "e214",
+    "e215"
+   ]
+  },
+  {
+   "id": "q152",
+   "at": "2026-08-18",
+   "kind": "decision",
+   "question": "What must we do about notifications when releasing?",
+   "answers": [
+    "e216",
+    "e217"
+   ]
+  },
+  {
+   "id": "q153",
+   "at": "2026-06-19",
+   "kind": "decision",
+   "question": "What must we do about notifications when on call?",
+   "answers": [
+    "e218",
+    "e219"
+   ]
+  },
+  {
+   "id": "q154",
+   "at": "2026-07-20",
+   "kind": "correction",
+   "question": "How do we store notifications amounts?",
+   "answers": [
+    "e221"
+   ]
+  },
+  {
+   "id": "q155",
+   "at": "2026-08-21",
+   "kind": "correction",
+   "question": "How do we store notifications identifiers?",
+   "answers": [
+    "e223"
+   ]
+  },
+  {
+   "id": "q156",
+   "at": "2026-06-22",
+   "kind": "correction",
+   "question": "How do we store notifications log level?",
+   "answers": [
+    "e225"
+   ]
+  },
+  {
+   "id": "q157",
+   "at": "2026-07-23",
+   "kind": "failure",
+   "question": "Which API version did the notifications client pin at commit c711?",
+   "asOf": "2026-03-08",
+   "answers": [
+    "e226"
+   ]
+  },
+  {
+   "id": "q158",
+   "at": "2026-08-24",
+   "kind": "failure",
+   "question": "Which Node version did the notifications client pin at commit c712?",
+   "asOf": "2026-03-08",
+   "answers": [
+    "e228"
+   ]
+  },
+  {
+   "id": "q159",
+   "at": "2026-06-25",
+   "kind": "failure",
+   "question": "Which retry backoff did the notifications client pin at commit c713?",
+   "asOf": "2026-03-08",
+   "answers": [
+    "e230"
+   ]
+  },
+  {
+   "id": "q160",
+   "at": "2026-07-26",
+   "kind": "correction",
+   "question": "What batch size does the fax worker use?",
+   "answers": []
+  },
+  {
+   "id": "q161",
+   "at": "2026-08-27",
+   "kind": "decision",
+   "question": "Who approves fax forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q162",
+   "at": "2026-06-01",
+   "kind": "failure",
+   "question": "Is the fax gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q163",
+   "at": "2026-07-02",
+   "kind": "failure",
+   "question": "Editing src/notifications/charge.ts: anything to watch for?",
+   "path": "src/notifications/charge.ts",
+   "answers": [
+    "e232"
+   ]
+  },
+  {
+   "id": "q164",
+   "at": "2026-08-03",
+   "kind": "failure",
+   "question": "Editing src/notifications/sync.ts: anything to watch for?",
+   "path": "src/notifications/sync.ts",
+   "answers": [
+    "e233"
+   ]
+  },
+  {
+   "id": "q165",
+   "at": "2026-06-04",
+   "kind": "failure",
+   "question": "Editing src/notifications/flush.ts: anything to watch for?",
+   "path": "src/notifications/flush.ts",
+   "answers": [
+    "e234"
+   ]
+  },
+  {
+   "id": "q166",
+   "at": "2026-07-05",
+   "kind": "correction",
+   "question": "Where does the notifications rounding rule live?",
+   "answers": [
+    "e235"
+   ]
+  },
+  {
+   "id": "q167",
+   "at": "2026-08-06",
+   "kind": "correction",
+   "question": "Where does the notifications currency table live?",
+   "answers": [
+    "e237"
+   ]
+  },
+  {
+   "id": "q168",
+   "at": "2026-06-07",
+   "kind": "correction",
+   "question": "Where does the notifications tax lookup live?",
+   "answers": [
+    "e239"
+   ]
+  },
+  {
+   "id": "q169",
+   "at": "2026-07-08",
+   "kind": "correction",
+   "question": "What batch size does the billing worker use?",
+   "answers": [
+    "e241"
+   ]
+  },
+  {
+   "id": "q170",
+   "at": "2026-08-09",
+   "kind": "failure",
+   "question": "How patient are we with slow subscriptions?",
+   "answers": [
+    "e242"
+   ]
+  },
+  {
+   "id": "q171",
+   "at": "2026-06-10",
+   "kind": "decision",
+   "question": "Which queue does the billing service publish to?",
+   "answers": [
+    "e243"
+   ]
+  },
+  {
+   "id": "q172",
+   "at": "2026-07-11",
+   "kind": "decision",
+   "question": "What must we do about billing when deploying?",
+   "answers": [
+    "e244",
+    "e245"
+   ]
+  },
+  {
+   "id": "q173",
+   "at": "2026-08-12",
+   "kind": "decision",
+   "question": "What must we do about billing when releasing?",
+   "answers": [
+    "e246",
+    "e247"
+   ]
+  },
+  {
+   "id": "q174",
+   "at": "2026-06-13",
+   "kind": "decision",
+   "question": "What must we do about billing when on call?",
+   "answers": [
+    "e248",
+    "e249"
+   ]
+  },
+  {
+   "id": "q175",
+   "at": "2026-07-14",
+   "kind": "correction",
+   "question": "How do we store billing amounts?",
+   "answers": [
+    "e251"
+   ]
+  },
+  {
+   "id": "q176",
+   "at": "2026-08-15",
+   "kind": "correction",
+   "question": "How do we store billing identifiers?",
+   "answers": [
+    "e253"
+   ]
+  },
+  {
+   "id": "q177",
+   "at": "2026-06-16",
+   "kind": "correction",
+   "question": "How do we store billing log level?",
+   "answers": [
+    "e255"
+   ]
+  },
+  {
+   "id": "q178",
+   "at": "2026-07-17",
+   "kind": "failure",
+   "question": "Which API version did the billing client pin at commit c811?",
+   "asOf": "2026-03-09",
+   "answers": [
+    "e256"
+   ]
+  },
+  {
+   "id": "q179",
+   "at": "2026-08-18",
+   "kind": "failure",
+   "question": "Which Node version did the billing client pin at commit c812?",
+   "asOf": "2026-03-09",
+   "answers": [
+    "e258"
+   ]
+  },
+  {
+   "id": "q180",
+   "at": "2026-06-19",
+   "kind": "failure",
+   "question": "Which retry backoff did the billing client pin at commit c813?",
+   "asOf": "2026-03-09",
+   "answers": [
+    "e260"
+   ]
+  },
+  {
+   "id": "q181",
+   "at": "2026-07-20",
+   "kind": "correction",
+   "question": "What batch size does the voice worker use?",
+   "answers": []
+  },
+  {
+   "id": "q182",
+   "at": "2026-08-21",
+   "kind": "decision",
+   "question": "Who approves voice forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q183",
+   "at": "2026-06-22",
+   "kind": "failure",
+   "question": "Is the voice gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q184",
+   "at": "2026-07-23",
+   "kind": "failure",
+   "question": "Editing src/billing/charge.ts: anything to watch for?",
+   "path": "src/billing/charge.ts",
+   "answers": [
+    "e262"
+   ]
+  },
+  {
+   "id": "q185",
+   "at": "2026-08-24",
+   "kind": "failure",
+   "question": "Editing src/billing/sync.ts: anything to watch for?",
+   "path": "src/billing/sync.ts",
+   "answers": [
+    "e263"
+   ]
+  },
+  {
+   "id": "q186",
+   "at": "2026-06-25",
+   "kind": "failure",
+   "question": "Editing src/billing/flush.ts: anything to watch for?",
+   "path": "src/billing/flush.ts",
+   "answers": [
+    "e264"
+   ]
+  },
+  {
+   "id": "q187",
+   "at": "2026-07-26",
+   "kind": "correction",
+   "question": "Where does the billing rounding rule live?",
+   "answers": [
+    "e265"
+   ]
+  },
+  {
+   "id": "q188",
+   "at": "2026-08-27",
+   "kind": "correction",
+   "question": "Where does the billing currency table live?",
+   "answers": [
+    "e267"
+   ]
+  },
+  {
+   "id": "q189",
+   "at": "2026-06-01",
+   "kind": "correction",
+   "question": "Where does the billing tax lookup live?",
+   "answers": [
+    "e269"
+   ]
+  },
+  {
+   "id": "q190",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "What batch size does the reports worker use?",
+   "answers": [
+    "e271"
+   ]
+  },
+  {
+   "id": "q191",
+   "at": "2026-08-03",
+   "kind": "failure",
+   "question": "How long before reports requests time out?",
+   "answers": [
+    "e272"
+   ]
+  },
+  {
+   "id": "q192",
+   "at": "2026-06-04",
+   "kind": "decision",
+   "question": "Which queue does the reports service publish to?",
+   "answers": [
+    "e273"
+   ]
+  },
+  {
+   "id": "q193",
+   "at": "2026-07-05",
+   "kind": "decision",
+   "question": "What must we do about reports when deploying?",
+   "answers": [
+    "e274",
+    "e275"
+   ]
+  },
+  {
+   "id": "q194",
+   "at": "2026-08-06",
+   "kind": "decision",
+   "question": "What must we do about reports when releasing?",
+   "answers": [
+    "e276",
+    "e277"
+   ]
+  },
+  {
+   "id": "q195",
+   "at": "2026-06-07",
+   "kind": "decision",
+   "question": "What must we do about reports when on call?",
+   "answers": [
+    "e278",
+    "e279"
+   ]
+  },
+  {
+   "id": "q196",
+   "at": "2026-07-08",
+   "kind": "correction",
+   "question": "How do we store reports amounts?",
+   "answers": [
+    "e281"
+   ]
+  },
+  {
+   "id": "q197",
+   "at": "2026-08-09",
+   "kind": "correction",
+   "question": "How do we store reports identifiers?",
+   "answers": [
+    "e283"
+   ]
+  },
+  {
+   "id": "q198",
+   "at": "2026-06-10",
+   "kind": "correction",
+   "question": "How do we store reports log level?",
+   "answers": [
+    "e285"
+   ]
+  },
+  {
+   "id": "q199",
+   "at": "2026-07-11",
+   "kind": "failure",
+   "question": "Which API version did the reports client pin at commit c911?",
+   "asOf": "2026-03-10",
+   "answers": [
+    "e286"
+   ]
+  },
+  {
+   "id": "q200",
+   "at": "2026-08-12",
+   "kind": "failure",
+   "question": "Which Node version did the reports client pin at commit c912?",
+   "asOf": "2026-03-10",
+   "answers": [
+    "e288"
+   ]
+  },
+  {
+   "id": "q201",
+   "at": "2026-06-13",
+   "kind": "failure",
+   "question": "Which retry backoff did the reports client pin at commit c913?",
+   "asOf": "2026-03-10",
+   "answers": [
+    "e290"
+   ]
+  },
+  {
+   "id": "q202",
+   "at": "2026-07-14",
+   "kind": "correction",
+   "question": "What batch size does the iot worker use?",
+   "answers": []
+  },
+  {
+   "id": "q203",
+   "at": "2026-08-15",
+   "kind": "decision",
+   "question": "Who approves iot forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q204",
+   "at": "2026-06-16",
+   "kind": "failure",
+   "question": "Is the iot gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q205",
+   "at": "2026-07-17",
+   "kind": "failure",
+   "question": "Editing src/reports/charge.ts: anything to watch for?",
+   "path": "src/reports/charge.ts",
+   "answers": [
+    "e292"
+   ]
+  },
+  {
+   "id": "q206",
+   "at": "2026-08-18",
+   "kind": "failure",
+   "question": "Editing src/reports/sync.ts: anything to watch for?",
+   "path": "src/reports/sync.ts",
+   "answers": [
+    "e293"
+   ]
+  },
+  {
+   "id": "q207",
+   "at": "2026-06-19",
+   "kind": "failure",
+   "question": "Editing src/reports/flush.ts: anything to watch for?",
+   "path": "src/reports/flush.ts",
+   "answers": [
+    "e294"
+   ]
+  },
+  {
+   "id": "q208",
+   "at": "2026-07-20",
+   "kind": "correction",
+   "question": "Where does the reports rounding rule live?",
+   "answers": [
+    "e295"
+   ]
+  },
+  {
+   "id": "q209",
+   "at": "2026-08-21",
+   "kind": "correction",
+   "question": "Where does the reports currency table live?",
+   "answers": [
+    "e297"
+   ]
+  },
+  {
+   "id": "q210",
+   "at": "2026-06-22",
+   "kind": "correction",
+   "question": "Where does the reports tax lookup live?",
+   "answers": [
+    "e299"
+   ]
+  },
+  {
+   "id": "q211",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "What batch size does the uploads worker use?",
+   "answers": [
+    "e301"
+   ]
+  },
+  {
+   "id": "q212",
+   "at": "2026-08-24",
+   "kind": "failure",
+   "question": "How patient are we with slow attachments?",
+   "answers": [
+    "e302"
+   ]
+  },
+  {
+   "id": "q213",
+   "at": "2026-06-25",
+   "kind": "decision",
+   "question": "Which queue does the uploads service publish to?",
+   "answers": [
+    "e303"
+   ]
+  },
+  {
+   "id": "q214",
+   "at": "2026-07-26",
+   "kind": "decision",
+   "question": "What must we do about uploads when deploying?",
+   "answers": [
+    "e304",
+    "e305"
+   ]
+  },
+  {
+   "id": "q215",
+   "at": "2026-08-27",
+   "kind": "decision",
+   "question": "What must we do about uploads when releasing?",
+   "answers": [
+    "e306",
+    "e307"
+   ]
+  },
+  {
+   "id": "q216",
+   "at": "2026-06-01",
+   "kind": "decision",
+   "question": "What must we do about uploads when on call?",
+   "answers": [
+    "e308",
+    "e309"
+   ]
+  },
+  {
+   "id": "q217",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "How do we store uploads amounts?",
+   "answers": [
+    "e311"
+   ]
+  },
+  {
+   "id": "q218",
+   "at": "2026-08-03",
+   "kind": "correction",
+   "question": "How do we store uploads identifiers?",
+   "answers": [
+    "e313"
+   ]
+  },
+  {
+   "id": "q219",
+   "at": "2026-06-04",
+   "kind": "correction",
+   "question": "How do we store uploads log level?",
+   "answers": [
+    "e315"
+   ]
+  },
+  {
+   "id": "q220",
+   "at": "2026-07-05",
+   "kind": "failure",
+   "question": "Which API version did the uploads client pin at commit c1011?",
+   "asOf": "2026-03-11",
+   "answers": [
+    "e316"
+   ]
+  },
+  {
+   "id": "q221",
+   "at": "2026-08-06",
+   "kind": "failure",
+   "question": "Which Node version did the uploads client pin at commit c1012?",
+   "asOf": "2026-03-11",
+   "answers": [
+    "e318"
+   ]
+  },
+  {
+   "id": "q222",
+   "at": "2026-06-07",
+   "kind": "failure",
+   "question": "Which retry backoff did the uploads client pin at commit c1013?",
+   "asOf": "2026-03-11",
+   "answers": [
+    "e320"
+   ]
+  },
+  {
+   "id": "q223",
+   "at": "2026-07-08",
+   "kind": "correction",
+   "question": "What batch size does the ads worker use?",
+   "answers": []
+  },
+  {
+   "id": "q224",
+   "at": "2026-08-09",
+   "kind": "decision",
+   "question": "Who approves ads forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q225",
+   "at": "2026-06-10",
+   "kind": "failure",
+   "question": "Is the ads gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q226",
+   "at": "2026-07-11",
+   "kind": "failure",
+   "question": "Editing src/uploads/charge.ts: anything to watch for?",
+   "path": "src/uploads/charge.ts",
+   "answers": [
+    "e322"
+   ]
+  },
+  {
+   "id": "q227",
+   "at": "2026-08-12",
+   "kind": "failure",
+   "question": "Editing src/uploads/sync.ts: anything to watch for?",
+   "path": "src/uploads/sync.ts",
+   "answers": [
+    "e323"
+   ]
+  },
+  {
+   "id": "q228",
+   "at": "2026-06-13",
+   "kind": "failure",
+   "question": "Editing src/uploads/flush.ts: anything to watch for?",
+   "path": "src/uploads/flush.ts",
+   "answers": [
+    "e324"
+   ]
+  },
+  {
+   "id": "q229",
+   "at": "2026-07-14",
+   "kind": "correction",
+   "question": "Where does the uploads rounding rule live?",
+   "answers": [
+    "e325"
+   ]
+  },
+  {
+   "id": "q230",
+   "at": "2026-08-15",
+   "kind": "correction",
+   "question": "Where does the uploads currency table live?",
+   "answers": [
+    "e327"
+   ]
+  },
+  {
+   "id": "q231",
+   "at": "2026-06-16",
+   "kind": "correction",
+   "question": "Where does the uploads tax lookup live?",
+   "answers": [
+    "e329"
+   ]
+  },
+  {
+   "id": "q232",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "What batch size does the sessions worker use?",
+   "answers": [
+    "e331"
+   ]
+  },
+  {
+   "id": "q233",
+   "at": "2026-08-18",
+   "kind": "failure",
+   "question": "How long before sessions requests time out?",
+   "answers": [
+    "e332"
+   ]
+  },
+  {
+   "id": "q234",
+   "at": "2026-06-19",
+   "kind": "decision",
+   "question": "Which queue does the sessions service publish to?",
+   "answers": [
+    "e333"
+   ]
+  },
+  {
+   "id": "q235",
+   "at": "2026-07-20",
+   "kind": "decision",
+   "question": "What must we do about sessions when deploying?",
+   "answers": [
+    "e334",
+    "e335"
+   ]
+  },
+  {
+   "id": "q236",
+   "at": "2026-08-21",
+   "kind": "decision",
+   "question": "What must we do about sessions when releasing?",
+   "answers": [
+    "e336",
+    "e337"
+   ]
+  },
+  {
+   "id": "q237",
+   "at": "2026-06-22",
+   "kind": "decision",
+   "question": "What must we do about sessions when on call?",
+   "answers": [
+    "e338",
+    "e339"
+   ]
+  },
+  {
+   "id": "q238",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "How do we store sessions amounts?",
+   "answers": [
+    "e341"
+   ]
+  },
+  {
+   "id": "q239",
+   "at": "2026-08-24",
+   "kind": "correction",
+   "question": "How do we store sessions identifiers?",
+   "answers": [
+    "e343"
+   ]
+  },
+  {
+   "id": "q240",
+   "at": "2026-06-25",
+   "kind": "correction",
+   "question": "How do we store sessions log level?",
+   "answers": [
+    "e345"
+   ]
+  },
+  {
+   "id": "q241",
+   "at": "2026-07-26",
+   "kind": "failure",
+   "question": "Which API version did the sessions client pin at commit c1111?",
+   "asOf": "2026-03-12",
+   "answers": [
+    "e346"
+   ]
+  },
+  {
+   "id": "q242",
+   "at": "2026-08-27",
+   "kind": "failure",
+   "question": "Which Node version did the sessions client pin at commit c1112?",
+   "asOf": "2026-03-12",
+   "answers": [
+    "e348"
+   ]
+  },
+  {
+   "id": "q243",
+   "at": "2026-06-01",
+   "kind": "failure",
+   "question": "Which retry backoff did the sessions client pin at commit c1113?",
+   "asOf": "2026-03-12",
+   "answers": [
+    "e350"
+   ]
+  },
+  {
+   "id": "q244",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "What batch size does the surveys worker use?",
+   "answers": []
+  },
+  {
+   "id": "q245",
+   "at": "2026-08-03",
+   "kind": "decision",
+   "question": "Who approves surveys forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q246",
+   "at": "2026-06-04",
+   "kind": "failure",
+   "question": "Is the surveys gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q247",
+   "at": "2026-07-05",
+   "kind": "failure",
+   "question": "Editing src/sessions/charge.ts: anything to watch for?",
+   "path": "src/sessions/charge.ts",
+   "answers": [
+    "e352"
+   ]
+  },
+  {
+   "id": "q248",
+   "at": "2026-08-06",
+   "kind": "failure",
+   "question": "Editing src/sessions/sync.ts: anything to watch for?",
+   "path": "src/sessions/sync.ts",
+   "answers": [
+    "e353"
+   ]
+  },
+  {
+   "id": "q249",
+   "at": "2026-06-07",
+   "kind": "failure",
+   "question": "Editing src/sessions/flush.ts: anything to watch for?",
+   "path": "src/sessions/flush.ts",
+   "answers": [
+    "e354"
+   ]
+  },
+  {
+   "id": "q250",
+   "at": "2026-07-08",
+   "kind": "correction",
+   "question": "Where does the sessions rounding rule live?",
+   "answers": [
+    "e355"
+   ]
+  },
+  {
+   "id": "q251",
+   "at": "2026-08-09",
+   "kind": "correction",
+   "question": "Where does the sessions currency table live?",
+   "answers": [
+    "e357"
+   ]
+  },
+  {
+   "id": "q252",
+   "at": "2026-06-10",
+   "kind": "correction",
+   "question": "Where does the sessions tax lookup live?",
+   "answers": [
+    "e359"
+   ]
+  },
+  {
+   "id": "q253",
+   "at": "2026-07-11",
+   "kind": "correction",
+   "question": "What batch size does the audit worker use?",
+   "answers": [
+    "e361"
+   ]
+  },
+  {
+   "id": "q254",
+   "at": "2026-08-12",
+   "kind": "failure",
+   "question": "How patient are we with slow trail?",
+   "answers": [
+    "e362"
+   ]
+  },
+  {
+   "id": "q255",
+   "at": "2026-06-13",
+   "kind": "decision",
+   "question": "Which queue does the audit service publish to?",
+   "answers": [
+    "e363"
+   ]
+  },
+  {
+   "id": "q256",
+   "at": "2026-07-14",
+   "kind": "decision",
+   "question": "What must we do about audit when deploying?",
+   "answers": [
+    "e364",
+    "e365"
+   ]
+  },
+  {
+   "id": "q257",
+   "at": "2026-08-15",
+   "kind": "decision",
+   "question": "What must we do about audit when releasing?",
+   "answers": [
+    "e366",
+    "e367"
+   ]
+  },
+  {
+   "id": "q258",
+   "at": "2026-06-16",
+   "kind": "decision",
+   "question": "What must we do about audit when on call?",
+   "answers": [
+    "e368",
+    "e369"
+   ]
+  },
+  {
+   "id": "q259",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "How do we store audit amounts?",
+   "answers": [
+    "e371"
+   ]
+  },
+  {
+   "id": "q260",
+   "at": "2026-08-18",
+   "kind": "correction",
+   "question": "How do we store audit identifiers?",
+   "answers": [
+    "e373"
+   ]
+  },
+  {
+   "id": "q261",
+   "at": "2026-06-19",
+   "kind": "correction",
+   "question": "How do we store audit log level?",
+   "answers": [
+    "e375"
+   ]
+  },
+  {
+   "id": "q262",
+   "at": "2026-07-20",
+   "kind": "failure",
+   "question": "Which API version did the audit client pin at commit c1211?",
+   "asOf": "2026-03-13",
+   "answers": [
+    "e376"
+   ]
+  },
+  {
+   "id": "q263",
+   "at": "2026-08-21",
+   "kind": "failure",
+   "question": "Which Node version did the audit client pin at commit c1212?",
+   "asOf": "2026-03-13",
+   "answers": [
+    "e378"
+   ]
+  },
+  {
+   "id": "q264",
+   "at": "2026-06-22",
+   "kind": "failure",
+   "question": "Which retry backoff did the audit client pin at commit c1213?",
+   "asOf": "2026-03-13",
+   "answers": [
+    "e380"
+   ]
+  },
+  {
+   "id": "q265",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "What batch size does the trivia worker use?",
+   "answers": []
+  },
+  {
+   "id": "q266",
+   "at": "2026-08-24",
+   "kind": "decision",
+   "question": "Who approves trivia forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q267",
+   "at": "2026-06-25",
+   "kind": "failure",
+   "question": "Is the trivia gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q268",
+   "at": "2026-07-26",
+   "kind": "failure",
+   "question": "Editing src/audit/charge.ts: anything to watch for?",
+   "path": "src/audit/charge.ts",
+   "answers": [
+    "e382"
+   ]
+  },
+  {
+   "id": "q269",
+   "at": "2026-08-27",
+   "kind": "failure",
+   "question": "Editing src/audit/sync.ts: anything to watch for?",
+   "path": "src/audit/sync.ts",
+   "answers": [
+    "e383"
+   ]
+  },
+  {
+   "id": "q270",
+   "at": "2026-06-01",
+   "kind": "failure",
+   "question": "Editing src/audit/flush.ts: anything to watch for?",
+   "path": "src/audit/flush.ts",
+   "answers": [
+    "e384"
+   ]
+  },
+  {
+   "id": "q271",
+   "at": "2026-07-02",
+   "kind": "correction",
+   "question": "Where does the audit rounding rule live?",
+   "answers": [
+    "e385"
+   ]
+  },
+  {
+   "id": "q272",
+   "at": "2026-08-03",
+   "kind": "correction",
+   "question": "Where does the audit currency table live?",
+   "answers": [
+    "e387"
+   ]
+  },
+  {
+   "id": "q273",
+   "at": "2026-06-04",
+   "kind": "correction",
+   "question": "Where does the audit tax lookup live?",
+   "answers": [
+    "e389"
+   ]
+  },
+  {
+   "id": "q274",
+   "at": "2026-07-05",
+   "kind": "correction",
+   "question": "What batch size does the pricing worker use?",
+   "answers": [
+    "e391"
+   ]
+  },
+  {
+   "id": "q275",
+   "at": "2026-08-06",
+   "kind": "failure",
+   "question": "How long before pricing requests time out?",
+   "answers": [
+    "e392"
+   ]
+  },
+  {
+   "id": "q276",
+   "at": "2026-06-07",
+   "kind": "decision",
+   "question": "Which queue does the pricing service publish to?",
+   "answers": [
+    "e393"
+   ]
+  },
+  {
+   "id": "q277",
+   "at": "2026-07-08",
+   "kind": "decision",
+   "question": "What must we do about pricing when deploying?",
+   "answers": [
+    "e394",
+    "e395"
+   ]
+  },
+  {
+   "id": "q278",
+   "at": "2026-08-09",
+   "kind": "decision",
+   "question": "What must we do about pricing when releasing?",
+   "answers": [
+    "e396",
+    "e397"
+   ]
+  },
+  {
+   "id": "q279",
+   "at": "2026-06-10",
+   "kind": "decision",
+   "question": "What must we do about pricing when on call?",
+   "answers": [
+    "e398",
+    "e399"
+   ]
+  },
+  {
+   "id": "q280",
+   "at": "2026-07-11",
+   "kind": "correction",
+   "question": "How do we store pricing amounts?",
+   "answers": [
+    "e401"
+   ]
+  },
+  {
+   "id": "q281",
+   "at": "2026-08-12",
+   "kind": "correction",
+   "question": "How do we store pricing identifiers?",
+   "answers": [
+    "e403"
+   ]
+  },
+  {
+   "id": "q282",
+   "at": "2026-06-13",
+   "kind": "correction",
+   "question": "How do we store pricing log level?",
+   "answers": [
+    "e405"
+   ]
+  },
+  {
+   "id": "q283",
+   "at": "2026-07-14",
+   "kind": "failure",
+   "question": "Which API version did the pricing client pin at commit c1311?",
+   "asOf": "2026-03-14",
+   "answers": [
+    "e406"
+   ]
+  },
+  {
+   "id": "q284",
+   "at": "2026-08-15",
+   "kind": "failure",
+   "question": "Which Node version did the pricing client pin at commit c1312?",
+   "asOf": "2026-03-14",
+   "answers": [
+    "e408"
+   ]
+  },
+  {
+   "id": "q285",
+   "at": "2026-06-16",
+   "kind": "failure",
+   "question": "Which retry backoff did the pricing client pin at commit c1313?",
+   "asOf": "2026-03-14",
+   "answers": [
+    "e410"
+   ]
+  },
+  {
+   "id": "q286",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "What batch size does the calendar worker use?",
+   "answers": []
+  },
+  {
+   "id": "q287",
+   "at": "2026-08-18",
+   "kind": "decision",
+   "question": "Who approves calendar forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q288",
+   "at": "2026-06-19",
+   "kind": "failure",
+   "question": "Is the calendar gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q289",
+   "at": "2026-07-20",
+   "kind": "failure",
+   "question": "Editing src/pricing/charge.ts: anything to watch for?",
+   "path": "src/pricing/charge.ts",
+   "answers": [
+    "e412"
+   ]
+  },
+  {
+   "id": "q290",
+   "at": "2026-08-21",
+   "kind": "failure",
+   "question": "Editing src/pricing/sync.ts: anything to watch for?",
+   "path": "src/pricing/sync.ts",
+   "answers": [
+    "e413"
+   ]
+  },
+  {
+   "id": "q291",
+   "at": "2026-06-22",
+   "kind": "failure",
+   "question": "Editing src/pricing/flush.ts: anything to watch for?",
+   "path": "src/pricing/flush.ts",
+   "answers": [
+    "e414"
+   ]
+  },
+  {
+   "id": "q292",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "Where does the pricing rounding rule live?",
+   "answers": [
+    "e415"
+   ]
+  },
+  {
+   "id": "q293",
+   "at": "2026-08-24",
+   "kind": "correction",
+   "question": "Where does the pricing currency table live?",
+   "answers": [
+    "e417"
+   ]
+  },
+  {
+   "id": "q294",
+   "at": "2026-06-25",
+   "kind": "correction",
+   "question": "Where does the pricing tax lookup live?",
+   "answers": [
+    "e419"
+   ]
+  },
+  {
+   "id": "q295",
+   "at": "2026-07-26",
+   "kind": "correction",
+   "question": "What batch size does the refunds worker use?",
+   "answers": [
+    "e421"
+   ]
+  },
+  {
+   "id": "q296",
+   "at": "2026-08-27",
+   "kind": "failure",
+   "question": "How patient are we with slow chargebacks?",
+   "answers": [
+    "e422"
+   ]
+  },
+  {
+   "id": "q297",
+   "at": "2026-06-01",
+   "kind": "decision",
+   "question": "Which queue does the refunds service publish to?",
+   "answers": [
+    "e423"
+   ]
+  },
+  {
+   "id": "q298",
+   "at": "2026-07-02",
+   "kind": "decision",
+   "question": "What must we do about refunds when deploying?",
+   "answers": [
+    "e424",
+    "e425"
+   ]
+  },
+  {
+   "id": "q299",
+   "at": "2026-08-03",
+   "kind": "decision",
+   "question": "What must we do about refunds when releasing?",
+   "answers": [
+    "e426",
+    "e427"
+   ]
+  },
+  {
+   "id": "q300",
+   "at": "2026-06-04",
+   "kind": "decision",
+   "question": "What must we do about refunds when on call?",
+   "answers": [
+    "e428",
+    "e429"
+   ]
+  },
+  {
+   "id": "q301",
+   "at": "2026-07-05",
+   "kind": "correction",
+   "question": "How do we store refunds amounts?",
+   "answers": [
+    "e431"
+   ]
+  },
+  {
+   "id": "q302",
+   "at": "2026-08-06",
+   "kind": "correction",
+   "question": "How do we store refunds identifiers?",
+   "answers": [
+    "e433"
+   ]
+  },
+  {
+   "id": "q303",
+   "at": "2026-06-07",
+   "kind": "correction",
+   "question": "How do we store refunds log level?",
+   "answers": [
+    "e435"
+   ]
+  },
+  {
+   "id": "q304",
+   "at": "2026-07-08",
+   "kind": "failure",
+   "question": "Which API version did the refunds client pin at commit c1411?",
+   "asOf": "2026-03-15",
+   "answers": [
+    "e436"
+   ]
+  },
+  {
+   "id": "q305",
+   "at": "2026-08-09",
+   "kind": "failure",
+   "question": "Which Node version did the refunds client pin at commit c1412?",
+   "asOf": "2026-03-15",
+   "answers": [
+    "e438"
+   ]
+  },
+  {
+   "id": "q306",
+   "at": "2026-06-10",
+   "kind": "failure",
+   "question": "Which retry backoff did the refunds client pin at commit c1413?",
+   "asOf": "2026-03-15",
+   "answers": [
+    "e440"
+   ]
+  },
+  {
+   "id": "q307",
+   "at": "2026-07-11",
+   "kind": "correction",
+   "question": "What batch size does the weather worker use?",
+   "answers": []
+  },
+  {
+   "id": "q308",
+   "at": "2026-08-12",
+   "kind": "decision",
+   "question": "Who approves weather forklift rentals?",
+   "answers": []
+  },
+  {
+   "id": "q309",
+   "at": "2026-06-13",
+   "kind": "failure",
+   "question": "Is the weather gizmo firmware signed?",
+   "answers": []
+  },
+  {
+   "id": "q310",
+   "at": "2026-07-14",
+   "kind": "failure",
+   "question": "Editing src/refunds/charge.ts: anything to watch for?",
+   "path": "src/refunds/charge.ts",
+   "answers": [
+    "e442"
+   ]
+  },
+  {
+   "id": "q311",
+   "at": "2026-08-15",
+   "kind": "failure",
+   "question": "Editing src/refunds/sync.ts: anything to watch for?",
+   "path": "src/refunds/sync.ts",
+   "answers": [
+    "e443"
+   ]
+  },
+  {
+   "id": "q312",
+   "at": "2026-06-16",
+   "kind": "failure",
+   "question": "Editing src/refunds/flush.ts: anything to watch for?",
+   "path": "src/refunds/flush.ts",
+   "answers": [
+    "e444"
+   ]
+  },
+  {
+   "id": "q313",
+   "at": "2026-07-17",
+   "kind": "correction",
+   "question": "Where does the refunds rounding rule live?",
+   "answers": [
+    "e445"
+   ]
+  },
+  {
+   "id": "q314",
+   "at": "2026-08-18",
+   "kind": "correction",
+   "question": "Where does the refunds currency table live?",
+   "answers": [
+    "e447"
+   ]
+  },
+  {
+   "id": "q315",
+   "at": "2026-06-19",
+   "kind": "correction",
+   "question": "Where does the refunds tax lookup live?",
+   "answers": [
+    "e449"
+   ]
+  },
+  {
+   "id": "q316",
+   "at": "2026-07-20",
+   "kind": "correction",
+   "question": "How long does the payments archive keep records?",
+   "answers": [
+    "e451"
+   ]
+  },
+  {
+   "id": "q317",
+   "at": "2026-08-21",
+   "kind": "correction",
+   "question": "How long does the invoices archive keep records?",
+   "answers": [
+    "e452"
+   ]
+  },
+  {
+   "id": "q318",
+   "at": "2026-06-22",
+   "kind": "correction",
+   "question": "How long does the ledger archive keep records?",
+   "answers": [
+    "e453"
+   ]
+  },
+  {
+   "id": "q319",
+   "at": "2026-07-23",
+   "kind": "correction",
+   "question": "How long does the webhooks archive keep records?",
+   "answers": [
+    "e454"
+   ]
+  },
+  {
+   "id": "q320",
+   "at": "2026-08-24",
+   "kind": "correction",
+   "question": "How long does the auth archive keep records?",
+   "answers": [
+    "e455"
+   ]
+  }
+ ]
+}

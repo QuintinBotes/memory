@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory eval head-to-head --since <date> --history <file>` (#25): memory scored against the alternatives on questions built from the tenant's own corrections, decisions and failures after the cut-off, in seven categories (single fact, multi-source, knowledge update, temporal, abstention, code-anchored hazard, stale citation), every arm ingesting only the evidence before it. Arms: this plugin, memory off, Claude Code auto memory (the first 200 lines of a `MEMORY.md`), the whole history in context, and Mem0, Graphiti, Basic Memory and a community memory plugin run from your local install by the command you name in `--arms`, with telemetry off or not at all; an arm that is missing or crashes scores zero and says so, and an arm that sends evidence off the machine is skipped for a client tenant. The FR-006 bars are printed first; then recall at 1 and 5, abstention, stale recall, tokens and p50/p95 latency per arm and category, graded without a model; then the verdict, the matcher's precision from 30 hand-checked grades (`--checked`) and the vocabulary-miss share, kept in `eval/head-to-head/<tenant>/last.json` in the data directory with the replay set and every per-question result. A synthetic 315-question `acme` fixture and the script that writes it ship in `test/fixtures/head-to-head/`. No schema change.
+
 ### Fixed
 
 - `memory purge --repo` deleted every episode in each store it opened (#82). Each failing-command episode now records its repository (schema 17; older episodes stay unknown). `--repo` deletes only that repository's episodes and keeps unknown-origin ones; `--tenant` still deletes them all. The preview lists episode counts per repository and, for kept unknown-origin episodes, names the `--tenant` command that removes them.

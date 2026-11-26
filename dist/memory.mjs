@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { spawn } from "node:child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
-import { basename as basename4, isAbsolute as isAbsolute9, join as join16, normalize as normalize4 } from "node:path";
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
+import { basename as basename4, isAbsolute as isAbsolute9, join as join18, normalize as normalize4 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -1558,10 +1558,10 @@ async function refreshAnchors(db, tenant, repository, cwd, provider, lock, { lim
   };
   async function resolve7(a, c, undone) {
     if (c.sinceFound && (c.snapshot === a.snapshot || !c.files.includes(a.path))) return { kind: "keep" };
-    const { symbol, snapshot: snapshot2, commit: at2 } = await resolveKey(provider, a.symbol);
+    const { symbol, snapshot: snapshot2, commit: at3 } = await resolveKey(provider, a.symbol);
     if (symbol !== null) {
       if (a.signature !== void 0 && symbol.signature !== void 0 && symbol.signature !== a.signature) return { kind: "stale", reason: "signature changed", candidates: [] };
-      if (!atHead(commit, at2)) return { kind: "keep" };
+      if (!atHead(commit, at3)) return { kind: "keep" };
       const text4 = read2.text(parts(symbol.key).path);
       if (text4 === void 0) return { kind: "keep" };
       const held2 = checkAnchor({ path: parts(symbol.key).path, start: symbol.start, end: symbol.end, ...a.citedHash === void 0 ? {} : { citedHash: a.citedHash } }, text4, 0);
@@ -1709,12 +1709,12 @@ function undoMove(db, moveId) {
   try {
     const item = db.prepare("SELECT anchors_json FROM items WHERE id = ? AND status IN ('active', 'stale')").get(e.subject_id);
     const anchors = item === void 0 ? [] : JSON.parse(item.anchors_json);
-    const at2 = anchors.findIndex((a) => a.symbol === m.to.symbol);
-    if (at2 < 0) {
+    const at3 = anchors.findIndex((a) => a.symbol === m.to.symbol);
+    if (at3 < 0) {
       db.exec("ROLLBACK");
       return false;
     }
-    anchors[at2] = m.from;
+    anchors[at3] = m.from;
     db.prepare("UPDATE items SET anchors_json = ? WHERE id = ?").run(JSON.stringify(anchors), e.subject_id);
     recordAudit(db, "undone", { type: "audit", id: moveId }, { action: "anchor_moved", item: e.subject_id });
     db.exec("COMMIT");
@@ -1727,18 +1727,18 @@ function undoMove(db, moveId) {
 async function adoptCandidate(db, id, key2, cwd, provider, lock) {
   const row4 = db.prepare("SELECT status, status_reason, anchors_json FROM items WHERE id = ? AND status IN ('active', 'stale')").get(id);
   const anchors = row4 === void 0 ? [] : JSON.parse(row4.anchors_json);
-  const at2 = anchors.findIndex((a) => a.candidates?.includes(key2) === true);
-  if (row4 === void 0 || at2 < 0) throw new ProviderError(`${id} has no re-anchor proposal naming ${key2}`);
+  const at3 = anchors.findIndex((a) => a.candidates?.includes(key2) === true);
+  if (row4 === void 0 || at3 < 0) throw new ProviderError(`${id} has no re-anchor proposal naming ${key2}`);
   const read2 = headReader(cwd);
   const head = read2.head();
   const { symbol, snapshot: snapshot2, commit } = await resolveKey(provider, key2);
   if (head === null || !atHead(head, commit)) throw new ProviderError("the provider's snapshot is not at HEAD, so its lines cannot be anchored; try again after it indexes HEAD");
-  const to = symbol === null ? null : symbolAnchor(symbol, snapshot2, read2.text(parts(key2).path), anchors[at2].commit);
+  const to = symbol === null ? null : symbolAnchor(symbol, snapshot2, read2.text(parts(key2).path), anchors[at3].commit);
   if (to === null) throw new ProviderError(`the provider no longer finds ${key2}`);
-  const from2 = anchors[at2];
+  const from2 = anchors[at3];
   const { candidates: _drop, ...old } = from2;
-  const next = anchors.map((a, i) => i === at2 ? to : a);
-  const blocked = anchors.some((a, i) => i !== at2 && ((a.candidates?.length ?? 0) > 0 || !isManaged(a) && !checkAnchor(a, read2.text(a.path) ?? null).ok));
+  const next = anchors.map((a, i) => i === at3 ? to : a);
+  const blocked = anchors.some((a, i) => i !== at3 && ((a.candidates?.length ?? 0) > 0 || !isManaged(a) && !checkAnchor(a, read2.text(a.path) ?? null).ok));
   const done = lock(() => {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -2236,8 +2236,8 @@ function applyRefusal(ins, e, text4) {
   if (!ins.allowed.has(resolve3(e.file))) return `${displayPath(ins, e.file)} is not an instruction file of this repository or config; nothing was written`;
   if (e.status !== "open") return `${e.id} is already ${e.status}`;
   if (e.kind === "promotion") return text4 !== null && text4.split("\n").some((l) => l.replace(/\r$/, "") === e.new_line) ? `${displayPath(ins, e.file)} already holds that line` : null;
-  const at2 = text4?.split("\n")[e.line - 1]?.replace(/\r$/, "");
-  return at2 === e.old_line ? null : `${displayPath(ins, e.file)} changed since this edit was proposed (line ${e.line} is not what it was); nothing was written`;
+  const at3 = text4?.split("\n")[e.line - 1]?.replace(/\r$/, "");
+  return at3 === e.old_line ? null : `${displayPath(ins, e.file)} changed since this edit was proposed (line ${e.line} is not what it was); nothing was written`;
 }
 function writableTarget(ins, file) {
   const name = displayPath(ins, file);
@@ -3006,8 +3006,8 @@ function fake2(model) {
     embed: async (texts) => texts.map((text4) => {
       const v = new Float32Array(dims);
       for (const word of searchTerms(text4, 1e3)) v[fnv1a(word.slice(0, 3)) % dims] += 1;
-      const norm = Math.hypot(...v) || 1;
-      return v.map((x) => x / norm);
+      const norm2 = Math.hypot(...v) || 1;
+      return v.map((x) => x / norm2);
     })
   };
 }
@@ -3839,8 +3839,8 @@ function rejections(text4) {
   const statements = [];
   const unreadable = jsonLines(text4, (e, line) => {
     if (typeof e["text"] !== "string" || e["text"].trim() === "") return false;
-    const at2 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? e["at"] : void 0;
-    statements.push({ line, text: e["text"].trim(), ...at2 !== void 0 ? { at: new Date(at2).toISOString() } : {} });
+    const at3 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? e["at"] : void 0;
+    statements.push({ line, text: e["text"].trim(), ...at3 !== void 0 ? { at: new Date(at3).toISOString() } : {} });
     return true;
   });
   return parsed(statements, { unreadable });
@@ -3859,8 +3859,8 @@ function notes(text4) {
       skippedNotes++;
       return true;
     }
-    const at2 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? new Date(e["at"]).toISOString() : void 0;
-    statements.push({ line, text: body.trim(), type, ...symbol !== void 0 ? { symbol } : {}, ...at2 !== void 0 ? { at: at2 } : {} });
+    const at3 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? new Date(e["at"]).toISOString() : void 0;
+    statements.push({ line, text: body.trim(), type, ...symbol !== void 0 ? { symbol } : {}, ...at3 !== void 0 ? { at: at3 } : {} });
     return true;
   });
   return parsed(statements, { unreadable, skippedNotes });
@@ -4220,7 +4220,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
         continue;
       }
       const parsed2 = read2(path, checkout, parsers[silo]);
-      for (const { line, text: text4, type, symbol, at: at2 } of parsed2?.statements ?? []) {
+      for (const { line, text: text4, type, symbol, at: at3 } of parsed2?.statements ?? []) {
         const source = `${path}:${line}`;
         if (refused(source, refusal(text4)) || symbol !== void 0 && refused(source, refusal(symbol))) continue;
         const anchors = symbol === void 0 ? [] : [{ path: symbolPath(symbol), symbol }];
@@ -4234,8 +4234,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
           anchors,
           source,
           trust: silo === "notes" ? "agent" : "owner",
-          ...silo === "notes" && at2 !== void 0 ? { evidenceAt: at2 } : {},
-          ...silo === "rejections" ? { status: "rejected", validTo: at2 ?? (/* @__PURE__ */ new Date()).toISOString(), statusReason: "rejected in the retro record" } : { status: "proposed" }
+          ...silo === "notes" && at3 !== void 0 ? { evidenceAt: at3 } : {},
+          ...silo === "rejections" ? { status: "rejected", validTo: at3 ?? (/* @__PURE__ */ new Date()).toISOString(), statusReason: "rejected in the retro record" } : { status: "proposed" }
         });
       }
     }
@@ -4430,9 +4430,9 @@ function exportMarkdown(stores2, dir, repository) {
   return all.length;
 }
 function foreignRepository(dir, config, tenant) {
-  let at2 = resolve5(dir);
-  while (!existsSync9(at2)) at2 = dirname10(at2);
-  const top = git(at2, "rev-parse", "--show-toplevel")?.trim();
+  let at3 = resolve5(dir);
+  while (!existsSync9(at3)) at3 = dirname10(at3);
+  const top = git(at3, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0) return null;
   const url = git(top, "config", "--get", "remote.origin.url");
   const parsed2 = url === null ? null : parseGitHubRemote(url);
@@ -4750,10 +4750,10 @@ function orbitRecall(data, context, cwd, ask) {
   const keyed = /* @__PURE__ */ new Set();
   const stale = /* @__PURE__ */ new Set();
   try {
-    const at2 = (id) => db.prepare("SELECT kind, key FROM item_keys WHERE item_id = ?").all(id);
+    const at3 = (id) => db.prepare("SELECT kind, key FROM item_keys WHERE item_id = ?").all(id);
     const cutoff3 = new Date(today - ORBIT_EXPIRY_DAYS * 864e5).toISOString();
     for (const item of visible2) {
-      if (at2(item.id).some((k) => (k.kind === "fingerprint" ? ask.fingerprints : ask.checks).includes(k.key))) keyed.add(item.id);
+      if (at3(item.id).some((k) => (k.kind === "fingerprint" ? ask.fingerprints : ask.checks).includes(k.key))) keyed.add(item.id);
       const last = db.prepare("SELECT max(captured_at) AS at FROM evidence WHERE item_id = ?").get(item.id);
       if (item.source.startsWith("orbit run ") && (last.at ?? "") < cutoff3) stale.add(item.id);
     }
@@ -4875,11 +4875,11 @@ function recordTranscript(data, input2) {
   const db = openStore(tenantFile(data, context.tenant), true, HOOK_BUSY_MS);
   try {
     const id = `t-${randomBytes5(5).toString("hex")}`;
-    const at2 = (/* @__PURE__ */ new Date()).toISOString();
+    const at3 = (/* @__PURE__ */ new Date()).toISOString();
     if (summary !== void 0) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, context.repository, scrub(summary).slice(0, MAX_SUMMARY), at2, at2);
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, context.repository, scrub(summary).slice(0, MAX_SUMMARY), at3, at3);
     } else if (db.prepare("SELECT 1 FROM transcripts WHERE session = ? AND kind = 'path' AND path = ? AND processed_at IS NULL").get(session, path) === void 0) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, context.repository, path, at2);
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, context.repository, path, at3);
     }
   } finally {
     db.close();
@@ -5088,9 +5088,9 @@ function claim(db, session, agent, candidates, pick) {
     const seen = new Set(rows.map((r) => r.item_id));
     const used = rows.reduce((sum, r) => sum + r.tokens, 0);
     const result = pick(candidates.filter((id) => !seen.has(id)), AGENT_SESSION_BUDGET - used);
-    const at2 = (/* @__PURE__ */ new Date()).toISOString();
+    const at3 = (/* @__PURE__ */ new Date()).toISOString();
     const insert = db.prepare("INSERT INTO ledger (session, agent, item_id, tokens, at) VALUES (?, ?, ?, ?, ?)");
-    for (const s of result.shown) insert.run(session, agent, s.id, s.tokens, at2);
+    for (const s of result.shown) insert.run(session, agent, s.id, s.tokens, at3);
     db.prepare("DELETE FROM ledger WHERE at < ?").run(new Date(Date.now() - KEEP_DAYS * 864e5).toISOString());
     return result;
   });
@@ -5173,8 +5173,8 @@ function failureRecall(data, input2, log) {
         }
         const items = itemsById(db, show).map((i) => db.prepare("SELECT source_ref FROM evidence WHERE item_id = ?").all(i.id).some((e) => VERIFIED.test(e.source_ref)) ? { ...i, type: `${i.type} (verified)` } : i);
         const slice = chooseSlice(items, FAILURE_BUDGET);
-        const at2 = (/* @__PURE__ */ new Date()).toISOString();
-        for (const i of slice.shown) db.prepare("INSERT INTO failure_ledger (session, agent, fingerprint, item_id, at) VALUES (?, ?, ?, ?, ?)").run(session, agent, fingerprint, i.id, at2);
+        const at3 = (/* @__PURE__ */ new Date()).toISOString();
+        for (const i of slice.shown) db.prepare("INSERT INTO failure_ledger (session, agent, fingerprint, item_id, at) VALUES (?, ?, ?, ?, ?)").run(session, agent, fingerprint, i.id, at3);
         db.prepare("DELETE FROM failure_ledger WHERE at < ?").run(new Date(Date.now() - KEEP_DAYS2 * 864e5).toISOString());
         return slice;
       });
@@ -5208,10 +5208,10 @@ function scanReverts(db, cwd) {
   if (me === "") return { counted: 0, pair: null };
   const found = [];
   for (const entry of log.split("").reverse()) {
-    const [sha = "", email = "", at2 = "", body = ""] = entry.trim().split("");
+    const [sha = "", email = "", at3 = "", body = ""] = entry.trim().split("");
     const reverted = /^(?:Revert|Reapply) ".*"\s*\n[^]*?\bThis reverts commit ([0-9a-f]{7,40})/.exec(body)?.[1];
     if (sha === "" || reverted === void 0 || email !== me) continue;
-    if (db.prepare("SELECT 1 FROM reverts WHERE revert_sha = ?").get(sha) === void 0) found.push({ sha, at: Number.isNaN(Date.parse(at2)) ? (/* @__PURE__ */ new Date()).toISOString() : new Date(at2).toISOString(), reverted });
+    if (db.prepare("SELECT 1 FROM reverts WHERE revert_sha = ?").get(sha) === void 0) found.push({ sha, at: Number.isNaN(Date.parse(at3)) ? (/* @__PURE__ */ new Date()).toISOString() : new Date(at3).toISOString(), reverted });
   }
   const known = (reverted) => db.prepare("SELECT 1 FROM commit_items WHERE commit_sha LIKE ? || '%' LIMIT 1").get(reverted) !== void 0;
   const recorded = (reverted) => db.prepare("SELECT revert_sha, reverted_sha, linked FROM reverts WHERE revert_sha LIKE ? || '%' AND cancelled_by IS NULL LIMIT 1").get(reverted);
@@ -5520,8 +5520,8 @@ function touched2(input2, cwd) {
   const args = input2["tool_input"] ?? {};
   const file = str4(args["file_path"]) ?? str4(args["notebook_path"]);
   if (file === void 0 || typeof tool !== "string") return null;
-  const at2 = locate(resolve6(cwd, file));
-  if (at2 === null) return null;
+  const at3 = locate(resolve6(cwd, file));
+  if (at3 === null) return null;
   let ranges = null;
   let replaced = [];
   if (tool === "Read") {
@@ -5538,7 +5538,7 @@ function touched2(input2, cwd) {
   } else if (tool !== "Write" && tool !== "NotebookEdit") {
     return null;
   }
-  return { root: at2.root, touch: { path: at2.path, ranges, replaced } };
+  return { root: at3.root, touch: { path: at3.path, ranges, replaced } };
 }
 var symbolName = (a) => a.symbol?.split("#")[1];
 function anchorHit(a, t, file) {
@@ -5553,9 +5553,9 @@ function anchorHit(a, t, file) {
   }
   return t.replaced.some((old) => {
     if (!moved && text4 !== null) {
-      const at2 = text4.indexOf(old);
-      if (at2 >= 0) {
-        const first2 = text4.slice(0, at2).split("\n").length;
+      const at3 = text4.indexOf(old);
+      if (at3 >= 0) {
+        const first2 = text4.slice(0, at3).split("\n").length;
         const last = first2 + old.split("\n").length - 1;
         return first2 <= (a.end ?? a.start) && last >= a.start;
       }
@@ -5662,7 +5662,7 @@ var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []
   bar: m.bar,
   ...fields
 });
-var notRun = (version, m, note, figures2, extra = {}) => ["off", "on"].map((arm) => row3(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures2.map((f) => [f, "not run"])), note }));
+var notRun = (version, m, note, figures3, extra = {}) => ["off", "on"].map((arm) => row3(version, m, arm, "not run", { samples: "not run", ...extra, ...Object.fromEntries(figures3.map((f) => [f, "not run"])), note }));
 var seededRecall = (version) => notRun(
   version,
   { measure: "review-voice-seeded-recall", on: ["memory_search"], bar: "seeded recall unchanged with memory on" },
@@ -6113,11 +6113,11 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join15(TASKS, task, "hidden");
   const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join15(hidden, f));
-  const grade = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const grade2 = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
     agentFailed,
-    passed: grade?.status === 0,
+    passed: grade2?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
     hooks: readLines(join15(out, "session.jsonl")).flatMap((e) => {
@@ -6193,6 +6193,480 @@ function verdict(scorecard, labRows, configDir) {
   }
   return `auto memory may be switched off in ${configDir}`;
 }
+
+// src/eval/head-to-head/replay-set.ts
+var EVIDENCE_KINDS = ["decision", "correction", "lesson", "hazard", "failure", "code-change"];
+var EVENT_KINDS = ["correction", "decision", "failure"];
+var CATEGORIES = ["single-fact", "multi-source", "knowledge-update", "temporal", "abstention", "code-anchored-hazard", "stale-citation"];
+var isText3 = (v) => typeof v === "string" && v.trim() !== "";
+var isDate = (v) => isText3(v) && !Number.isNaN(Date.parse(v));
+function parseHistory(text4) {
+  const h = JSON.parse(text4);
+  if (typeof h?.tenant !== "string" || !TENANT_NAME.test(h.tenant)) throw new Error("tenant must be a tenant name: lower-case letters, digits and dashes");
+  if (!isText3(h.repository) || !Array.isArray(h.evidence) || !Array.isArray(h.events)) {
+    throw new Error('expected {"tenant", "repository", "evidence": [...], "events": [...]}');
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const e of h.evidence) {
+    const bad2 = !isText3(e?.id) || ids.has(e.id) ? "a unique id" : !isDate(e.at) ? "an at date" : !EVIDENCE_KINDS.includes(e.kind) ? `a kind of ${EVIDENCE_KINDS.join(", ")}` : !isText3(e.statement) ? "a statement" : e.kind === "code-change" ? isText3(e.path) ? null : "a path" : !isText3(e.key) ? "a key" : e.path !== void 0 && !isText3(e.path) ? "a path that is text" : null;
+    if (bad2 !== null) throw new Error(`evidence ${JSON.stringify(e?.id)} needs ${bad2}`);
+    ids.add(e.id);
+  }
+  const unknown = h.evidence.find((e) => e.supersedes !== void 0 && !ids.has(e.supersedes));
+  if (unknown !== void 0) throw new Error(`evidence ${unknown.id} supersedes ${String(unknown.supersedes)}, which the history does not hold`);
+  const events = /* @__PURE__ */ new Set();
+  for (const e of h.events) {
+    const bad2 = !isText3(e?.id) || events.has(e.id) ? "a unique id" : !isDate(e.at) ? "an at date" : !EVENT_KINDS.includes(e.kind) ? `a kind of ${EVENT_KINDS.join(", ")}` : !isText3(e.question) ? "a question" : !Array.isArray(e.answers) || !e.answers.every((a) => ids.has(a)) ? "answers naming evidence the history holds" : e.asOf !== void 0 && !isDate(e.asOf) ? "an asOf date" : e.path !== void 0 && !isText3(e.path) ? "a path that is text" : null;
+    if (bad2 !== null) throw new Error(`event ${JSON.stringify(e?.id)} needs ${bad2}`);
+    events.add(e.id);
+  }
+  return { ...h, client: h.client !== false };
+}
+function buildReplaySet(h, since) {
+  const cut2 = Date.parse(since);
+  const before = (at3) => Date.parse(at3) < cut2;
+  const ingest = h.evidence.filter((e) => before(e.at)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : 1));
+  const held2 = new Map(ingest.map((e) => [e.id, e]));
+  const rewritten = (e) => e.path !== void 0 && ingest.some((c) => c.kind === "code-change" && c.path === e.path && Date.parse(c.at) > Date.parse(e.at));
+  let dropped = 0;
+  const questions = [];
+  for (const ev of h.events.filter((e) => !before(e.at))) {
+    const answers = ev.answers.map((id) => held2.get(id));
+    if (answers.some((a) => a === void 0)) {
+      dropped++;
+      continue;
+    }
+    const found = answers;
+    const older = found.flatMap((a) => a.supersedes === void 0 ? [] : [held2.get(a.supersedes)]);
+    const q = (category, keys, mustNot = []) => ({
+      id: ev.id,
+      category,
+      question: ev.question,
+      ...ev.path !== void 0 ? { path: ev.path } : {},
+      ...ev.asOf !== void 0 ? { asOf: ev.asOf } : {},
+      keys: keys.map((e) => e.key),
+      statements: keys.map((e) => e.statement),
+      mustNot: mustNot.map((e) => e.key)
+    });
+    questions.push(
+      found.length === 0 ? q("abstention", []) : ev.asOf !== void 0 ? q("temporal", found) : found.some(rewritten) ? q("stale-citation", found.filter((a) => !rewritten(a)), found.filter(rewritten)) : older.length > 0 ? q("knowledge-update", found, older) : found.length > 1 ? q("multi-source", found) : found[0].kind === "hazard" && found[0].path !== void 0 ? q("code-anchored-hazard", found) : q("single-fact", found)
+    );
+  }
+  return { tenant: h.tenant, repository: h.repository, client: h.client, since, ingest, questions, dropped };
+}
+
+// src/eval/head-to-head/scorecard.ts
+import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join17 } from "node:path";
+import { performance } from "node:perf_hooks";
+
+// src/eval/head-to-head/arms.ts
+import { spawn } from "node:child_process";
+import { mkdtempSync as mkdtempSync5, rmSync as rmSync6 } from "node:fs";
+import { tmpdir as tmpdir5 } from "node:os";
+import { join as join16 } from "node:path";
+import { createInterface as createInterface2 } from "node:readline";
+var TYPE = { decision: "decision", correction: "convention", lesson: "precedent", hazard: "hazard", failure: "failure-pattern", "code-change": "" };
+function memoryArm() {
+  const dir = mkdtempSync5(join16(tmpdir5(), "memory-head-to-head-"));
+  const db = openStore(join16(dir, "arm.sqlite"), true);
+  let set;
+  const item = /* @__PURE__ */ new Map();
+  const evidence = /* @__PURE__ */ new Map();
+  return {
+    async ingest(s) {
+      set = s;
+      for (const e of s.ingest) {
+        if (e.kind === "code-change") {
+          for (const i of tenantItems(db, s.tenant, s.repository, s.repository.split("/")[0])) {
+            if (i.anchors.some((a) => a.path === e.path)) db.prepare("UPDATE items SET status = 'stale', status_reason = ? WHERE id = ?").run(`${e.path} changed`, i.id);
+          }
+          continue;
+        }
+        const c = {
+          tenant: s.tenant,
+          scope: "repository",
+          scopeKey: s.repository,
+          type: TYPE[e.kind],
+          statement: e.statement,
+          rationale: null,
+          anchors: e.path === void 0 ? [] : [{ path: e.path }],
+          source: `history ${e.id}`,
+          evidenceAt: e.at
+        };
+        const older = e.supersedes === void 0 ? void 0 : item.get(e.supersedes);
+        const id = (older === void 0 ? null : supersedeNow(db, c, older))?.id ?? insertItem(db, c);
+        item.set(e.id, id);
+        evidence.set(id, e.id);
+      }
+    },
+    async answer(q) {
+      const items = withTextRatio(tenantItems(db, set.tenant, set.repository, set.repository.split("/")[0]), textMatches(db, searchTerms(q.question))).map((i) => ({ ...i, id: evidence.get(i.id) }));
+      return rank(items, q.path === void 0 ? [] : [q.path], Date.now(), void 0, void 0, [], set.repository).map((h) => leanRow(h.item, h.why, LEAN_ROW_TOKENS));
+    },
+    close() {
+      db.close();
+      rmSync6(dir, { recursive: true, force: true });
+    }
+  };
+}
+var offArm = () => ({ async ingest() {
+}, async answer() {
+  return [];
+}, close() {
+} });
+var AUTO_MEMORY_LINES = 200;
+function autoMemoryArm() {
+  let text4 = "";
+  return {
+    async ingest(s) {
+      const lines2 = s.ingest.filter((e) => e.kind !== "code-change").map((e) => `- ${e.statement}${e.path === void 0 ? "" : ` (${e.path})`}`);
+      text4 = ["# Memory", ...lines2].slice(0, AUTO_MEMORY_LINES).join("\n");
+      if (lines2.length === 0) text4 = "";
+    },
+    async answer() {
+      return text4 === "" ? [] : [text4];
+    },
+    close() {
+    }
+  };
+}
+function wholeHistoryArm() {
+  let text4 = "";
+  return {
+    async ingest(s) {
+      text4 = s.ingest.map((e) => `${e.at} ${e.kind}: ${e.statement}${e.path === void 0 ? "" : ` (${e.path})`}`).join("\n");
+    },
+    async answer() {
+      return text4 === "" ? [] : [text4];
+    },
+    close() {
+    }
+  };
+}
+var EXTERNAL_ARMS = {
+  mem0: { MEM0_TELEMETRY: "False" },
+  graphiti: { GRAPHITI_TELEMETRY_ENABLED: "false" },
+  "basic-memory": {},
+  "community-plugin": {}
+};
+var ArmFailed = class extends Error {
+};
+var ANSWER_MS = 3e4;
+var INGEST_MS = 3e5;
+function externalArm(name, spec) {
+  let child;
+  let failed;
+  const replies = [];
+  let waiting;
+  const call2 = async (request, ms) => {
+    if (failed !== void 0) throw failed;
+    child.stdin.write(`${JSON.stringify(request)}
+`);
+    let timer;
+    while (replies.length === 0) {
+      if (failed !== void 0) throw failed;
+      await new Promise((ok) => {
+        waiting = ok;
+        timer = setTimeout(() => {
+          failed = new ArmFailed(`${name} crashed: no reply within ${ms / 1e3} s`);
+          ok();
+        }, ms);
+      });
+      clearTimeout(timer);
+    }
+    try {
+      const reply = JSON.parse(replies.shift());
+      if (typeof reply !== "object" || reply === null) throw new Error("not an object");
+      return reply;
+    } catch {
+      throw failed = new ArmFailed(`${name} crashed: a reply that is not a JSON object`);
+    }
+  };
+  return {
+    async ingest(set) {
+      const [program, ...args] = spec.command;
+      const c = spawn(program, args, {
+        env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", DO_NOT_TRACK: "1", ...EXTERNAL_ARMS[name] },
+        stdio: ["pipe", "pipe", "ignore"]
+      });
+      child = c;
+      c.on("error", (error) => {
+        failed = new ArmFailed(error.code === "ENOENT" ? `${name} is not installed: ${program} was not found` : `${name} crashed: ${error.message}`);
+        waiting?.();
+      });
+      c.on("exit", (code, signal) => {
+        failed ??= new ArmFailed(`${name} crashed: it exited (${signal ?? code})`);
+        waiting?.();
+      });
+      c.stdin.on("error", () => {
+      });
+      createInterface2({ input: c.stdout }).on("line", (line) => {
+        replies.push(line);
+        waiting?.();
+      });
+      const hello = await call2({ op: "hello", arm: name }, ANSWER_MS);
+      if (hello["telemetry"] !== "off") throw failed = new ArmFailed(`${name} did not confirm its telemetry is off, so it was sent no evidence`);
+      await call2({ op: "ingest", tenant: set.tenant, repository: set.repository, evidence: set.ingest }, INGEST_MS);
+    },
+    async answer(q) {
+      const reply = await call2({ op: "answer", question: q.question, ...q.path !== void 0 ? { path: q.path } : {} }, ANSWER_MS);
+      const hits = reply["hits"];
+      if (!Array.isArray(hits) || !hits.every((h) => typeof h === "string")) throw failed = new ArmFailed(`${name} crashed: an answer without a hits list of text`);
+      return hits;
+    },
+    close() {
+      child?.removeAllListeners("exit");
+      child?.kill();
+    }
+  };
+}
+
+// src/eval/head-to-head/grade.ts
+var norm = (s) => ` ${s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+var holds = (hit, key2) => norm(hit).includes(norm(key2));
+var at2 = (hits, key2, k) => hits.slice(0, k).findIndex((h) => holds(h, key2));
+function grade(arm, q, hits, tokens2, ms) {
+  const worst = Math.min(...q.mustNot.map((k) => at2(hits, k, 5)).filter((i) => i >= 0), Infinity);
+  const found = (k) => q.keys.filter((key2) => {
+    const i = at2(hits, key2, k);
+    return i >= 0 && i <= worst;
+  }).length;
+  const share = (n) => q.keys.length === 0 ? 0 : n / q.keys.length;
+  const top5 = found(5);
+  return {
+    arm,
+    question: q.id,
+    category: q.category,
+    at1: share(found(1)),
+    at5: share(top5),
+    abstained: hits.length === 0,
+    staleRecalled: worst !== Infinity,
+    correct: top5,
+    tokens: tokens2,
+    ms
+  };
+}
+var SAMPLE = 30;
+function sample(answers) {
+  const matches2 = [];
+  for (const { arm, q, hits } of answers) {
+    for (const key2 of [...q.keys, ...q.mustNot]) {
+      const line = hits.slice(0, 5).flatMap((h) => h.split("\n")).find((l) => holds(l, key2));
+      if (line !== void 0) matches2.push({ arm, question: q.id, key: key2, excerpt: line.slice(0, 400), correct: null });
+    }
+  }
+  const order = (s) => sha256(`${s.arm}
+${s.question}
+${s.key}`);
+  return matches2.sort((a, b) => order(a) < order(b) ? -1 : 1).slice(0, SAMPLE);
+}
+function precision(sampled, checked, where2) {
+  const mark = new Map(checked.filter((c) => typeof c.correct === "boolean").map((c) => [`${c.arm}
+${c.question}
+${c.key}`, c.correct]));
+  const marks = sampled.map((s) => mark.get(`${s.arm}
+${s.question}
+${s.key}`)).filter((m) => m !== void 0);
+  return {
+    sample: sampled.length,
+    checked: marks.length,
+    precision: marks.length === 0 ? null : marks.filter((m) => m).length / marks.length,
+    ...marks.length < sampled.length ? { note: `mark each grade in ${where2} correct true or false and pass it as --checked` } : {}
+  };
+}
+var sharesNoWord = (question, text4) => {
+  const words3 = new Set(searchTerms(text4, Infinity));
+  return !searchTerms(question, Infinity).some((w) => words3.has(w));
+};
+
+// src/eval/head-to-head/scorecard.ts
+var BARS = {
+  "knowledge-update": "memory at or above the best alternative on knowledge-update recall at 1",
+  abstention: "memory at or above the best alternative on abstention precision",
+  "stale-citation": "memory at or above the best alternative on stale citation: one minus stale recall",
+  "single-fact": "memory within 5 points of the best alternative on single-fact recall at 5",
+  "multi-source": "memory within 5 points of the best alternative on multi-source recall at 5",
+  "tokens-per-correct-item": "memory at most one fifth of the best alternative's tokens per correct item, the best alternative being the one with the highest recall at 5 over all questions",
+  latency: "memory p95 latency at most 150 ms"
+};
+var P95_MS = 150;
+var BUILT_IN = { memory: memoryArm, off: offArm, "auto-memory": autoMemoryArm, "whole-history": wholeHistoryArm };
+var MODEL_RUNS = 3;
+function parseArms(text4) {
+  const doc = JSON.parse(text4);
+  const arms = doc?.arms;
+  if (typeof arms !== "object" || arms === null || Array.isArray(arms)) throw new Error('expected {"arms": {"<name>": {"command": [...]}}}');
+  for (const [name, spec] of Object.entries(arms)) {
+    if (name in BUILT_IN) throw new Error(`${name} is a built-in arm and takes no command`);
+    if (!Array.isArray(spec?.command) || spec.command.length === 0 || !spec.command.every((c) => typeof c === "string" && c !== "")) {
+      throw new Error(`arm ${name} needs a command: a list of the program and its arguments`);
+    }
+    for (const flag of ["offMachine", "modelBacked"]) {
+      if (spec[flag] !== void 0 && typeof spec[flag] !== "boolean") throw new Error(`arm ${name}: ${flag} is true or false`);
+    }
+  }
+  return arms;
+}
+async function runArm(arm, set) {
+  try {
+    await arm.ingest(set);
+    const out = [];
+    for (const q of set.questions) {
+      const start = performance.now();
+      const hits = await arm.answer(q);
+      out.push({ q, hits, ms: performance.now() - start });
+    }
+    return out;
+  } finally {
+    arm.close();
+  }
+}
+var r3 = (n) => Math.round(n * 1e3) / 1e3;
+var mean2 = (xs) => xs.length === 0 ? null : r3(xs.reduce((a, b) => a + b, 0) / xs.length);
+var pct = (xs, p) => {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return Math.round(s[Math.min(s.length - 1, Math.ceil(p / 100 * s.length) - 1)] * 10) / 10;
+};
+function figures2(grades, all) {
+  const keyed = grades.filter((g) => g.category !== "abstention" && g.category !== "stale-citation");
+  const guarded = grades.filter((g) => g.category === "knowledge-update" || g.category === "stale-citation");
+  const correct = grades.reduce((a, g) => a + g.correct, 0);
+  const tokens2 = grades.reduce((a, g) => a + g.tokens, 0);
+  const silent = grades.filter((g) => g.abstained);
+  return {
+    samples: grades.length,
+    recall_at_1: mean2(keyed.map((g) => g.at1)),
+    recall_at_5: mean2(keyed.map((g) => g.at5)),
+    abstained: mean2(grades.map((g) => g.abstained ? 1 : 0)),
+    stale_recall: mean2(guarded.map((g) => g.staleRecalled ? 1 : 0)),
+    tokens_per_question: mean2(grades.map((g) => g.tokens)),
+    tokens_per_correct_item: correct === 0 ? null : Math.round(tokens2 / correct * 10) / 10,
+    ...all ? { abstention_precision: silent.length === 0 ? null : r3(silent.filter((g) => g.category === "abstention").length / silent.length) } : {}
+  };
+}
+async function measure2(name, make, set, runs) {
+  let first2 = [];
+  const perRun = {};
+  for (let i = 0; i < runs; i++) {
+    const answers = await runArm(make(), set);
+    if (i === 0) first2 = answers;
+    const grades = answers.map((a) => grade(name, a.q, a.hits, estimate(a.hits.join("\n")), a.ms));
+    for (const c of CATEGORIES) (perRun[c] ??= []).push(figures2(grades.filter((g) => g.category === c), false)["recall_at_5"] ?? 0);
+  }
+  return { arm: name, status: "measured", runs, answers: first2, grades: first2.map((a) => grade(name, a.q, a.hits, estimate(a.hits.join("\n")), a.ms)), perRun };
+}
+async function headToHead(version, set, external, checked, out) {
+  const bars = { measure: "head-to-head-bars", version, tenant: set.tenant, since: set.since, status: "set before the run", bars: BARS };
+  const results = [];
+  for (const [name, make] of Object.entries(BUILT_IN)) results.push(await measure2(name, make, set, 1));
+  for (const name of [.../* @__PURE__ */ new Set([...Object.keys(EXTERNAL_ARMS), ...Object.keys(external)])]) {
+    const spec = external[name];
+    const none = { arm: name, runs: 0, answers: [], grades: [], perRun: {} };
+    if (spec === void 0) results.push({ ...none, status: "failed", note: `${name} is not installed: no command for it in the arms file (README, Head to head)` });
+    else if (spec.offMachine === true && set.client) results.push({ ...none, status: "skipped", note: `${name} sends evidence off this machine, and ${set.tenant} is a client tenant` });
+    else {
+      try {
+        results.push(await measure2(name, () => externalArm(name, spec), set, spec.modelBacked === true ? MODEL_RUNS : 1));
+      } catch (error) {
+        results.push({ ...none, status: "failed", note: error instanceof ArmFailed ? error.message : `${name} crashed: ${error.message}` });
+      }
+    }
+  }
+  const rows = [bars];
+  const latency = [];
+  for (const r of results) {
+    const base2 = { measure: "head-to-head", arm: r.arm, version, status: r.status, runs: r.runs };
+    const note = r.note === void 0 ? {} : { note: r.note };
+    for (const c of [...CATEGORIES, "all"]) {
+      const fields = r.status === "measured" ? figures2(c === "all" ? r.grades : r.grades.filter((g) => g.category === c), c === "all") : { samples: set.questions.filter((q) => c === "all" || q.category === c).length, recall_at_1: 0, recall_at_5: 0, abstained: 0, stale_recall: null, tokens_per_question: null, tokens_per_correct_item: null, ...c === "all" ? { abstention_precision: null } : {} };
+      const spread = r.runs > 1 && c !== "all" ? { spread: { recall_at_5: [Math.min(...r.perRun[c]), Math.max(...r.perRun[c])] } } : {};
+      rows.push({ ...base2, category: c, ...fields, ...spread, ...note });
+    }
+    const ms = r.grades.map((g) => g.ms);
+    const p95 = pct(ms, 95);
+    latency.push({
+      measure: "head-to-head-latency",
+      arm: r.arm,
+      version,
+      status: r.status,
+      p50_ms: pct(ms, 50),
+      p95_ms: p95,
+      ...r.arm === "memory" ? { bar: BARS.latency, meets_bar: p95 !== null && p95 <= P95_MS } : {},
+      ...note
+    });
+  }
+  const score = (r, bar) => {
+    if (r.status !== "measured") return 0;
+    const of = (c) => figures2(c === "all" ? r.grades : r.grades.filter((g) => g.category === c), c === "all");
+    const n = (v) => typeof v === "number" ? v : 0;
+    if (bar === "knowledge-update") return n(of(bar)["recall_at_1"]);
+    if (bar === "abstention") return n(of("all")["abstention_precision"]);
+    if (bar === "stale-citation") return 1 - n(of(bar)["stale_recall"] ?? 1);
+    return n(of(bar)["recall_at_5"]);
+  };
+  const memory = results.find((r) => r.arm === "memory");
+  const alternatives = results.filter((r) => r.arm !== "memory" && r.arm !== "off" && r.status !== "skipped");
+  const checks = [];
+  for (const bar of ["knowledge-update", "abstention", "stale-citation", "single-fact", "multi-source"]) {
+    const best2 = alternatives.reduce((a, b) => score(b, bar) > score(a, bar) ? b : a);
+    const [mine2, theirs2] = [r3(score(memory, bar)), r3(score(best2, bar))];
+    const meets = bar === "single-fact" || bar === "multi-source" ? mine2 >= theirs2 - 0.05 : mine2 >= theirs2;
+    checks.push({ bar, memory: mine2, best_alternative: theirs2, best_arm: best2.arm, meets });
+  }
+  const tokens2 = (r) => r.status === "measured" ? figures2(r.grades, true)["tokens_per_correct_item"] : null;
+  const recall = (r) => r.status === "measured" ? figures2(r.grades, true)["recall_at_5"] ?? 0 : 0;
+  const best = alternatives.reduce((a, b) => recall(b) > recall(a) ? b : a);
+  const [mine, theirs] = [tokens2(memory), tokens2(best)];
+  checks.push({ bar: "tokens-per-correct-item", memory: mine, best_alternative: theirs, best_arm: best.arm, meets: mine !== null && (theirs === null || mine * 5 <= theirs) });
+  let elsewhere = 0;
+  let vocabulary = 0;
+  memory.answers.forEach((a, i) => {
+    a.q.keys.forEach((key2, k) => {
+      if (a.hits.slice(0, 5).some((h) => holds(h, key2))) return;
+      if (!results.some((r) => r !== memory && r.answers[i]?.hits.slice(0, 5).some((h) => holds(h, key2)))) return;
+      elsewhere++;
+      if (sharesNoWord(a.q.question, a.q.statements[k])) vocabulary++;
+    });
+  });
+  const sampled = sample(results.flatMap((r) => r.answers.map((a) => ({ arm: r.arm, q: a.q, hits: a.hits }))));
+  const share = elsewhere === 0 ? null : r3(vocabulary / elsewhere);
+  const misses = checks.filter((c) => !c.meets).map((c) => c.bar);
+  const verdict2 = {
+    measure: "head-to-head-verdict",
+    version,
+    tenant: set.tenant,
+    since: set.since,
+    replay_set: {
+      questions: set.questions.length,
+      ingested: set.ingest.length,
+      dropped: set.dropped,
+      by_category: Object.fromEntries(CATEGORIES.map((c) => [c, set.questions.filter((q) => q.category === c).length]))
+    },
+    checks,
+    misses,
+    vocabulary_misses: vocabulary,
+    memory_misses_found_elsewhere: elsewhere,
+    vocabulary_miss_share: share,
+    matcher_precision: precision(sampled, checked, join17(out, "sample.jsonl"))
+  };
+  rows.push(...latency, verdict2);
+  mkdirSync10(out, { recursive: true, mode: 448 });
+  const write = (file, text4) => writeFileSync6(join17(out, file), text4, { mode: 384 });
+  const lines2 = (xs) => xs.map((x) => `${JSON.stringify(x)}
+`).join("");
+  write("replay-set.json", `${JSON.stringify(set, null, 1)}
+`);
+  write("results.jsonl", lines2(results.flatMap((r) => r.grades)));
+  write("sample.jsonl", lines2(sampled));
+  write("scorecard.jsonl", lines2(rows));
+  const last = { tenant: set.tenant, since: set.since, version, vocabulary_misses: vocabulary, memory_misses_found_elsewhere: elsewhere, vocabulary_miss_share: share, misses };
+  write("last.json", `${JSON.stringify(last, null, 2)}
+`);
+  return { rows, last };
+}
+var headToHeadDir = (data, tenant) => join17(data, "eval", "head-to-head", tenant);
 
 // src/cli.ts
 suppressSqliteExperimentalWarning();
@@ -6328,6 +6802,13 @@ var USAGE = `usage: memory <command>
       throwaway store, one JSON line per family with attacks attempted, reached active, rendered outside the fence and
       raised support, then the owner's 50 benign items accepted and recalled, then a summary. Exit 1 when any attack got
       through. Not part of the no-measure run
+  eval head-to-head --since <date> --history <file> [--arms <file>] [--checked <file>]
+      the head-to-head replay (#25): questions built from the history's corrections, decisions and failures after
+      --since, in seven categories, answered by this plugin, memory off, Claude Code auto memory, the whole history in
+      context and each alternative --arms names (Mem0, Graphiti, Basic Memory, a community plugin; README, Head to head),
+      all from the evidence before --since. Prints the bars, then per arm and category recall at 1 and 5, abstention,
+      stale recall, tokens and latency, then the verdict and the vocabulary-miss share. The replay set, every
+      per-question result and 30 grades to check by hand (pass them back as --checked) stay in the data directory
   eval verdict --scorecard <file> --lab <file>
       whether auto memory may be switched off: only when both files of rows show memory no worse
   --version`;
@@ -7098,7 +7579,7 @@ function sessionStart(data) {
     logWithheld(data, config, "session-start", typeof input2["session_id"] === "string" ? input2["session_id"] : "unknown", withheld);
     try {
       if (providerConfig(data) !== void 0) {
-        const child = spawn(process.execPath, [process.argv[1], "anchors", "refresh"], { cwd: typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), detached: true, stdio: "ignore" });
+        const child = spawn2(process.execPath, [process.argv[1], "anchors", "refresh"], { cwd: typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), detached: true, stdio: "ignore" });
         child.on("error", () => void 0);
         child.unref();
       }
@@ -7210,7 +7691,7 @@ async function captureCommand(args, data) {
   }
   try {
     if (!captureWanted(loadConfig(data))) return;
-    const child = spawn(process.execPath, [process.argv[1], "capture", "--foreground"], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+    const child = spawn2(process.execPath, [process.argv[1], "capture", "--foreground"], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
     child.on("error", () => void 0);
     child.stdin.on("error", () => void 0);
     child.stdin.end(JSON.stringify(input2));
@@ -7245,7 +7726,7 @@ function pruneLog(data, files, before) {
         }
       });
       const tmp = `${file}.${process.pid}.tmp`;
-      writeFileSync6(tmp, kept.map((l) => `${l}
+      writeFileSync7(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
       renameSync4(tmp, file);
       return true;
@@ -7289,7 +7770,7 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join16(data, "tenants");
+  const tenantsDir = join18(data, "tenants");
   const every = existsSync14(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
@@ -7329,7 +7810,7 @@ function purge(args, data, cwd) {
     }
   }
   if (values.confirm === true) {
-    if (values.all === true) rmSync6(injectionLog(data), { force: true });
+    if (values.all === true) rmSync7(injectionLog(data), { force: true });
     else pruneLog(data, [...every.map((t) => tenantFile(data, t)), personFile(data)], scope.before);
   }
   console.log(JSON.stringify({ ...total, ...keptNotAttributable.length > 0 ? { notAttributable: keptNotAttributable } : {}, files: report }, null, 2));
@@ -7346,7 +7827,7 @@ function input(file, parse) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
 }
-function evalCommand(args) {
+async function evalCommand(args, data) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -7358,10 +7839,24 @@ function evalCommand(args) {
       model: { type: "string" },
       task: { type: "string" },
       scorecard: { type: "string" },
-      lab: { type: "string" }
+      lab: { type: "string" },
+      history: { type: "string" },
+      arms: { type: "string" },
+      checked: { type: "string" }
     }
   });
   const only = positionals[0];
+  if (only === "head-to-head" && positionals.length === 1) {
+    const { since, history, arms, checked } = values;
+    if (since === void 0 || Number.isNaN(Date.parse(since))) throw new Refusal("head-to-head needs --since <date>, such as 2026-06-01", 2);
+    if (history === void 0) throw new Refusal("head-to-head needs --history <file>", 2);
+    const set = buildReplaySet(input(history, parseHistory), since);
+    const external = arms === void 0 ? {} : input(arms, parseArms);
+    const marks = checked === void 0 ? [] : input(checked, (t) => t.split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l)));
+    const { rows: rows2 } = await headToHead(pluginVersion(), set, external, marks, headToHeadDir(data, set.tenant));
+    return void process.stdout.write(rows2.map((r) => `${JSON.stringify(r)}
+`).join(""));
+  }
   if (only === "verdict" && positionals.length === 1) {
     if (values.scorecard === void 0 || values.lab === void 0) throw new Refusal("verdict needs --scorecard <file> and --lab <file>", 2);
     return void console.log(verdict(input(values.scorecard, parseRows), input(values.lab, parseRows), currentConfigDir()));
@@ -7474,7 +7969,7 @@ async function main(argv) {
     case "purge":
       return purge(rest, data, process.cwd());
     case "eval":
-      return evalCommand(rest);
+      return evalCommand(rest, data);
     case void 0:
     case "--help":
     case "help":
