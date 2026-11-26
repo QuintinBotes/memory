@@ -195,7 +195,8 @@ async function answer(req: IncomingMessage, url: URL, data: string, cwd: string)
     case 'GET /api/item': {
       const found = itemDetail(data, context, cwd, url.searchParams.get('id') ?? '');
       if (found === undefined) throw new HttpError(404, 'no such item here');
-      return { ...found.view, staleReports: (found.row as unknown as { stale_reports: number }).stale_reports, history: history(found.store, found.row.id) };
+      // The stored statement as it is, for the edit field (the page sets it as a value, never as markup): a defanged one saved back would change it.
+      return { raw: { statement: found.row.statement }, ...found.view, staleReports: (found.row as unknown as { stale_reports: number }).stale_reports, history: history(found.store, found.row.id) };
     }
     case 'GET /api/review':
       return review(data, context, cwd);
@@ -239,7 +240,11 @@ export function serveUi(data: string, cwd: string, port: number): void {
       });
       res.end(payload);
     };
-    const json = (status: number, value: unknown): void => send(status, 'application/json; charset=utf-8', safeJson(value));
+    // Every string is defanged as memory_get's are, except `raw`, which only an input's value takes.
+    const json = (status: number, value: unknown): void => {
+      const { raw, ...rest } = value as { raw?: unknown };
+      send(status, 'application/json; charset=utf-8', raw === undefined ? safeJson(rest) : JSON.stringify({ ...(JSON.parse(safeJson(rest)) as object), raw }));
+    };
     const origin = `http://${UI_HOST}:${(server.address() as AddressInfo).port}`;
     const url = new URL(req.url ?? '/', origin);
     if (!loopback(peerOverride ?? req.socket.remoteAddress)) return json(403, { error: 'loopback only' });

@@ -385,8 +385,11 @@ use: search ranks as `memory_search` does, an edit is a supersession (the
 prior version stays in the item's history), and approve and reject record the
 audit entry `memory approve` and `memory reject` record. Applying an
 instruction-file edit there writes the file as `memory conflicts apply
---confirm` does. It shows only this repository's bound tenant and the person
-file.
+--confirm` does, so `memory ui` starts only from a terminal (stdin a TTY), as
+that command writes only from one; from a pipe or script it is refused unless
+`--yes-non-interactive` is added, and an ask rule should cover it
+(`Bash(*memory.mjs*ui*)`). It shows only this repository's bound tenant and
+the person file.
 
 A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal

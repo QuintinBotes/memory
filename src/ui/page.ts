@@ -95,7 +95,7 @@ async function show(id) {
   box.append(hist);
   if (d.status === 'active' || d.status === 'expired') {
     const text = el('textarea');
-    text.value = d.statement;
+    text.value = d.raw.statement;
     text.setAttribute('aria-label', 'New statement');
     box.append(el('h3', 'Edit'), el('p', 'Saving supersedes this item: the prior version stays in its history.', 'muted'), text, button('Save', () => act(async () => {
       const r = await api('/api/edit', { id: d.id, statement: text.value });

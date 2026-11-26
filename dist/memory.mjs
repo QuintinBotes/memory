@@ -3752,7 +3752,7 @@ async function show(id) {
   box.append(hist);
   if (d.status === 'active' || d.status === 'expired') {
     const text = el('textarea');
-    text.value = d.statement;
+    text.value = d.raw.statement;
     text.setAttribute('aria-label', 'New statement');
     box.append(el('h3', 'Edit'), el('p', 'Saving supersedes this item: the prior version stays in its history.', 'muted'), text, button('Save', () => act(async () => {
       const r = await api('/api/edit', { id: d.id, statement: text.value });
@@ -3963,7 +3963,7 @@ async function answer(req, url, data, cwd) {
     case "GET /api/item": {
       const found = itemDetail(data, context, cwd, url.searchParams.get("id") ?? "");
       if (found === void 0) throw new HttpError(404, "no such item here");
-      return { ...found.view, staleReports: found.row.stale_reports, history: history(found.store, found.row.id) };
+      return { raw: { statement: found.row.statement }, ...found.view, staleReports: found.row.stale_reports, history: history(found.store, found.row.id) };
     }
     case "GET /api/review":
       return review(data, context, cwd);
@@ -4004,7 +4004,10 @@ function serveUi(data, cwd, port) {
       });
       res.end(payload);
     };
-    const json = (status, value) => send(status, "application/json; charset=utf-8", safeJson(value));
+    const json = (status, value) => {
+      const { raw, ...rest } = value;
+      send(status, "application/json; charset=utf-8", raw === void 0 ? safeJson(rest) : JSON.stringify({ ...JSON.parse(safeJson(rest)), raw }));
+    };
     const origin = `http://${UI_HOST}:${server.address().port}`;
     const url = new URL(req.url ?? "/", origin);
     if (!loopback(peerOverride ?? req.socket.remoteAddress)) return json(403, { error: "loopback only" });
@@ -6731,9 +6734,11 @@ var USAGE = `usage: memory <command>
       nothing unless the repository's .orbit/config.yaml has knowledge.lessons_in_prompts true. Exits 2 without a context
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_related, memory_propose, memory_feedback
-  ui [--port <n>]
+  ui [--port <n>] [--yes-non-interactive]
       a local page to browse, search (ranked as memory_search), edit (as a supersession) and review what review lists,
-      on 127.0.0.1 only; any other --host is refused. Prints the address with this run's token; stop it with Ctrl-C
+      on 127.0.0.1 only; any other --host is refused. Prints the address with this run's token; stop it with Ctrl-C.
+      It can apply instruction-file edits, so it starts only from a terminal, as conflicts apply does, unless
+      --yes-non-interactive is given (put an ask rule on it)
   session-start
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
@@ -7278,9 +7283,7 @@ function conflictsCommand(args, data, cwd) {
       }
       process.stdout.write(renderEdit(ins, e));
       if (values.confirm !== true) return void console.error("Nothing was written. Run the same command with --confirm to write this edit.");
-      if (!process.stdin.isTTY && values["yes-non-interactive"] !== true) {
-        throw new Refusal("nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command", 2);
-      }
+      ownerTerminal(values["yes-non-interactive"], "nothing was written: apply is");
       try {
         return void console.log(applyEdit(db, ins, e));
       } catch (error) {
@@ -7295,6 +7298,11 @@ function conflictsCommand(args, data, cwd) {
     return;
   }
   throw new Refusal(`no edit ${id} here; memory conflicts lists them`);
+}
+function ownerTerminal(yes, refused) {
+  if (!process.stdin.isTTY && yes !== true) {
+    throw new Refusal(`${refused} run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command`, 2);
+  }
 }
 function promoteCommand(args, data, cwd) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { propose: { type: "boolean" }, apply: { type: "string" }, reject: { type: "string" }, "yes-non-interactive": { type: "boolean" } } });
@@ -7332,9 +7340,7 @@ function promoteCommand(args, data, cwd) {
         return void console.log(`rejected ${p.id}; it is kept so it is not proposed again, and no file was written`);
       }
       process.stdout.write(fence(PROPOSALS_LABEL, renderPromotion(p)));
-      if (!process.stdin.isTTY && values["yes-non-interactive"] !== true) {
-        throw new Refusal("nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command", 2);
-      }
+      ownerTerminal(values["yes-non-interactive"], "nothing was written: apply is");
       console.log(applyPromotion(db, p, top, context.tenant, context.repository));
     } catch (error) {
       throw error instanceof Refusal ? error : new Refusal(error.message);
@@ -7351,11 +7357,12 @@ var realpathOrSelf = (path) => {
   }
 };
 function uiCommand(args, data, cwd) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { host: { type: "string" }, port: { type: "string" } } });
-  if (positionals.length > 0) throw new Refusal("usage: memory ui [--port <n>]", 2);
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { host: { type: "string" }, port: { type: "string" }, "yes-non-interactive": { type: "boolean" } } });
+  if (positionals.length > 0) throw new Refusal("usage: memory ui [--port <n>] [--yes-non-interactive]", 2);
   if (values.host !== void 0 && values.host !== UI_HOST) throw new Refusal(`memory ui binds ${UI_HOST} only; --host ${values.host} is refused`, 2);
   const port = values.port === void 0 ? 0 : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535 || values.port !== void 0 && !/^\d+$/.test(values.port)) throw new Refusal("--port is a whole number from 0 to 65535", 2);
+  ownerTerminal(values["yes-non-interactive"], "nothing was served: memory ui applies edits to instruction files, so it is");
   setUp(data);
   serveUi(data, cwd, port);
 }

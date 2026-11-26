@@ -27,9 +27,12 @@ const rowsOf = (db, file) => {
 };
 const idOf = (s, statement, file) => rowsOf(s.data, file).items.find((r) => r.statement === statement).id;
 
-/** Starts `memory ui`; resolves with its URL once it listens, or with its exit status when it exits first. */
-function startUi(cwd, data, config, args = [], env = {}) {
-  const child = spawn(process.execPath, [bundle, 'ui', ...args], { cwd, env: childEnv({ data, config, env }) });
+/**
+ * Starts `memory ui`; resolves with its URL once it listens, or with its exit status when it exits first. A test has no
+ * TTY, so it passes --yes-non-interactive as a script would, unless `terminal` is false.
+ */
+function startUi(cwd, data, config, args = [], env = {}, terminal = true) {
+  const child = spawn(process.execPath, [bundle, 'ui', ...(terminal ? ['--yes-non-interactive'] : []), ...args], { cwd, env: childEnv({ data, config, env }) });
   let stdout = '';
   let stderr = '';
   child.stderr.on('data', (d) => (stderr += d));
@@ -82,6 +85,33 @@ test('memory ui refuses 0.0.0.0, :: and any other host before it opens a socket'
   const ui = await startUi(s.notes, s.data, s.configA, ['--host', '127.0.0.1', '--port', '0']);
   assert.equal(ui.exited, undefined, ui.stderr);
   ui.stop();
+});
+
+test('memory ui started without a terminal is refused, as conflicts apply is, and opens no socket', async () => {
+  const s = fixture();
+  const r = await startUi(s.notes, s.data, s.configA, ['--port', '0'], {}, false);
+  assert.equal(r.exited, 2, r.stderr);
+  assert.equal(r.stdout, '', 'no address is printed: nothing listened');
+  assert.match(r.stderr, /nothing was served: memory ui applies edits to instruction files.*run by the owner in a terminal.*--yes-non-interactive/);
+});
+
+test('an edit that changes one word keeps a run of backticks in the stored statement', async () => {
+  const s = fixture();
+  const OLD = 'Shell examples in the docs open with ```sh fences';
+  const NEW = 'Shell examples in the README open with ```sh fences';
+  ok(remember(s.notes, s.data, s.configA, OLD, '--type', 'convention'));
+  const id = idOf(s, OLD, 'tenants/personal.sqlite');
+  const ui = await startUi(s.notes, s.data, s.configA, ['--port', '0']);
+  try {
+    const detail = await call(ui, 'GET', `/api/item?id=${id}`);
+    assert.equal(detail.json.raw.statement, OLD, 'the edit field gets the stored statement');
+    assert.doesNotMatch(detail.json.statement, /```/, 'the displayed statement stays defanged');
+    const saved = await call(ui, 'POST', '/api/edit', { body: { id, statement: detail.json.raw.statement.replace('docs', 'README') } });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(rowsOf(s.data, 'tenants/personal.sqlite').items.find((i) => i.id === saved.json.id).statement, NEW);
+  } finally {
+    ui.stop();
+  }
 });
 
 test('memory ui answers 403 to a non-loopback peer, a foreign Host, a missing token and a cross-origin write', async () => {
