@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { suppressSqliteExperimentalWarning } from './warnings.ts';
 import { pluginVersion } from './version.ts';
@@ -54,7 +55,8 @@ import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { declineSupersession, decide, isPendingSupersession, proposals, reanchorCandidates, renderProposals, type Proposal } from './review/review.ts';
-import { expireTranscripts, processTranscripts, recordTranscript, transcriptsOn } from './capture/transcripts.ts';
+import { MODEL_DEFAULTS, expireTranscripts, modelIsLocal, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
+import { modelTimeoutMs, runProvider } from './provider/run.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { captureCi } from './capture/ci.ts';
 import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './capture/failures.ts';
@@ -130,6 +132,10 @@ const USAGE = `usage: memory <command>
   sweep
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
+  corrections
+      the model pass over recorded transcripts (transcriptModel in config.json; a local Ollama with inkling-2-mini by
+      default, which you install): quotes of your corrections the rules missed, kept only when verbatim, as proposals.
+      A tenant's messages go only to a model on this machine. Never run by a hook; stops at the first failure
   embed --backfill
       embed every active item here that has no vector from the configured provider (voyage-4 unless config.json says
       otherwise; needs VOYAGE_API_KEY). Remember and approve embed the item they make active
@@ -1020,12 +1026,56 @@ function sweepCommand(data: string, cwd: string, due: boolean): void {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
       expireEpisodes(db);
       expireTranscripts(db);
-      if (tenant !== '' && transcriptsOn(config)) processTranscripts(db, tenant, config);
+      if (transcriptsOn(config) && (tenant !== '' || covers(config, 'personTranscripts'))) processTranscripts(db, tenant, config);
     } finally {
       db.close();
     }
   }
   if (!due) console.log(`proposed ${proposed} merge${proposed === 1 ? '' : 's'}; they wait in memory review`);
+}
+
+/**
+ * `memory corrections`: the model pass over the transcripts recorded for this repository's tenant and the person file
+ * (#80), after the rule pass. Never run by a hook. A tenant's messages go only to a model on this machine; after one
+ * failure no store is asked again this run.
+ */
+function correctionsCommand(data: string, cwd: string): void {
+  const config = setUp(data);
+  const settings = config.transcriptModel;
+  if (settings === undefined || !transcriptsOn(config) || !covers(config, 'transcriptModel')) {
+    throw new Refusal('the model pass is off: it needs the transcripts opt-in (memory init --transcripts on) and transcriptModel in config.json, with the plan that lists it agreed to');
+  }
+  const { url, model } = { ...MODEL_DEFAULTS, ...settings };
+  const command = settings.command ?? [process.execPath, fileURLToPath(import.meta.url), 'model-client'];
+  const ask: Ask = (turns) => {
+    const r = runProvider(command, cwd, { op: 'corrections', url, model, turns }, modelTimeoutMs());
+    return r.ok ? parseCorrections(r.stdout) : { failed: r.reason };
+  };
+  let failed: string | undefined;
+  for (const { file, tenant } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+    if (tenant === '' && !covers(config, 'personTranscripts')) continue;
+    if (tenant !== '' && !modelIsLocal(url)) {
+      console.error(`memory: the model pass did not run for tenant ${tenant}: its model at ${url} is not on this machine`);
+      continue;
+    }
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      expireTranscripts(db);
+      processTranscripts(db, tenant, config);
+      const done = modelTranscripts(db, tenant, config, ask);
+      console.log(`${tenant === '' ? 'person file' : `tenant ${tenant}`}: the model read ${done.read} transcript${done.read === 1 ? '' : 's'} and proposed ${done.proposed} correction${done.proposed === 1 ? '' : 's'}`);
+      failed = done.failed;
+    } finally {
+      db.close();
+    }
+    if (failed !== undefined) throw new Refusal(`memory: the model failed (${failed}); nothing more was asked this run`);
+  }
+}
+
+/** The model pass's own Ollama client, run by the provider runner (`correctionsCommand`), never by a person. */
+async function modelClient(): Promise<void> {
+  process.stdout.write(await ollamaClient(readFileSync(0, 'utf8')));
 }
 
 /** The JSON a hook is given on stdin, or nothing when there is none or it is not an object. */
@@ -1462,6 +1512,10 @@ async function main(argv: string[]): Promise<void> {
       return promoteCommand(rest, data, process.cwd());
     case 'sweep':
       return sweepCommand(data, process.cwd(), false);
+    case 'corrections':
+      return correctionsCommand(data, process.cwd());
+    case 'model-client':
+      return modelClient();
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
     case 'anchors':

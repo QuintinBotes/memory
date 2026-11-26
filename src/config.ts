@@ -37,6 +37,12 @@ export interface Config {
   impactProvider?: { command: string[] };
   /** The SCF each tenant exports its proposals to (#13), by tenant name; a tenant without an entry sends nothing. Part of the consent plan. */
   scf?: Record<string, { url: string }>;
+  /**
+   * The model `memory corrections` asks for corrections the rules miss (#80): an Ollama address (a local one by default)
+   * and a model name, or a provider command speaking docs/provider.md's protocol in place of memory's own Ollama client.
+   * The pass is off unless this is set; `url` says where the model runs either way.
+   */
+  transcriptModel?: { url?: string; model?: string; command?: string[] };
   /** Set by memory itself when two memory-linked reverts came within seven days (#18); every recall stays off until the owner runs `memory init --recall on`. */
   recallOff?: { reason: string; at: string };
 }
@@ -191,6 +197,20 @@ export function loadConfig(data: string): Config | null {
     const bad = entries === null ? 'scf must map a tenant name to {"url": an address}' : entries.map(([t, v]) => (!(t in c.tenants!) ? `scf names tenant "${t}", which does not exist` : typeof v?.url !== 'string' ? `scf.${t} needs a "url"` : typeof scfUrl(v.url) === 'string' ? `scf.${t}: ${scfUrl(v.url) as string}` : null)).find((m) => m !== null);
     if (bad !== undefined && bad !== null) throw new ConfigError(bad);
   }
+  const tm = c.transcriptModel;
+  if (tm !== undefined) {
+    const ok = typeof tm === 'object' && tm !== null && !Array.isArray(tm);
+    const { url, model, command } = ok ? tm : ({} as NonNullable<Config['transcriptModel']>);
+    const http = (u: string): boolean => URL.canParse(u) && ['http:', 'https:'].includes(new URL(u).protocol) && new URL(u).username === '' && new URL(u).password === '';
+    if (
+      !ok ||
+      (url !== undefined && !(typeof url === 'string' && http(url))) ||
+      (model !== undefined && !(typeof model === 'string' && model !== '')) ||
+      (command !== undefined && !(isList(command) && command.length > 0 && isAbsolute(command[0]!)))
+    ) {
+      throw new ConfigError('transcriptModel must be {"url"?: an http(s) address without credentials, "model"?: a name, "command"?: [absolute program path, arguments...]}');
+    }
+  }
   const off = c.recallOff;
   if (off !== undefined && !(typeof off === 'object' && off !== null && typeof off.reason === 'string' && typeof off.at === 'string')) {
     throw new ConfigError('recallOff must be { reason: text, at: a time }');
@@ -209,6 +229,7 @@ export function loadConfig(data: string): Config | null {
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
     ...(impact !== undefined ? { impactProvider: impact } : {}),
     ...(scf !== undefined ? { scf } : {}),
+    ...(tm !== undefined ? { transcriptModel: tm } : {}),
     ...(off !== undefined ? { recallOff: off } : {}),
   };
 }

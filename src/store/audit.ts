@@ -36,6 +36,7 @@ export type AuditAction =
   | 'scf_exported'
   | 'scf_feedback'
   | 'transcripts_processed'
+  | 'transcripts_modelled'
   | 'transcripts_expired'
   | 'undone';
 

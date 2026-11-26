@@ -3,14 +3,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { automationRefusal } from '../automation.ts';
-import { consented, currentConfigDir, loadConfig, type Config } from '../config.ts';
+import { consented, currentConfigDir, loadConfig, organisationTerms, type Config } from '../config.ts';
 import { covers } from '../consent/plan.ts';
 import { addItem } from '../consolidate.ts';
 import { resolveContext } from '../context.ts';
 import { refusal } from '../gate.ts';
 import { recordAudit } from '../store/audit.ts';
 import { HOOK_BUSY_MS, openStore } from '../store/db.ts';
-import { tenantFile } from '../store/paths.ts';
+import { personFile, tenantFile } from '../store/paths.ts';
 import { scrub } from './capture.ts';
 
 /** Transcript records and compaction episodes are deleted after this many days (FR-005 of #12). */
@@ -26,7 +26,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== 
 /**
  * The SessionEnd and PostCompact hooks' work (FR-002): with the opt-in on, record where the transcript is, never its
  * content; for a compaction, the redacted summary as an episode. Nothing is read from the transcript, and with the
- * opt-in off or no tenant resolved for the session's directory nothing is recorded or opened.
+ * opt-in off nothing is recorded or opened. A session outside every tenant records its path in the person file (#80).
  */
 export function recordTranscript(data: string, input: Record<string, unknown>): void {
   const config = loadConfig(data);
@@ -35,19 +35,22 @@ export function recordTranscript(data: string, input: Record<string, unknown>): 
   // The environment only: the transcript is never opened here. Its own entrypoint is read at processing.
   if (automationRefusal(config, process.env) !== null) return;
   const context = resolveContext(str(input['cwd']) ?? process.cwd(), config, currentConfigDir());
-  if (context.tenant === null || context.repository === null) return;
+  // Outside every tenant the path goes to the person file (#80); a compaction summary there is not kept.
+  const person = context.tenant === null;
+  if (person ? !covers(config, 'personTranscripts') : context.repository === null) return;
   const compaction = input['hook_event_name'] === 'PostCompact';
   const summary = compaction ? str(input['compact_summary']) : undefined;
-  if (compaction ? summary === undefined : path === undefined) return;
+  if (compaction ? person || summary === undefined : path === undefined) return;
   const session = str(input['session_id']) ?? 'unknown';
-  const db = openStore(tenantFile(data, context.tenant), true, HOOK_BUSY_MS)!;
+  const repository = context.repository ?? '';
+  const db = openStore(person ? personFile(data) : tenantFile(data, context.tenant!), true, HOOK_BUSY_MS)!;
   try {
     const id = `t-${randomBytes(5).toString('hex')}`;
     const at = new Date().toISOString();
     if (summary !== undefined) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, context.repository, scrub(summary).slice(0, MAX_SUMMARY), at, at);
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, repository, scrub(summary).slice(0, MAX_SUMMARY), at, at);
     } else if (db.prepare("SELECT 1 FROM transcripts WHERE session = ? AND kind = 'path' AND path = ? AND processed_at IS NULL").get(session, path!) === undefined) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, context.repository, path!, at);
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, repository, path!, at);
     }
   } finally {
     db.close();
@@ -228,15 +231,35 @@ export function expireTranscripts(db: DatabaseSync): number {
   return expired;
 }
 
+type Row = { id: string; session: string; repository: string; path: string };
+
 /**
- * Finds the owner's corrections in every recorded transcript of this tenant's store, once each (FR-004): one proposal
- * per correction, owner trust, the session and line as evidence, nothing but the quote and that reference kept. A
+ * Stores each verbatim candidate as an owner proposal with the session and line as evidence. In the person file (tenant
+ * '') it is a person item, refused when it names a path, code, a tenant or a repository (#80).
+ */
+function propose(db: DatabaseSync, tenant: string, config: Config, r: Row, turns: Turn[], candidates: Candidate[]): number {
+  const person = tenant === '';
+  const terms = person ? organisationTerms(config, r.repository || null) : undefined;
+  let proposed = 0;
+  for (const c of verbatim(turns, candidates)) {
+    const statement = `Owner correction: "${c.quote}"`;
+    const source = `transcript:${r.session}:L${c.line}:${basename(r.path)}`;
+    if (refusal(statement, terms) !== null || refusal(source) !== null) continue;
+    const stored = addItem(db, { tenant, scope: person ? 'person' : 'repository', scopeKey: person ? '' : r.repository, originRepository: r.repository || null, type: 'preference', statement, rationale: null, anchors: [], source, trust: 'owner', status: 'proposed' });
+    if (stored.kind === 'inserted') proposed++;
+  }
+  return proposed;
+}
+
+/**
+ * Finds the owner's corrections in every recorded transcript of this store, once each (FR-004): one proposal per
+ * correction, owner trust, the session and line as evidence, nothing but the quote and that reference kept. A
  * transcript that is gone is skipped and counted; records past 30 days are deleted unread by `expireTranscripts`, which the sweep runs first. The store belongs to one
- * tenant, so what is read here can only reach that tenant.
+ * tenant, or is the person file (tenant ''), so what is read here can only reach that store.
  */
 export function processTranscripts(db: DatabaseSync, tenant: string, config: Config, extract: Extract = findCorrections): Processed {
   const done: Processed = { read: 0, proposed: 0, missing: 0 };
-  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all() as { id: string; session: string; repository: string; path: string }[];
+  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all() as Row[];
   for (const r of rows) {
     let outcome = 'read';
     if (!existsSync(r.path)) {
@@ -247,16 +270,75 @@ export function processTranscripts(db: DatabaseSync, tenant: string, config: Con
     } else {
       done.read++;
       const turns = ownerTurns(r.path);
-      for (const c of verbatim(turns, extract(turns))) {
-        const statement = `Owner correction: "${c.quote}"`;
-        const source = `transcript:${r.session}:L${c.line}:${basename(r.path)}`;
-        if (refusal(statement) !== null || refusal(source) !== null) continue;
-        const stored = addItem(db, { tenant, scope: 'repository', scopeKey: r.repository, originRepository: r.repository, type: 'preference', statement, rationale: null, anchors: [], source, trust: 'owner', status: 'proposed' });
-        if (stored.kind === 'inserted') done.proposed++;
-      }
+      done.proposed += propose(db, tenant, config, r, turns, extract(turns));
     }
     db.prepare('UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?').run(new Date().toISOString(), outcome, r.id);
   }
   if (rows.length > 0) recordAudit(db, 'transcripts_processed', null, { ...done });
   return done;
+}
+
+/** The model pass's defaults (#80): a local Ollama and Inkling 2 Mini, which the owner installs; memory never downloads a model. */
+export const MODEL_DEFAULTS = { url: 'http://127.0.0.1:11434', model: 'inkling-2-mini' };
+/** Whether the model runs on the owner's machine, judged by its address. */
+export const modelIsLocal = (url: string): boolean => ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname);
+
+/** Asks the model for the corrections in these turns: the candidates, or why it failed. */
+export type Ask = (turns: Turn[]) => Candidate[] | { failed: string };
+
+/**
+ * The model pass (#80), offline and never in a hook: each transcript the rule pass has read (outcome 'read') is given to
+ * the model once, and what it returns goes through the same verbatim check. The first failure ends the pass with nothing
+ * written for that transcript and nothing asked after it; those wait for the next run.
+ */
+export function modelTranscripts(db: DatabaseSync, tenant: string, config: Config, ask: Ask): { read: number; proposed: number; failed?: string } {
+  const done: { read: number; proposed: number; failed?: string } = { read: 0, proposed: 0 };
+  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND outcome = 'read' ORDER BY at, id").all() as Row[];
+  for (const r of rows) {
+    // The first turn is the task, as in the rule pass. A transcript gone or automated since then has nothing to ask.
+    const turns = existsSync(r.path) && automationRefusal(config, {}, r.path) === null ? ownerTurns(r.path).slice(1) : [];
+    const found = turns.length === 0 ? [] : ask(turns);
+    if ('failed' in found) {
+      done.failed = found.failed;
+      break;
+    }
+    done.read++;
+    done.proposed += propose(db, tenant, config, r, turns, found);
+    db.prepare("UPDATE transcripts SET outcome = 'model' WHERE id = ?").run(r.id);
+  }
+  if (done.read > 0) recordAudit(db, 'transcripts_modelled', null, { read: done.read, proposed: done.proposed });
+  return done;
+}
+
+/** A provider's answer, `{"status":"ok","corrections":[{"line", "quote"}]}` on its first line; anything else is a failure. */
+export function parseCorrections(stdout: string): Candidate[] | { failed: string } {
+  let o: { status?: unknown; corrections?: unknown };
+  try {
+    o = JSON.parse(stdout.split('\n')[0]!);
+  } catch {
+    return { failed: 'it answered text that is not JSON' };
+  }
+  if (o?.status !== 'ok' || !Array.isArray(o.corrections)) return { failed: 'it did not answer status ok with corrections' };
+  return o.corrections.flatMap((c: { line?: unknown; quote?: unknown }) => (Number.isInteger(c?.line) && typeof c?.quote === 'string' ? [{ line: c.line as number, quote: c.quote }] : []));
+}
+
+const PROMPT = `You read the owner's own messages from a coding session, one per line as "L<number>: <text>".
+Find each sentence in which the owner corrects what the agent did or chose, or says how the agent must work from now on.
+Answer JSON only: {"corrections":[{"line":<number>,"quote":"<the sentence, copied character for character>"}]}.
+Never paraphrase, shorten or fix a quote. Answer {"corrections":[]} when there is none.`;
+
+/**
+ * Memory's own Ollama client, which the provider runner runs as `memory model-client` so the runner's limits hold: the
+ * request on stdin, one call to Ollama at its `url`, the answer as the provider protocol's one line.
+ */
+export async function ollamaClient(input: string): Promise<string> {
+  const req = JSON.parse(input) as { url: string; model: string; turns: Turn[] };
+  const res = await fetch(new URL('/api/generate', req.url), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: req.model, system: PROMPT, prompt: req.turns.map((t) => `L${t.line}: ${t.text}`).join('\n'), format: 'json', stream: false, options: { temperature: 0, num_predict: 2048 } }),
+  });
+  if (!res.ok) throw new Error(`Ollama answered ${res.status}`);
+  const answer = JSON.parse(((await res.json()) as { response?: string }).response ?? '') as { corrections?: unknown };
+  return `${JSON.stringify({ status: 'ok', corrections: Array.isArray(answer?.corrections) ? answer.corrections : [] })}\n`;
 }
