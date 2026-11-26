@@ -124,6 +124,9 @@ test('memory ui answers 403 to a non-loopback peer, a foreign Host, a missing to
     assert.equal(page.status, 200);
     assert.match(page.headers['content-security-policy'], /default-src 'none'/);
     assert.doesNotMatch(page.text, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/, 'the page never parses text as HTML');
+    // A reload asks for the address bar's URL again: the page must not strip the token from it.
+    assert.doesNotMatch(page.text, /history\.(replaceState|pushState)/, 'a reload keeps working');
+    assert.equal((await call(ui, 'GET', `/?t=${ui.token}`, { token: null })).status, 200, 'the same address serves the page again');
     assert.equal((await call(ui, 'GET', '/api/items')).status, 200);
 
     assert.equal((await call(far, 'GET', `/?t=${far.token}`, { token: null })).status, 403, 'a non-loopback peer is refused');
