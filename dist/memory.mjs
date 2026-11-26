@@ -4573,17 +4573,30 @@ function recordTranscript(data, input2) {
 }
 var NOT_TYPED = /^</;
 var HIDDEN = "\uE000";
+var TAGS = ["<private>", "</private>"];
 function hidePrivate(text4, state) {
+  const s = state.held + text4;
   let out = "";
   let last = 0;
-  for (const m of text4.matchAll(/<(\/?)private>/g)) {
-    out += state.open ? HIDDEN : text4.slice(last, m.index);
-    state.open = m[1] === "";
+  for (const m of s.matchAll(/<(\/?)private>/gi)) {
+    if (state.depth === 0) out += s.slice(last, m.index);
+    if (m[1] === "") {
+      if (state.depth === 0) out += HIDDEN;
+      state.depth++;
+    } else if (state.depth > 0 && --state.depth === 0) out += HIDDEN;
     last = m.index + m[0].length;
   }
-  return out + (state.open ? HIDDEN : text4.slice(last));
+  const rest = s.slice(last);
+  let keep = 0;
+  for (let n = Math.min(rest.length, TAGS[1].length - 1); n > 0 && keep === 0; n--) {
+    if (TAGS.some((t) => t.startsWith(rest.slice(rest.length - n).toLowerCase()))) keep = n;
+  }
+  state.held = rest.slice(rest.length - keep);
+  const shown = rest.slice(0, rest.length - keep);
+  return out + (state.depth > 0 ? HIDDEN : shown);
 }
-var leaves = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(leaves) : v !== null && typeof v === "object" ? Object.values(v).flatMap(leaves) : [];
+var STRUCTURE = /* @__PURE__ */ new Set(["type", "id", "tool_use_id", "name", "role", "uuid", "parentUuid", "sessionId", "timestamp", "version", "cwd", "gitBranch", "userType", "entrypoint", "requestId", "model", "signature", "stop_reason", "media_type", "messageId"]);
+var leaves = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(leaves) : v !== null && typeof v === "object" ? Object.entries(v).filter(([k]) => !STRUCTURE.has(k)).flatMap(([, x]) => leaves(x)) : [];
 function scan(v, state) {
   for (const t of leaves(v)) hidePrivate(t, state);
   return "";
@@ -4592,7 +4605,7 @@ function ownerTurns(file) {
   const raw = readFileSync12(file, "utf8");
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
   const turns = [];
-  const state = { open: false };
+  const state = { depth: 0, held: "" };
   raw.split("\n").forEach((row4, i) => {
     let o;
     try {

@@ -72,23 +72,50 @@ const NOT_TYPED = /^</;
 /** Stands in for text inside a private span; a sentence holding it is never a correction. */
 const HIDDEN = '\uE000';
 
-/** Replaces what is inside `<private>...</private>` by HIDDEN, tracking an open span across records; an unclosed span hides to the end. */
-function hidePrivate(text: string, state: { open: boolean }): string {
+/** Where the private-span scan stands: the nesting depth, and a possible start of a tag cut off at the end of the last piece. */
+interface Spans {
+  depth: number;
+  held: string;
+}
+const TAGS = ['<private>', '</private>'];
+
+/**
+ * Reads one piece of the transcript's single text stream, in order, and returns it with every private span replaced by
+ * HIDDEN. Spans nest (text is private while the depth is above zero), an unmatched close tag is ignored, tags match in any
+ * case, and the end of a piece that could be the start of a tag is held back so a tag split across blocks or records is
+ * still seen. shortcut: a held start that turns out not to be a tag is emitted with the next piece, which may be another turn.
+ */
+function hidePrivate(text: string, state: Spans): string {
+  const s = state.held + text;
   let out = '';
   let last = 0;
-  for (const m of text.matchAll(/<(\/?)private>/g)) {
-    out += state.open ? HIDDEN : text.slice(last, m.index);
-    state.open = m[1] === '';
+  for (const m of s.matchAll(/<(\/?)private>/gi)) {
+    if (state.depth === 0) out += s.slice(last, m.index);
+    if (m[1] === '') {
+      if (state.depth === 0) out += HIDDEN;
+      state.depth++;
+    } else if (state.depth > 0 && --state.depth === 0) out += HIDDEN;
     last = m.index! + m[0].length;
   }
-  return out + (state.open ? HIDDEN : text.slice(last));
+  const rest = s.slice(last);
+  let keep = 0;
+  for (let n = Math.min(rest.length, TAGS[1]!.length - 1); n > 0 && keep === 0; n--) {
+    if (TAGS.some((t) => t.startsWith(rest.slice(rest.length - n).toLowerCase()))) keep = n;
+  }
+  state.held = rest.slice(rest.length - keep);
+  const shown = rest.slice(0, rest.length - keep);
+  return out + (state.depth > 0 ? HIDDEN : shown);
 }
 
-/** Every string inside a JSON value, in order. */
-const leaves = (v: unknown): string[] => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(leaves) : v !== null && typeof v === 'object' ? Object.values(v).flatMap(leaves) : []);
+/** Fields that only structure a record; their strings are not part of the text stream, and must not cut a tag in two. */
+const STRUCTURE = new Set(['type', 'id', 'tool_use_id', 'name', 'role', 'uuid', 'parentUuid', 'sessionId', 'timestamp', 'version', 'cwd', 'gitBranch', 'userType', 'entrypoint', 'requestId', 'model', 'signature', 'stop_reason', 'media_type', 'messageId']);
+
+/** Every content string inside a JSON value, in order, structural fields left out. */
+const leaves = (v: unknown): string[] =>
+  typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(leaves) : v !== null && typeof v === 'object' ? Object.entries(v).filter(([k]) => !STRUCTURE.has(k)).flatMap(([, x]) => leaves(x)) : [];
 
 /** Moves the span state through a record or block that is never mined; returns '' so a caller can use it as a hidden piece. */
-function scan(v: unknown, state: { open: boolean }): string {
+function scan(v: unknown, state: Spans): string {
   for (const t of leaves(v)) hidePrivate(t, state);
   return '';
 }
@@ -102,7 +129,7 @@ export function ownerTurns(file: string): Turn[] {
   const raw = readFileSync(file, 'utf8');
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
   const turns: Turn[] = [];
-  const state = { open: false };
+  const state: Spans = { depth: 0, held: '' };
   raw.split('\n').forEach((row, i) => {
     let o: { type?: string; isSidechain?: boolean; isMeta?: boolean; message?: { content?: unknown } };
     try {

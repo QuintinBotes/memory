@@ -385,3 +385,33 @@ test('#84.3 a span opened and closed inside a tool-result record leaves a later 
   optIn(s);
   assert.deepEqual(mined(s, 'ok', row('Deploy the service'), toolResult('a <private>hidden</private> b'), row(OWNER_A)), [OWNER_A]);
 });
+
+// ---- #85 review: tags are read from one stream, with nesting --------------------------------------------------------------
+
+const textBlocks = (...texts) => JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: texts.map((text) => ({ type: 'text', text })) } });
+
+const fresh = () => {
+  const s = setup();
+  optIn(s);
+  return s;
+};
+
+test('#85.a an open tag split across two blocks or two records still opens the span', () => {
+  assert.deepEqual(mined(fresh(), 'sa', row('Deploy the service'), toolResult('out <pri'), toolResult('vate> secret'), row(OWNER_A)), []);
+  assert.deepEqual(mined(fresh(), 'sb', row('Deploy the service'), toolResult('out <'), toolResult('private> secret'), row(OWNER_B)), []);
+  assert.deepEqual(mined(fresh(), 'sc2', row('Deploy the service'), textBlocks('<priv', 'ate> x'), row(OWNER_A)), []);
+});
+
+test('#85.b a close tag split across blocks or records closes the span, and what follows is proposed', () => {
+  assert.deepEqual(mined(fresh(), 'ca', row('Deploy the service'), toolResult('<private> secret </pri'), toolResult('vate>'), row(OWNER_A)), [OWNER_A]);
+});
+
+test('#85.c nested spans stay private until the outer one closes', () => {
+  assert.deepEqual(mined(fresh(), 'n1', row('Deploy the service'), toolResult('<private> a <private> b </private> c'), row(OWNER_A), toolResult('</private>'), row(OWNER_B)), [OWNER_B]);
+  assert.deepEqual(mined(fresh(), 'n2', row('Deploy the service'), row(`<private> a <private> b </private> ${OWNER_A} </private> done.`), row(OWNER_B)), [OWNER_B]);
+});
+
+test('#85.d a close tag with no open span is ignored and hides nothing, and never cancels a later open', () => {
+  assert.deepEqual(mined(fresh(), 'um', row('Deploy the service'), toolResult('stray </private> tag'), row(OWNER_A), row(`${OWNER_B} </private>`)).sort(), [OWNER_A, OWNER_B].sort());
+  assert.deepEqual(mined(fresh(), 'um2', row('Deploy the service'), toolResult('</private><private>'), row(OWNER_A)), []);
+});
