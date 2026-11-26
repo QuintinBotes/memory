@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Toolset items and routing (#46). `memory remember --scope global --type toolset` keeps a tool's purpose as a global item that names no repository; `memory outcome <id> accepted|rejected [--cost <n>] [--source <run>]` records a run's outcome as evidence on it (schema 18 adds `outcome` and `cost` to evidence); `memory route -- <task>` ranks the toolsets against a task by the search's own points, equal points going to more accepted outcomes, each row with its accepted and rejected counts and total cost. `memory_propose` does not take a toolset.
+
 ### Fixed
 
 - `memory purge --repo` deleted every episode in each store it opened (#82). Each failing-command episode now records its repository (schema 17; older episodes stay unknown). `--repo` deletes only that repository's episodes and keeps unknown-origin ones; `--tenant` still deletes them all. The preview lists episode counts per repository and, for kept unknown-origin episodes, names the `--tenant` command that removes them.

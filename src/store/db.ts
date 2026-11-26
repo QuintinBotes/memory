@@ -320,6 +320,14 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       CREATE INDEX IF NOT EXISTS idx_episodes_open ON episodes (session, command_key);
     `);
   },
+
+  // v18 - toolset outcomes (#46): a run's outcome with a toolset, accepted or rejected, and its cost, kept as evidence on the
+  // toolset item, so the counts are read from its evidence and deleted with it. Skipped when the columns are there, so a store
+  // rolled back by version alone still opens.
+  (db) => {
+    const has = (db.prepare('PRAGMA table_info(evidence)').all() as { name: string }[]).some((c) => c.name === 'outcome');
+    if (!has) db.exec("ALTER TABLE evidence ADD COLUMN outcome TEXT CHECK (outcome IN ('accepted', 'rejected')); ALTER TABLE evidence ADD COLUMN cost REAL;");
+  },
 ];
 const SECURE_DELETE = 6;
 

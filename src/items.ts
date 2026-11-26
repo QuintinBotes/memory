@@ -7,7 +7,7 @@ import { recordAudit } from './store/audit.ts';
 import { inTransaction } from './store/transaction.ts';
 
 export const SCOPES = ['repository', 'organisation', 'person', 'global'] as const;
-export const TYPES = ['preference', 'convention', 'decision', 'hazard', 'precedent', 'failure-pattern', 'repair-recipe', 'open_question'] as const;
+export const TYPES = ['preference', 'convention', 'decision', 'hazard', 'precedent', 'failure-pattern', 'repair-recipe', 'open_question', 'toolset'] as const;
 export type Scope = (typeof SCOPES)[number];
 /** Who an item came from. Only the owner's own `remember`, and the owner's silos, carry owner trust. */
 export const ORIGINS = ['agent', 'team', 'external', 'bot'] as const;

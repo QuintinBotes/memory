@@ -135,7 +135,7 @@ test('a store written before taint opens, migrates, and records taint', () => {
   assert.match(list(s), /Old items stay readable/);
   assert.equal(propose(s, 'A tainted one after the migration', { source: COMMENT, origin: 'external' }).isError, false);
   const after = new DatabaseSync(file, { readOnly: true });
-  assert.equal(after.prepare('PRAGMA user_version').get().user_version, 17);
+  assert.equal(after.prepare('PRAGMA user_version').get().user_version, 18);
   assert.equal(after.prepare('SELECT count(*) AS n FROM evidence WHERE taint IS NOT NULL').get().n, 1);
   after.close();
 });

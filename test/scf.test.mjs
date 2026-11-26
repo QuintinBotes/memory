@@ -503,7 +503,7 @@ test('F14 a store made by main v15 (transcripts) upgrades to v16 with its transc
     const r = await exportScf(s);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /sent 1 proposals of tenant acme/);
-    assert.deepEqual(rows(s, 'PRAGMA user_version'), [{ user_version: 17 }]);
+    assert.deepEqual(rows(s, 'PRAGMA user_version'), [{ user_version: 18 }]);
     assert.deepEqual(rows(s, "SELECT name FROM pragma_table_info('scf_links') WHERE name IN ('endpoint', 'held') ORDER BY name"), [{ name: 'endpoint' }, { name: 'held' }]);
     assert.equal(rows(s, "SELECT count(*) AS n FROM sqlite_master WHERE name = 'scf_feedback'")[0].n, 1);
     assert.equal(rows(s, 'SELECT count(*) AS n FROM scf_links')[0].n, 1);
