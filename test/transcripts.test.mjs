@@ -431,3 +431,24 @@ test('#85.f a closed private span in a sibling field leaves the text proposed, a
   assert.deepEqual(mined(fresh(), 'f1', row('Deploy the service'), textBlock({ title: 'a <private>b</private>', text: OWNER_A })), [OWNER_A]);
   assert.deepEqual(mined(fresh(), 'f2', row('Deploy the service'), textBlock({ text: OWNER_A, title: '<private>' })), [OWNER_A]);
 });
+
+// ---- #85 owner decision: records are read in their written order ----------------------------------------------------------
+
+test('#85.g an integer-like key written after message with a close tag does not close a span before the correction is read', () => {
+  const late = `{"type":"user","isSidechain":false,"message":{"role":"user","content":${JSON.stringify(OWNER_A)}},"0":"</private>"}`;
+  assert.deepEqual(mined(fresh(), 'g1', row('Deploy the service'), toolResult('<private>'), late), []);
+  const lateNested = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":${JSON.stringify(OWNER_A)}}]},"1":{"0":"</private>"}}`;
+  assert.deepEqual(mined(fresh(), 'g2', row('Deploy the service'), toolResult('<private>'), lateNested), []);
+});
+
+test('#85.h an integer-like key written before message with an open tag still hides the text, and one written after does not hide it', () => {
+  const early = `{"0":"<private>","type":"user","isSidechain":false,"message":{"role":"user","content":${JSON.stringify(OWNER_A)}}}`;
+  assert.deepEqual(mined(fresh(), 'h1', row('Deploy the service'), early), []);
+  const after = `{"type":"user","isSidechain":false,"message":{"role":"user","content":${JSON.stringify(OWNER_A)}},"0":"<private>"}`;
+  assert.deepEqual(mined(fresh(), 'h2', row('Deploy the service'), after), [OWNER_A]);
+});
+
+test('#85.i a malformed line is handled as before: its raw text moves the depth, and the next valid record is read normally', () => {
+  assert.deepEqual(mined(fresh(), 'i1', row('Deploy the service'), '{"type":"user","message":{"content":"<private> cut off', row(OWNER_A)), []);
+  assert.deepEqual(mined(fresh(), 'i2', row('Deploy the service'), '{"type":"user","message":{"content":"cut off', row(OWNER_A)), [OWNER_A]);
+});

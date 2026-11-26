@@ -110,21 +110,55 @@ function hidePrivate(text: string, state: Spans): string {
 /** The closed list of fields that can never hold user text; every other string of a record is part of the stream. */
 const NEVER_TEXT = new Set(['type', 'id', 'tool_use_id', 'role', 'uuid', 'parentUuid', 'messageId', 'sessionId', 'timestamp', 'cwd', 'version', 'gitBranch', 'userType', 'entrypoint', 'requestId']);
 
+interface Frame {
+  array: boolean;
+  index: number;
+  key: string;
+  expectKey: boolean;
+  skip: boolean;
+}
+
 /**
- * Walks every string of a record in document order, through hidePrivate, so each one moves the private depth. Returns the
- * visible text of the strings `mine` names (the owner's text), left to the caller to use; nothing else is returned.
+ * Yields the strings of one JSON line in the order they are written (JSON.parse and Object.entries reorder integer-like
+ * keys, which would let a key written late close a span early): each value with its path of keys and indices, and any key
+ * that holds a tag character. Ordinary keys are structure, not text, and fields on the never-text list are skipped with
+ * their whole value. Only valid JSON is given to it; it reads the line once, without recursion.
  */
-function walk(v: unknown, state: Spans, mine: (path: (string | number)[], parent: unknown) => boolean): string[] {
-  const out: string[] = [];
-  const go = (x: unknown, path: (string | number)[], parent: unknown): void => {
-    if (typeof x === 'string') {
-      const visible = hidePrivate(x, state);
-      if (mine(path, parent)) out.push(visible);
-    } else if (Array.isArray(x)) x.forEach((e, i) => go(e, [...path, i], x));
-    else if (x !== null && typeof x === 'object') for (const [k, e] of Object.entries(x)) if (!NEVER_TEXT.has(k)) go(e, [...path, k], x);
-  };
-  go(v, [], null);
-  return out;
+function* writtenStrings(row: string): Generator<{ path: (string | number)[]; text: string; key: boolean }> {
+  const stack: Frame[] = [];
+  const pathOf = (): (string | number)[] => stack.map((f) => (f.array ? f.index : f.key));
+  let i = 0;
+  while (i < row.length) {
+    const c = row[i]!;
+    const top = stack[stack.length - 1];
+    if (c === '{' || c === '[') {
+      stack.push({ array: c === '[', index: 0, key: '', expectKey: c === '{', skip: false });
+      i++;
+    } else if (c === '}' || c === ']') {
+      stack.pop();
+      i++;
+    } else if (c === ',') {
+      if (top?.array) top.index++;
+      else if (top) {
+        top.expectKey = true;
+        top.skip = false;
+      }
+      i++;
+    } else if (c === ':') {
+      if (top) top.expectKey = false;
+      i++;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < row.length && row[j] !== '"') j += row[j] === '\\' ? 2 : 1;
+      const text = JSON.parse(row.slice(i, j + 1)) as string;
+      i = j + 1;
+      if (top !== undefined && !top.array && top.expectKey) {
+        top.key = text;
+        top.skip = NEVER_TEXT.has(text);
+        if (!stack.some((f) => f.skip) && /[<>]/.test(text)) yield { path: pathOf().slice(0, -1), text, key: true };
+      } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text, key: false };
+    } else i++;
+  }
 }
 
 /**
@@ -145,11 +179,17 @@ export function ownerTurns(file: string): Turn[] {
       hidePrivate(row, state);
       return;
     }
-    // Every string of every record moves the span state, in order; only an owner's text block (or string content) is mined.
+    // Every string of every record moves the span state, in written order; only an owner's text block (or string content) is mined.
     const eligible = o?.type === 'user' && o.isSidechain !== true && o.isMeta !== true;
-    const mine = (path: (string | number)[], parent: unknown): boolean =>
-      eligible && path[0] === 'message' && path[1] === 'content' && (path.length === 2 || (path.length === 4 && path[3] === 'text' && (parent as { type?: unknown } | null)?.type === 'text'));
-    const flat = scrub(walk(o, state, mine).join(' ')).replace(/\s+/g, ' ').trim();
+    const content = (o as { message?: { content?: unknown } } | null)?.message?.content;
+    const mine = (path: (string | number)[]): boolean =>
+      eligible && path[0] === 'message' && path[1] === 'content' && (path.length === 2 || (path.length === 4 && path[3] === 'text' && (content as { type?: unknown }[] | undefined)?.[path[2] as number]?.type === 'text'));
+    const pieces: string[] = [];
+    for (const t of writtenStrings(row)) {
+      const visible = hidePrivate(t.text, state);
+      if (!t.key && mine(t.path)) pieces.push(visible);
+    }
+    const flat = scrub(pieces.join(' ')).replace(/\s+/g, ' ').trim();
     if (flat !== '' && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
   return turns;

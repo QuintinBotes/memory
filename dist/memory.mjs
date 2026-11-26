@@ -4863,19 +4863,41 @@ function hidePrivate(text4, state) {
   return out + (state.depth > 0 ? HIDDEN : shown);
 }
 var NEVER_TEXT = /* @__PURE__ */ new Set(["type", "id", "tool_use_id", "role", "uuid", "parentUuid", "messageId", "sessionId", "timestamp", "cwd", "version", "gitBranch", "userType", "entrypoint", "requestId"]);
-function walk(v, state, mine) {
-  const out = [];
-  const go = (x, path, parent) => {
-    if (typeof x === "string") {
-      const visible2 = hidePrivate(x, state);
-      if (mine(path, parent)) out.push(visible2);
-    } else if (Array.isArray(x)) x.forEach((e, i) => go(e, [...path, i], x));
-    else if (x !== null && typeof x === "object") {
-      for (const [k, e] of Object.entries(x)) if (!NEVER_TEXT.has(k)) go(e, [...path, k], x);
-    }
-  };
-  go(v, [], null);
-  return out;
+function* writtenStrings(row4) {
+  const stack = [];
+  const pathOf = () => stack.map((f) => f.array ? f.index : f.key);
+  let i = 0;
+  while (i < row4.length) {
+    const c = row4[i];
+    const top = stack[stack.length - 1];
+    if (c === "{" || c === "[") {
+      stack.push({ array: c === "[", index: 0, key: "", expectKey: c === "{", skip: false });
+      i++;
+    } else if (c === "}" || c === "]") {
+      stack.pop();
+      i++;
+    } else if (c === ",") {
+      if (top?.array) top.index++;
+      else if (top) {
+        top.expectKey = true;
+        top.skip = false;
+      }
+      i++;
+    } else if (c === ":") {
+      if (top) top.expectKey = false;
+      i++;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < row4.length && row4[j] !== '"') j += row4[j] === "\\" ? 2 : 1;
+      const text4 = JSON.parse(row4.slice(i, j + 1));
+      i = j + 1;
+      if (top !== void 0 && !top.array && top.expectKey) {
+        top.key = text4;
+        top.skip = NEVER_TEXT.has(text4);
+        if (!stack.some((f) => f.skip) && /[<>]/.test(text4)) yield { path: pathOf().slice(0, -1), text: text4, key: true };
+      } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text: text4, key: false };
+    } else i++;
+  }
 }
 function ownerTurns(file) {
   const raw = readFileSync12(file, "utf8");
@@ -4891,8 +4913,14 @@ function ownerTurns(file) {
       return;
     }
     const eligible2 = o?.type === "user" && o.isSidechain !== true && o.isMeta !== true;
-    const mine = (path, parent) => eligible2 && path[0] === "message" && path[1] === "content" && (path.length === 2 || path.length === 4 && path[3] === "text" && parent?.type === "text");
-    const flat = scrub(walk(o, state, mine).join(" ")).replace(/\s+/g, " ").trim();
+    const content = o?.message?.content;
+    const mine = (path) => eligible2 && path[0] === "message" && path[1] === "content" && (path.length === 2 || path.length === 4 && path[3] === "text" && content?.[path[2]]?.type === "text");
+    const pieces = [];
+    for (const t of writtenStrings(row4)) {
+      const visible2 = hidePrivate(t.text, state);
+      if (!t.key && mine(t.path)) pieces.push(visible2);
+    }
+    const flat = scrub(pieces.join(" ")).replace(/\s+/g, " ").trim();
     if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
   return turns;
