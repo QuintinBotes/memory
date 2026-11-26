@@ -202,7 +202,8 @@ export function commandPassed(data: string, input: Record<string, unknown>): str
 
 /** The same command passing in the same session as an open episode: the episode closes and, when its signature can be recalled, a repair is proposed. */
 function repairOpenEpisodes(db: DatabaseSync, repo: { tenant: string; repository: string }, session: string, command: string, cwd: string): void {
-  const open = db.prepare('SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?').all(session, key(command, cwd), cutoff()) as
+  // An episode with no repository predates schema v17 and is matched as before.
+  const open = db.prepare('SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND (repository = ? OR repository IS NULL) AND repaired_at IS NULL AND at >= ?').all(session, key(command, cwd), repo.repository, cutoff()) as
     { id: string; command: string; fingerprint: string; signature: string; head: string }[];
   if (open.length === 0) return;
   const now = git(cwd, 'rev-parse', 'HEAD')?.trim() ?? '';

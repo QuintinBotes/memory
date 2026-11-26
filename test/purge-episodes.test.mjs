@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { setup, remember, run, runAsync, storeBytes } from './helpers.mjs';
+import { setup, remember, run, runAsync, storeBytes, commit } from './helpers.mjs';
 
 // #82: purge --repo deletes only that repository's episodes; those of unknown origin stay until --tenant.
 const ERROR = (word) => `node:internal/modules/esm/resolve:873\nError [ERR_MODULE_NOT_FOUND]: Cannot find package '${word}' imported from /work/a/scripts/build.mjs\nNode.js v22.13.0\n`;
@@ -89,4 +89,34 @@ test('#82 review: one session, command and fingerprint failing in two repositori
   assert.deepEqual(repos(s), ['acme/api', 'acme/web']);
   assert.equal(purge(s, '--repo', 'acme/api', '--confirm').status, 0);
   assert.deepEqual(repos(s), ['acme/web']);
+});
+
+// #89: a pass repairs only the open episode of its own repository; one of unknown origin is repaired as before.
+const passed = (s, cwd, session, command) =>
+  runAsync(['command-passed'], { cwd, data: s.data, config: s.configA, input: JSON.stringify({ session_id: session, tool_name: 'Bash', tool_input: { command }, cwd, hook_event_name: 'PostToolUse', tool_response: { stdout: 'ok' } }) });
+const openRepos = (s) => sql(s, 'SELECT repository FROM episodes WHERE repaired_at IS NULL ORDER BY repository').map((r) => r.repository);
+
+test('#89 sc1: the same command failing in two repositories, passing in one, repairs only that repository\'s episode', async () => {
+  const s = setup();
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Builds run from the repository root', '--scope', 'repository').status, 0);
+  assert.equal(run(['init', '--failing-commands', 'on', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
+  assert.equal((await failed(s, s.acmeApi, 'same', 'npm run build', 'samepackagezq')).status, 0);
+  assert.equal((await failed(s, s.acmeWeb, 'same', 'npm run build', 'samepackagezq')).status, 0);
+  commit(s.acmeApi, { 'fix.txt': 'fixed\n' }, 'the fix');
+  const r = await passed(s, s.acmeApi, 'same', 'npm run build');
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(openRepos(s), ['acme/web']);
+});
+
+test('#89 sc2: an open episode with no repository is repaired when the command passes', async () => {
+  const s = setup();
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Builds run from the repository root', '--scope', 'repository').status, 0);
+  assert.equal(run(['init', '--failing-commands', 'on', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
+  assert.equal((await failed(s, s.acmeApi, 'old', 'npm run build', 'oldpackagezq')).status, 0);
+  const db = new DatabaseSync(file(s));
+  db.exec('UPDATE episodes SET repository = NULL');
+  db.close();
+  commit(s.acmeApi, { 'fix.txt': 'fixed\n' }, 'the fix');
+  assert.equal((await passed(s, s.acmeApi, 'old', 'npm run build')).status, 0);
+  assert.deepEqual(openRepos(s), []);
 });

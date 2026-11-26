@@ -5399,7 +5399,7 @@ function commandPassed(data, input2) {
   }
 }
 function repairOpenEpisodes(db, repo, session, command, cwd) {
-  const open = db.prepare("SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND repaired_at IS NULL AND at >= ?").all(session, key(command, cwd), cutoff2());
+  const open = db.prepare("SELECT id, command, fingerprint, signature, head FROM episodes WHERE session = ? AND command_key = ? AND (repository = ? OR repository IS NULL) AND repaired_at IS NULL AND at >= ?").all(session, key(command, cwd), repo.repository, cutoff2());
   if (open.length === 0) return;
   const now = git2(cwd, "rev-parse", "HEAD")?.trim() ?? "";
   const fixed = open.filter((e) => now !== "" && now !== e.head);
