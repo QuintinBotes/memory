@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Transcripts outside a tenant, and a model pass (#80). Consent plan version 12 adds two categories; until you agree again neither runs. With the transcripts opt-in on, a session whose directory matches no tenant records its transcript path in the person file, and the next session start or `memory sweep` turns a correction about your own habits into a person proposal quoting you verbatim; one that names a path, code or a repository is not kept. `memory corrections` is an offline model pass, never in a hook and off unless `transcriptModel` is set in `config.json`: by default a local Ollama at `http://127.0.0.1:11434` with Inkling 2 Mini (`inkling-2-mini`), which you install; memory never downloads it. It runs through the shared provider runner (120-second limit, SIGKILL, capped output), stops asking after the first failure, and keeps only quotes found verbatim in your redacted messages. A tenant's messages go only to a model on this machine; with a remote address the pass skips every tenant and says so.
+
 ### Fixed
 
 - `memory purge --repo` deleted every episode in each store it opened (#82). Each failing-command episode now records its repository (schema 17; older episodes stay unknown). `--repo` deletes only that repository's episodes and keeps unknown-origin ones; `--tenant` still deletes them all. The preview lists episode counts per repository and, for kept unknown-origin episodes, names the `--tenant` command that removes them.

@@ -5,27 +5,31 @@ export const PROVIDER_TIMEOUT_MS = 5000;
 export const PROVIDER_MAX_OUTPUT = 4 * 1024 * 1024;
 
 /**
- * Runs the configured provider command, the one runner every provider call uses (impact recall, symbol anchors). The
+ * Runs the configured provider command, the one runner every provider call uses (impact recall, symbol anchors, the transcript model). The
  * command is an absolute program with arguments (config checks), run without a shell, with `request` as one JSON line on
  * stdin. Only PATH and HOME reach it; the data directory and keys in the environment do not. SIGKILL ends it at the timeout
  * (SIGTERM can be trapped), and its output is capped. `stdout` is returned only when it exited 0 in time.
  */
-export function runProvider(command: readonly string[], cwd: string, request: unknown): { ok: true; stdout: string } | { ok: false; reason: string } {
+export function runProvider(command: readonly string[], cwd: string, request: unknown, timeoutMs = PROVIDER_TIMEOUT_MS): { ok: true; stdout: string } | { ok: false; reason: string } {
   const [program, ...args] = command as [string, ...string[]];
   const r = spawnSync(program, args, {
     cwd,
     env: { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '' },
     input: `${JSON.stringify(request)}\n`,
     encoding: 'utf8',
-    timeout: PROVIDER_TIMEOUT_MS,
+    timeout: timeoutMs,
     killSignal: 'SIGKILL',
     maxBuffer: PROVIDER_MAX_OUTPUT,
     stdio: ['pipe', 'pipe', 'ignore'],
   });
-  if (r.error !== undefined) return { ok: false, reason: `${program} ${(r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ? `did not answer within ${PROVIDER_TIMEOUT_MS} ms` : `failed: ${r.error.message}`}` };
+  if (r.error !== undefined) return { ok: false, reason: `${program} ${(r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ? `did not answer within ${timeoutMs} ms` : `failed: ${r.error.message}`}` };
   if (r.status !== 0) return { ok: false, reason: `${program} exited ${r.status ?? 'by signal'}` };
   return { ok: true, stdout: r.stdout };
 }
+
+/** A model reading a whole transcript is slower than a provider lookup. Only the test harness shortens it, as programTimeoutMs. */
+export const modelTimeoutMs = (env: NodeJS.ProcessEnv = process.env): number =>
+  env['MEMORY_TEST_HARNESS'] === '1' && env['MEMORY_PROGRAM_TIMEOUT_MS'] !== undefined ? programTimeoutMs(env) : 120_000;
 
 /** What a program memory runs for itself (git) may see: no key, token or path of the environment reaches it. */
 const PASS_THROUGH = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'];

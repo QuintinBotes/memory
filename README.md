@@ -232,7 +232,17 @@ proposals: `memory review` and `memory approve` as ever.
   `memory recall --orbit` (by fingerprint or check), never at a Bash failure.
 - `memory init --transcripts on --confirm` is a separate opt-in, off by default: memory records each
   session's transcript path, and at the next session start turns your corrections in it into proposals that
-  quote your words verbatim (see the consent plan).
+  quote your words verbatim (see the consent plan). A session outside every tenant is recorded in the person
+  file, and a correction about your own habits there becomes a person proposal; one that names a path, code
+  or a repository is not kept.
+- `memory corrections` is an offline model pass over those transcripts, never run by a hook and off unless
+  `transcriptModel` is set in `config.json`: `{"transcriptModel": {}}` uses a local Ollama at
+  `http://127.0.0.1:11434` and the model `inkling-2-mini` (Inkling 2 Mini), which you install with Ollama;
+  memory never downloads a model. `url` and `model` change them, and `command` names a program speaking the
+  [provider protocol](docs/provider.md) (op `corrections`) in place of memory's own Ollama client. Only a quote
+  found verbatim in your own redacted message is kept. A tenant's messages go only to a model at 127.0.0.1,
+  localhost or [::1]; with any other address the pass runs for the person file only, and says so. The first
+  failure, time-out (120 seconds) or oversized answer ends the run.
 - `memory init --failing-commands on --confirm` is a separate opt-in, off by
   default. With it, a failed Bash command is kept as an episode (scrubbed error
   line, the command's program and subcommand only such as `npm run build`, never
