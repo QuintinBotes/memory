@@ -13,6 +13,8 @@ import { displayPath, judge, loadInstructions, type Withheld } from '../instruct
 import { logWithheld } from '../store/injections.ts';
 import { ORIGINS, PERSON_SCOPE, SCOPES, TENANT_SCOPE, TYPES, quarantineOf, taintList, type Anchor, type NewItem, type Scope, type Trust } from '../items.ts';
 import { READS_EXPIRED, band, confidence, rank, searchTerms } from '../recall/rank.ts';
+import { fuse, type Ranker } from '../recall/fuse.ts';
+import { rerank } from '../recall/rerank.ts';
 import { similarities } from '../recall/semantic.ts';
 import { related, relatedTarget } from '../recall/related.ts';
 import { visibleItems } from '../recall/visible.ts';
@@ -175,9 +177,12 @@ async function search(args: Args, data: string, config: Config, context: Context
   const items = visibleItems(data, context, cwd, searchTerms(query), undefined, withheld, reach);
   logWithheld(data, config, 'memory_search', 'mcp', withheld);
   const semantic = await similarities(data, context, config, query, items);
-  const hits = rank(items, elsewhere ? [] : relativePaths, Date.now(), 'similarity' in semantic ? semantic.similarity : undefined, undefined, [], context.repository);
+  const now = Date.now();
+  const ranked: Ranker = (list, similarity, near) => rank(list, elsewhere ? [] : relativePaths, now, similarity, undefined, [], context.repository, near);
+  const fused = semantic !== null && 'similarity' in semantic ? fuse(items, semantic.similarity, ranked) : ranked(items);
+  const { hits, note: reranked } = await rerank(config, context, query, fused);
   // The notes sit outside the fence: they are memory's own sentences, not items.
-  const note = ('note' in semantic ? `${semantic.note}\n` : '') + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach!.repository} is not this checkout.\n` : '');
+  const note = (semantic !== null && 'note' in semantic ? `${semantic.note}\n` : '') + (reranked === undefined ? '' : `${reranked}\n`) + (elsewhere && paths.length > 0 ? `Paths are not matched against anchors: ${reach!.repository} is not this checkout.\n` : '');
   if (hits.length === 0) return `${note}No memory item matches.`;
   return note + fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why, LEAN_ROW_TOKENS)}\n`).join(''));
 }

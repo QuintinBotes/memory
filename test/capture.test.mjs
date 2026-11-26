@@ -234,7 +234,7 @@ test('S6c a version 3 consent covers capture but not embeddings; confirming the 
   assert.equal(vectors(), 0, 'embeddings did not');
 
   const init = run(['init'], { cwd: s.acmeApi, data: s.data, config: s.configA });
-  assert.match(init.stderr, /Embeddings, with the provider/);
+  assert.match(init.stderr, /Embeddings, only when embeddings in config.json names a provider/);
   assert.doesNotMatch(init.stderr, /sent to Anthropic's API/);
   assert.equal(run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 12);

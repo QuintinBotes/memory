@@ -39,13 +39,16 @@ through which agents search, read, propose and give feedback. The plan is tracke
 - **Small and cache-friendly.** Every recall has a budget, whole items are
   dropped rather than cut, and the session slice is byte-identical for the
   same store, so it never breaks the prompt cache.
-- **Measured before it is on.** Automatic capture and hybrid recall are on by
-  default (decision #43); every other capability ships off and is turned on
-  only when its on/off measurement shows it is no worse.
-- **Hybrid recall.** Recall is lexical, vector and graph, behind a provider
-  interface; the default provider is voyage-4. Vectors are kept in the
-  tenant's own file. Without a key or a network, recall falls back to words
-  and paths and says so.
+- **Measured before it is on.** Automatic capture is on by default (decision
+  #43); every other capability ships off and is turned on only when its on/off
+  measurement shows it is no worse. The semantic leg and the reranker (#28)
+  are off until you name a model for them.
+- **Hybrid recall, opt-in.** A semantic leg, behind a provider interface, is
+  fused with the keyword ranking when you name an embedder in `config.json`
+  (off by default; a local Ollama is the one a tenant may use), and a local
+  generative model may rerank the top rows (#28). Vectors are kept in the
+  tenant's own file. Without it, recall uses words and paths and,
+  when the leg was asked for, says why it was skipped.
 - **Local where it counts.** The store never leaves this machine. What does
   leave is listed in [SECURITY.md](SECURITY.md): the text sent to the embedding
   provider; at the end of a session, the redacted transcript sent to the
@@ -662,12 +665,16 @@ reject, purge or change the configuration, and nothing they write is active.
   (repository 2, organisation or person 1, global 0.5, plus 0.5 for a person or global item learned in the current repository), full-text relevance up
   to 2 (none below 20% of the best match), confidence up to 2, and minus 1 per
   contradiction. Ties go to support, then id. `why` lists every point.
-  With embeddings (below) the sum gains two parts: `semantic`, up to 4 points
-  for the cosine of the item's vector with the query's (nothing under 0.35, so
-  a close vector alone makes an item a hit), and `graph`, 1 point for an item
-  sharing an anchored path with one of the three best hits, which may enter
-  the results that way. Both are provisional until the evaluation slice
-  tunes them. Budgets, the 10-row limit and the advisory fence do not change.
+  With the semantic leg on (Embeddings, below), the keyword ranking above and
+  the leg's ranking (items whose vector's cosine with the query's is 0.35 or
+  more, closest first) and the graph list (items sharing an anchored path with
+  one of the three best keyword or three best semantic hits, by support) are
+  fused by reciprocal rank fusion with k = 60: each item scores the sum of
+  1 / (60 + its rank) over the lists it is in. A row keeps every keyword
+  point, adds `semantic`, up to 4 points for its cosine, and `graph 1` when it
+  is in the graph list, and ends with its fused score as `rrf`. With the
+  reranker on (below), each row also ends with its new place as `rerank`. Budgets, the 10-row limit and the
+  advisory fence do not change.
 - `memory_get(id, format?)` returns one item whole, with its evidence and
   anchor status, as rows or as JSON with `format: "json"`.
 - `memory_related(path_or_symbol, depth?)` returns every active item anchored
@@ -708,16 +715,34 @@ reject, purge or change the configuration, and nothing they write is active.
 
 ## Embeddings
 
-`memory_search` embeds its query and compares it with the vectors of the
-items it may see. Embeddings come from a provider named in `config.json`:
+The semantic leg (#28) is off by default. `memory_search` and
+`memory recall --diff` (whose query is the changed files' names) use it; no
+hook ever does, and hook output is byte-identical with it on. It needs two
+things:
 
-```json
-"embeddings": { "provider": "voyage", "model": "voyage-4" }
-```
+1. An embedder named in `config.json`. The one meant for it is a local
+   [Ollama](https://ollama.com), the same server the corrections model pass
+   uses, with an embedding model you install yourself (`ollama pull bge-m3`,
+   or `nomic-embed-text`); memory never downloads a model:
 
-`voyage` (the default) calls Voyage AI's embeddings endpoint with
-`VOYAGE_API_KEY` from the environment of the process; `fake` is a
-deterministic offline provider for tests. Changing the key swaps the provider
+   ```json
+   "embeddings": { "provider": "ollama", "model": "bge-m3", "url": "http://127.0.0.1:11434" }
+   ```
+
+   `model` defaults to `bge-m3` and `url` to `http://127.0.0.1:11434`.
+   `voyage` calls Voyage AI's embeddings endpoint with `VOYAGE_API_KEY` from
+   the environment of the process; `fake` is a deterministic offline provider
+   for tests.
+2. An embedder on this machine for a tenant. Every tenant is treated as a
+   client tenant: its text goes only to an address of `127.0.0.1`,
+   `localhost` or `[::1]`, so Voyage, or an Ollama elsewhere, embeds the
+   person file's items only, and search in a tenant refuses it.
+
+The head-to-head replay's vocabulary-miss share (`eval/head-to-head/<tenant>/last.json`)
+says how often words alone missed; it is information for deciding to turn the
+leg on, not a gate.
+
+Changing the key swaps the provider
 with no code change; a vector from another model is not used until
 `memory embed --backfill` embeds the item again. Each vector sits in the
 same SQLite file as its item, with its model and size, and a purge deletes it
@@ -727,11 +752,33 @@ reading like an instruction never is. `memory embed --backfill` embeds every
 active item that has no vector.
 
 Embeddings are part of the consent plan: they stay off until you run
-`memory init` and confirm it. With no key, no network, or no vectors, search
-ranks by words and paths as before and prints one line saying embeddings were
-not used and why. A search waits at most 1.5 seconds for the provider. The
-session-start slice has no query and never calls it. Similarity is computed in
+`memory init` and confirm it. When the leg is configured but cannot run (an
+embedder elsewhere, no key, the embedder down or failing, or no
+vectors), search ranks by words and paths as before and prints one line saying
+the semantic leg was skipped and why. A search waits at most 1.5 seconds for
+the provider. Vectors are derived data: a purge deletes them with their item,
+and a new model's are rebuilt with `memory embed --backfill`, never migrated. Similarity is computed in
 memory over the tenant's vectors, which is fine to about 50,000 items.
+
+### Reranking
+
+A local generative model can reorder the rows `memory_search` and
+`memory recall --diff` found, on the same Ollama server. It is off unless
+`config.json` names it:
+
+```json
+"rerank": { "model": "inkling-2-mini", "url": "http://127.0.0.1:11434" }
+```
+
+`model` defaults to Inkling 2 Mini (`inkling-2-mini`), not pinned: you install
+it, and memory never downloads a model. `url` defaults to the loopback Ollama.
+The query and the rows' statements are sent to `/api/generate`; for a tenant
+only to an address of `127.0.0.1`, `localhost` or `[::1]`. The model answers
+an order, each row adds its new place as `rerank`, and a row it leaves out
+keeps its place after the ones it ranked. No hook ever calls it. When it is
+refused, fails, answers no order or takes more than 3 seconds, the rows keep
+their fused order and one line says the rerank was skipped and why. It falls
+under the embeddings consent category.
 
 Confidence is computed on read as `min(1, 0.5^(age/90 days) × 1.1^helped ×
 0.8^wrong)`, age counted from the last approval, `remember` or `helped`, and
