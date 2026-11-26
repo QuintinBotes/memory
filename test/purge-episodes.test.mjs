@@ -70,9 +70,23 @@ test('#82 sc3: purge --tenant deletes every episode in the tenant, attributed or
 test('#82 migration: v17 adds the column to a v16 store and its old episodes stay unknown', async () => {
   const s = await seeded();
   const db = new DatabaseSync(file(s));
-  db.exec('ALTER TABLE episodes DROP COLUMN repository; PRAGMA user_version = 16;');
+  // The v16 table: no repository column, and the unique key without it.
+  db.exec(`CREATE TABLE old (id TEXT PRIMARY KEY, session TEXT NOT NULL, command_key TEXT NOT NULL, command TEXT NOT NULL, fingerprint TEXT NOT NULL, signature TEXT NOT NULL, head TEXT NOT NULL, at TEXT NOT NULL, repaired_at TEXT, UNIQUE (session, command_key, fingerprint));
+    INSERT INTO old SELECT id, session, command_key, command, fingerprint, signature, head, at, repaired_at FROM episodes;
+    DROP TABLE episodes; ALTER TABLE old RENAME TO episodes; CREATE INDEX idx_episodes_open ON episodes (session, command_key); PRAGMA user_version = 16;`);
   db.close();
   assert.equal(purge(s, '--repo', 'acme/api').status, 0);
   assert.deepEqual(repos(s), [null, null]);
   assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 17);
+});
+
+test('#82 review: one session, command and fingerprint failing in two repositories is two episodes, and purging one keeps the other', async () => {
+  const s = setup();
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Builds run from the repository root', '--scope', 'repository').status, 0);
+  assert.equal(run(['init', '--failing-commands', 'on', '--confirm'], { cwd: s.base, data: s.data, config: s.configA }).status, 0);
+  assert.equal((await failed(s, s.acmeApi, 'same', 'npm run build', 'samepackagezq')).status, 0);
+  assert.equal((await failed(s, s.acmeWeb, 'same', 'npm run build', 'samepackagezq')).status, 0);
+  assert.deepEqual(repos(s), ['acme/api', 'acme/web']);
+  assert.equal(purge(s, '--repo', 'acme/api', '--confirm').status, 0);
+  assert.deepEqual(repos(s), ['acme/web']);
 });
