@@ -124,7 +124,7 @@ test('schema 14 backfills repository items from their scope key and leaves the r
   assert.equal(originOf(s, WEB, 'tenants/acme.sqlite'), 'acme/web');
   assert.equal(originOf(s, ORG, 'tenants/acme.sqlite'), null);
   assert.equal(originOf(s, P_API, 'person.sqlite'), null);
-  assert.equal(rows(s, 'person.sqlite', 'PRAGMA user_version')[0].user_version, 15);
+  assert.equal(rows(s, 'person.sqlite', 'PRAGMA user_version')[0].user_version, 16);
 });
 
 // --- list and export filters

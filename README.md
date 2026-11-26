@@ -229,6 +229,9 @@ proposals: `memory review` and `memory approve` as ever.
   show failing and then passing. Orbit stores a fingerprint hash, not error
   text, so these are keyed by it: they are recalled only through
   `memory recall --orbit` (by fingerprint or check), never at a Bash failure.
+- `memory init --transcripts on --confirm` is a separate opt-in, off by default: memory records each
+  session's transcript path, and at the next session start turns your corrections in it into proposals that
+  quote your words verbatim (see the consent plan).
 - `memory init --failing-commands on --confirm` is a separate opt-in, off by
   default. With it, a failed Bash command is kept as an episode (scrubbed error
   line, the command's program and subcommand only such as `npm run build`, never

@@ -9,14 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Transcripts, opt-in (#12). `memory init --transcripts on --confirm` is a separate opt-in, off by
+  default, and a new consent category (plan version 10): until you agree again nothing is recorded.
+  With it on, the `SessionEnd` hook (`memory transcript`) records only the transcript's path in the
+  session's tenant file (schema 15, table `transcripts`); the next session start or `memory sweep`
+  reads that file on this machine, takes the owner's own messages (never agent output, subagent
+  records or tool results; `<private>` spans and a `DO NOT INDEX THIS CHAT` transcript are skipped),
+  redacts them, and turns each correction sentence into one proposal that quotes the words verbatim,
+  owner trust, with the session and line as its source. A quote that is not verbatim is dropped; a
+  transcript deleted first is skipped and counted in the audit log. Only quote and source are kept;
+  records are deleted after 30 days and by `memory purge`. A session in no tenant records nothing.
+  `PostCompact` keeps the redacted compaction summary as an episode, only under this opt-in.
+  `<private>` spans are tracked across the whole transcript and a sentence touching one is never quoted; the transcript is only opened at processing (SessionEnd reads the environment, not the file); `memory purge --repo` deletes only that repository's records; expiry runs on every sweep whatever the opt-in and each deletion is audited once (`transcripts_expired`); whether a transcript reads as automation is decided from its recording environment and its own entrypoint, never the sweeping process. Corrections are found by deterministic cues first; the offline small-model batch is not built yet.
 - Export memory as SCF. `memory export --to scf [--repo | --all-repos]` posts a
   tenant's proposed repository and organisation items to the SCF set for it
   (`memory init --scf <tenant>=<url>`, key in `SCF_API_KEY`) as world proposals
   with layer `memory` and their evidence, once each; `memory import --scf` brings
   back SCF's approvals and rejections and counts run outcomes as helped and wrong.
-  Schema 15 adds `scf_links` and `scf_feedback`. The person file and other tenants
+  Schema 16 adds `scf_links` and `scf_feedback`. The person file and other tenants
   are never sent, text redaction would change is withheld, and an unreachable SCF
-  changes nothing. New consent category `scf` (plan version 10).
+  changes nothing. New consent category `scf` (plan version 11).
 
 - Filter memory by repository, and record where each item came from. Schema 14
   adds `origin_repository` (null = unknown) to every item; `remember`, `capture`,

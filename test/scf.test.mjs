@@ -324,7 +324,7 @@ test('F4 the plan the owner confirms names each tenant\'s SCF destination', asyn
 test('F5 an unreachable SCF leaves the store file byte for byte as it was, even one that would migrate', async () => {
   const { s, acmeScf, betaScf } = await configured();
   propose(s, s.acmeApi, s.configA, 'The cache is cleared on deploy');
-  withDb(s, (d) => d.exec('DROP TABLE scf_links; DROP TABLE scf_feedback; PRAGMA user_version = 14;'));
+  withDb(s, (d) => d.exec('DROP TABLE scf_links; DROP TABLE scf_feedback; PRAGMA user_version = 15;'));
   const before = sha(s);
   await acmeScf.close();
   try {

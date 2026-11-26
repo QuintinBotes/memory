@@ -35,6 +35,8 @@ export type AuditAction =
   | 'promotion_rejected'
   | 'scf_exported'
   | 'scf_feedback'
+  | 'transcripts_processed'
+  | 'transcripts_expired'
   | 'undone';
 
 export function recordAudit(

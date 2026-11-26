@@ -255,7 +255,25 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     db.exec("UPDATE items SET origin_repository = scope_key WHERE scope = 'repository' AND origin_repository IS NULL;");
   },
 
-  // v15 - SCF export (#13): the proposal an item was sent as, and the run outcomes already counted from SCF, so an export
+  // v15 - transcripts, opt-in (#12): where a session's transcript is, recorded by the SessionEnd hook and read at the next
+  // session start or sweep, and the redacted compaction summaries kept as episodes. Never the transcript's text; deleted
+  // after 30 days.
+  `
+  CREATE TABLE IF NOT EXISTS transcripts (
+    id TEXT PRIMARY KEY,
+    session TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('path', 'summary')),
+    repository TEXT NOT NULL,
+    path TEXT,
+    summary TEXT,
+    at TEXT NOT NULL,
+    processed_at TEXT,
+    outcome TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_transcripts_open ON transcripts (kind, processed_at);
+  `,
+
+  // v16 - SCF export (#13): the proposal an item was sent as, and the run outcomes already counted from SCF, so an export
   // run twice posts nothing new and a feedback import run twice counts nothing twice. A link names the SCF it went to, so a changed address starts afresh. Deleted with the item.
   `
   CREATE TABLE IF NOT EXISTS scf_links (
