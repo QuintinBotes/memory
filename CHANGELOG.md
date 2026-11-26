@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Capture from other agents (#48). `memory capture` reads a Codex session log as it reads a Claude Code transcript, and the source of what it keeps names the agent (`capture:codex:<session>:<file>`). A log in a format no adapter knows is skipped, reported in the run's summary and recorded as `skipped` in `logs/capture.jsonl`; nothing is saved from it. A proposal made through the MCP tools records the client's name from `initialize` on its evidence (`extractor` `mcp:<name>`), so an agent with no adapter is still named. No schema change.
+
 ### Fixed
 
 - `memory purge --repo` deleted every episode in each store it opened (#82). Each failing-command episode now records its repository (schema 17; older episodes stay unknown). `--repo` deletes only that repository's episodes and keeps unknown-origin ones; `--tenant` still deletes them all. The preview lists episode counts per repository and, for kept unknown-origin episodes, names the `--tenant` command that removes them.

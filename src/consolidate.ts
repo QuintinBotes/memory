@@ -132,8 +132,8 @@ function mergeEvidence(db: DatabaseSync, id: string, c: NewItem): Stored {
     if (db.prepare('SELECT 1 FROM evidence WHERE item_id = ? AND source_ref = ?').get(id, c.source) !== undefined) return { kind: 'known', id };
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
-       VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`,
-    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? new Date().toISOString(), cleanTaint(c.taint));
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(evidenceId, id, c.source, trust, sha256(c.statement), c.evidenceAt ?? new Date().toISOString(), c.extractor ?? 'deterministic', cleanTaint(c.taint));
     db.prepare('UPDATE items SET support = support + ? WHERE id = ?').run(delta, id);
     const audit = recordAudit(db, 'evidence_merged', { type: 'item', id }, { evidenceId, supportDelta: delta, trust });
     const { support } = db.prepare('SELECT support FROM items WHERE id = ?').get(id) as { support: number };

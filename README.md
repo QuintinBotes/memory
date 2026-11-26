@@ -611,6 +611,15 @@ repository that matches no tenant is skipped: no model call, nothing written.
   SDK, a GitHub Actions job) neither captures nor proposes unless the consent plan names
   them: `memory init --automation on --confirm`. See SECURITY.md for how a
   session is told apart and what that cannot see.
+- **Other agents:** capture reads a Codex session log
+  (`~/.codex/sessions/.../rollout-*.jsonl`) as it reads a Claude Code
+  transcript, and names the agent in the source (`capture:codex:...`). Run
+  `memory capture` from the agent's own end-of-session hook with JSON on stdin
+  that names `transcript_path`, `session_id` and `cwd`. A log in a format no
+  adapter knows is skipped, never guessed at: the run reports it and
+  `logs/capture.jsonl` records it as `skipped`. An agent with no adapter can
+  still write through the MCP tools; each proposal's evidence names the client
+  that wrote it (`mcp:<clientInfo name>`).
 
 ```json
 { "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }

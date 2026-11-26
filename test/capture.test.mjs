@@ -340,3 +340,47 @@ test('the default filter model is claude-haiku-5-5', () => {
   capture(s, s.acmeApi, transcript(s, ['x']), 's1', { net: true, netLog, env: { ANTHROPIC_API_KEY: 'sk-test-key' } });
   assert.equal(JSON.parse(JSON.parse(readFileSync(netLog, 'utf8').trim()).body).model, 'claude-haiku-5-5');
 });
+
+/** A Codex rollout log (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl), synthetic: session_meta, then response items and events. */
+function codexLog(s, lines, name = 'rollout-2026-01-02T03-04-05-0000.jsonl') {
+  const file = join(s.base, name);
+  const at = '2026-01-02T03:04:05.000Z';
+  const rec = (type, payload) => JSON.stringify({ timestamp: at, type, payload });
+  const msg = (role, text) => rec('response_item', { type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
+  const noise = Array.from({ length: 12 }, (_, i) => msg(i % 2 ? 'assistant' : 'user', `ok, looking at step ${i}; running the tests again`));
+  writeFileSync(file, [
+    rec('session_meta', { id: 'c0ffee00-0000-4000-8000-000000000001', timestamp: at, cwd: '/work/acme/api', originator: 'codex_cli_rs', cli_version: '0.0.0', source: 'cli' }),
+    msg('developer', 'LESSON: developer instructions are not the session'),
+    ...noise,
+    rec('response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["npm","test"]}', call_id: 'call_1' }),
+    rec('response_item', { type: 'function_call_output', call_id: 'call_1', output: 'LESSON: tool output is not the session' }),
+    ...lines.map((l) => msg('assistant', l)),
+    rec('event_msg', { type: 'agent_message', message: lines[0] ?? '' }),
+    msg('user', 'thanks'),
+  ].join('\n') + '\n');
+  return file;
+}
+
+test('#48 S1 a Codex session log with one lesson saves one item whose provenance names Codex', () => {
+  const s = setup();
+  fakeModel(s);
+  const r = capture(s, s.acmeApi, codexLog(s, [`LESSON: ${LESSON}`]), 'c1');
+  assert.equal(r.status, 0, r.stderr);
+  const all = items(s);
+  assert.deepEqual(all.map((i) => i.statement), [LESSON]);
+  assert.equal(all[0].origin_trust, 'agent');
+  assert.equal(evidence(s, all[0].id)[0].source_ref, 'capture:codex:c1:rollout-2026-01-02T03-04-05-0000.jsonl');
+});
+
+test('#48 S3 a log in an unknown format is skipped and reported in the capture summary, and nothing is saved from it', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = join(s.base, 'other-agent.jsonl');
+  writeFileSync(file, [{ speaker: 'bot', body: `LESSON: ${LESSON}` }, { speaker: 'human', body: 'thanks' }].map((o) => JSON.stringify(o)).join('\n') + '\n');
+  const r = capture(s, s.acmeApi, file, 'u1');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /skipped other-agent\.jsonl: unknown log format/);
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false);
+  const lines = readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => [l.session, l.skipped, l.saved]), [['u1', 'other-agent.jsonl: unknown log format', 0]]);
+});

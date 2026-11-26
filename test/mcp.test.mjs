@@ -429,3 +429,20 @@ test('a request whose handling throws is answered with an internal error, and th
   assert.deepEqual(replies.find((m) => m.id === 2)?.result, {});
   assert.equal(r.status, 0);
 });
+
+test('#48 S2 an agent with no adapter that proposes through MCP is named, from its clientInfo, in the item\'s provenance', () => {
+  const s = setup();
+  const msgs = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'muse', version: '1.0' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_propose', arguments: { statement: 'The ledger is rebuilt every night', scope: 'repository', type: 'convention', evidence: { source: 'run-7' } } } },
+  ];
+  const r = run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: msgs.map((m) => JSON.stringify(m)).join('\n') + '\n' });
+  const reply = r.stdout.trim().split('\n').map((l) => JSON.parse(l)).find((m) => m.id === 1);
+  assert.notEqual(reply.result.isError, true, reply.result.content[0].text);
+  const [item] = items(s.data, 'tenants/acme.sqlite');
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'), { readOnly: true });
+  const evidence = db.prepare('SELECT source_ref, extractor FROM evidence WHERE item_id = ?').all(item.id).map((e) => [e.source_ref, e.extractor]);
+  db.close();
+  assert.deepEqual(evidence, [['run-7', 'mcp:muse']]);
+});

@@ -34,23 +34,57 @@ export function scrub(text: string): string {
     .replace(new RegExp(HANDLE.source, 'g'), '[REDACTED:HANDLE]');
 }
 
-/** User and assistant text only, one line each as "L<n> <role>: <text>"; tool output is left out. */
-function transcriptLines(file: string): string[] {
-  return readFileSync(file, 'utf8')
+/** A parsed log line; each adapter checks the shape it reads. */
+type LogRecord = any;
+/** The text of a message's content: a string, or the blocks of the given kinds joined. */
+const blocks = (c: unknown, kinds: string[]): string =>
+  typeof c === 'string' ? c : Array.isArray(c) ? c.map((b: { type?: string; text?: string }) => (kinds.includes(b?.type ?? '') ? b.text ?? '' : '')).join(' ') : '';
+const said = (role: unknown, text: string): [string, string] | null => (role === 'user' || role === 'assistant' ? [role, text] : null);
+
+/**
+ * One adapter per agent whose session log capture reads (#48): the name provenance gives it, a record only its log
+ * holds, and the user or assistant text of a record. Tool calls and output, system and developer text are left out.
+ */
+const ADAPTERS: { agent: string; owns: (o: LogRecord) => boolean; turn: (o: LogRecord) => [string, string] | null }[] = [
+  {
+    agent: 'claude-code',
+    owns: (o) => (o.type === 'user' || o.type === 'assistant') && typeof o.message === 'object',
+    turn: (o) => said(o.type, blocks(o.message?.content, ['text'])),
+  },
+  {
+    // A Codex rollout log, ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl: a session_meta record, then response items and events.
+    agent: 'codex',
+    owns: (o) => o.type === 'session_meta' && typeof o.payload === 'object',
+    turn: (o) => (o.type === 'response_item' && o.payload?.type === 'message' ? said(o.payload.role, blocks(o.payload.content, ['input_text', 'output_text'])) : null),
+  },
+];
+
+/** The agent that wrote the log, and its user and assistant text, one line each as "L<n> <role>: <text>"; null for a format no adapter knows. */
+function readLog(file: string): { agent: string; lines: string[] } | null {
+  const records: LogRecord[] = readFileSync(file, 'utf8')
     .split('\n')
-    .map((line, i) => {
+    .map((line) => {
       try {
-        const o = JSON.parse(line) as { type?: string; message?: { content?: unknown } };
-        if (o.type !== 'user' && o.type !== 'assistant') return '';
-        const c = o.message?.content;
-        const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((b: { type?: string; text?: string }) => (b?.type === 'text' ? b.text ?? '' : '')).join(' ') : '';
-        const flat = text.replace(/\s+/g, ' ').trim();
-        return flat === '' ? '' : `L${i + 1} ${o.type}: ${flat}`;
+        const o: unknown = JSON.parse(line);
+        return typeof o === 'object' && o !== null ? o : null;
       } catch {
-        return '';
+        return null;
       }
     });
+  const adapter = ADAPTERS.find((a) => records.some((o) => o !== null && a.owns(o)));
+  if (adapter === undefined) return null;
+  const lines = records.map((o, i) => {
+    const turn = o === null ? null : adapter.turn(o);
+    const flat = turn?.[1].replace(/\s+/g, ' ').trim() ?? '';
+    return flat === '' ? '' : `L${i + 1} ${turn![0]}: ${flat}`;
+  });
+  return { agent: adapter.agent, lines };
 }
+
+const summarise = (data: string, record: Record<string, unknown>): void => {
+  mkdirSync(join(data, 'logs'), { recursive: true, mode: 0o700 });
+  appendFileSync(join(data, 'logs', 'capture.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), ...record })}\n`, { mode: 0o600 });
+};
 
 /**
  * FR-006 of #22: the external content a session read, from the tool calls its transcript records: web pages and
@@ -63,7 +97,9 @@ export function externalSources(file: string): string[] {
   const label = (s: string): string => s.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 60);
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     try {
-      const o = JSON.parse(line) as { message?: { content?: unknown } };
+      const o = JSON.parse(line) as { message?: { content?: unknown }; payload?: { type?: unknown } };
+      // shortcut: of a Codex log only its web search is seen, not its MCP tool calls; revisit with a fixture of those.
+      if (o.payload?.type === 'web_search_call') found.add('web:search');
       const content = o.message?.content;
       if (!Array.isArray(content)) continue;
       for (const b of content as { type?: string; name?: string; input?: { url?: unknown } }[]) {
@@ -180,7 +216,7 @@ export function keepCandidates(
   db: DatabaseSync,
   context: { tenant: string; repository: string },
   candidates: Candidate[],
-  from: { session: string; source: string; taint: string[] },
+  from: { session: string; agent: string; source: string; taint: string[] },
 ): { saved: number; merged: number; queued: number } {
   let saved = 0;
   let merged = 0;
@@ -208,7 +244,7 @@ export function keepCandidates(
     else if (stored.kind === 'inserted') {
       saved++;
       if (status === 'proposed') queued++;
-      recordAudit(db, 'item_captured', { type: 'item', id: stored.id }, { session: from.session, agent: 'claude-code', status });
+      recordAudit(db, 'item_captured', { type: 'item', id: stored.id }, { session: from.session, agent: from.agent, status });
     }
   }
   return { saved, merged, queued };
@@ -222,7 +258,13 @@ async function captureLocked(
   session: string,
   input: Record<string, unknown>,
 ): Promise<string> {
-  const lines = transcriptLines(path);
+  const log = readLog(path);
+  if (log === null) {
+    const skipped = `${basename(path)}: unknown log format`;
+    summarise(data, { session, skipped, saved: 0 });
+    return `nothing captured: skipped ${skipped}`;
+  }
+  const { agent, lines } = log;
   const seen = readState(data)[session] ?? 0;
   let text = lines.slice(seen).filter((l) => l !== '').join('\n');
   if (text.length > MAX_TRANSCRIPT_CHARS) text = text.slice(text.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, '');
@@ -236,18 +278,13 @@ async function captureLocked(
   const db = openStore(tenantFile(data, context.tenant), true)!;
   let kept;
   try {
-    kept = keepCandidates(db, context, candidates, { session, source: `capture:claude-code:${session}:${basename(path)}`, taint });
+    kept = keepCandidates(db, context, candidates, { session, agent, source: `capture:${agent}:${session}:${basename(path)}`, taint });
   } finally {
     db.close();
   }
   const { saved, merged, queued } = kept;
   const usage = model.usage ?? { input: 0, output: 0 };
-  mkdirSync(join(data, 'logs'), { recursive: true, mode: 0o700 });
-  appendFileSync(
-    join(data, 'logs', 'capture.jsonl'),
-    `${JSON.stringify({ at: new Date().toISOString(), session, model: settings.model === 'haiku' ? settings.apiModel : settings.model, inputTokens: usage.input, outputTokens: usage.output, candidates: candidates.length, saved, merged })}\n`,
-    { mode: 0o600 },
-  );
+  summarise(data, { session, agent, model: settings.model === 'haiku' ? settings.apiModel : settings.model, inputTokens: usage.input, outputTokens: usage.output, candidates: candidates.length, saved, merged });
   commitWatermark(data, session, lines.length);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }

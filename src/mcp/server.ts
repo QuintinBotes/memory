@@ -252,7 +252,7 @@ function get(args: Args, data: string, context: Context, cwd: string): string {
   ].map((l) => `${l}\n`).join(''));
 }
 
-function propose(args: Args, data: string, config: Config, context: Context, cwd: string): string {
+function propose(args: Args, data: string, config: Config, context: Context, cwd: string, agent: string): string {
   const automated = automationRefusal(config);
   if (automated !== null) throw new ToolError(`not proposed: ${automated}`);
   const statement = text(args, 'statement');
@@ -281,7 +281,7 @@ function propose(args: Args, data: string, config: Config, context: Context, cwd
   if (said?.kind === 'repeats') return `not proposed: duplicates ${displayPath(ins, said.line.file)}:${said.line.line}, which the agent already loads`;
   const tenant = personal ? '' : context.tenant!;
   const scopeKey = scope === 'repository' ? context.repository! : scope === 'organisation' ? context.owner! : '';
-  const candidate: NewItem = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: 'proposed', trust: origin, originRepository: context.repository };
+  const candidate: NewItem = { tenant, scope, scopeKey, type, statement, rationale: null, anchors: [], source, status: 'proposed', trust: origin, originRepository: context.repository, extractor: `mcp:${agent}` };
   // Someone outside the owner wrote the source: the agent read content from them, so the proposal is tainted by it.
   const taint = [...(typeof named === 'string' ? [named.trim()] : []), ...(origin === 'external' || origin === 'bot' ? [`${origin}:${source}`] : [])];
   if (taint.length > 0) candidate.taint = taint.join(';');
@@ -337,7 +337,7 @@ function feedback(args: Args, data: string, context: Context, cwd: string): stri
   return done;
 }
 
-async function call(name: unknown, args: Args, data: string, cwd: string): Promise<string> {
+async function call(name: unknown, args: Args, data: string, cwd: string, agent: string): Promise<string> {
   const config = loadConfig(data);
   if (!consented(config)) throw new ToolError('memory is not set up, or its configuration changed since the owner agreed to it');
   const context = resolveContext(cwd, config, currentConfigDir());
@@ -353,7 +353,7 @@ async function call(name: unknown, args: Args, data: string, cwd: string): Promi
     case 'memory_related':
       return relatedTool(args, data, config, context, cwd);
     case 'memory_propose':
-      return propose(args, data, config, context, cwd);
+      return propose(args, data, config, context, cwd, agent);
     case 'memory_feedback':
       return feedback(args, data, context, cwd);
     default:
@@ -363,7 +363,13 @@ async function call(name: unknown, args: Args, data: string, cwd: string): Promi
 
 type Reply = { jsonrpc: '2.0'; id: unknown; result?: unknown; error?: { code: number; message: string } };
 
-async function handle(line: string, data: string, cwd: string, version: string): Promise<Reply | null> {
+/** The client's name from initialize, as a label: what an MCP write names as its agent (#48). */
+const clientName = (info: unknown): string => {
+  const name = (info as { name?: unknown } | undefined)?.name;
+  return typeof name === 'string' && name.trim() !== '' ? name.trim().replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60) : 'unknown';
+};
+
+async function handle(line: string, data: string, cwd: string, version: string, client: { agent: string }): Promise<Reply | null> {
   let message: unknown;
   try {
     message = JSON.parse(line);
@@ -378,6 +384,7 @@ async function handle(line: string, data: string, cwd: string, version: string):
   const ok = (result: unknown): Reply => ({ jsonrpc: '2.0', id, result });
   switch (method) {
     case 'initialize':
+      client.agent = clientName(params?.['clientInfo']);
       return ok({
         protocolVersion: PROTOCOL_VERSIONS.includes(params?.['protocolVersion'] as string) ? params!['protocolVersion'] : PROTOCOL_VERSIONS.at(-1),
         capabilities: { tools: {} },
@@ -391,7 +398,7 @@ async function handle(line: string, data: string, cwd: string, version: string):
       const args = params?.['arguments'] ?? {};
       try {
         if (typeof args !== 'object' || args === null || Array.isArray(args)) throw new ToolError('arguments is an object');
-        return ok({ content: [{ type: 'text', text: await call(params?.['name'], args as Args, data, cwd) }] });
+        return ok({ content: [{ type: 'text', text: await call(params?.['name'], args as Args, data, cwd, client.agent) }] });
       } catch (error) {
         const known = error instanceof ToolError || error instanceof ConfigError;
         if (!known) console.error(`memory: ${(error as Error).message}`);
@@ -407,11 +414,12 @@ async function handle(line: string, data: string, cwd: string, version: string):
 export function serve(data: string, cwd: string, version: string): void {
   // One call at a time, in the order they arrived: a search may wait on the network, and a later call must not overtake it.
   let queue: Promise<void> = Promise.resolve();
+  const client = { agent: 'unknown' };
   createInterface({ input: process.stdin, terminal: false }).on('line', (line) => {
     if (line.trim() === '') return;
     queue = queue
       .then(async () => {
-        const reply = await handle(line, data, cwd, version);
+        const reply = await handle(line, data, cwd, version, client);
         if (reply !== null) process.stdout.write(`${JSON.stringify(reply)}\n`);
       })
       // A throw outside handle's own catches answers this request and leaves the queue alive for the next.

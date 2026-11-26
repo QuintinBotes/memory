@@ -55,6 +55,8 @@ export interface NewItem {
   statusReason?: string;
   /** Only the exact statement joins an existing item: a near match never merges or conflicts (a failure keyed by check and fingerprint). */
   exactOnly?: boolean;
+  /** What made the evidence, kept on its row; default deterministic. An MCP proposal names the agent, as mcp:<client>. */
+  extractor?: string;
   /** The external content the session that made this had read, named by its source; see `cleanTaint`. */
   taint?: string;
   /** The repository (`owner/repo`) this was learned in, null when unknown. Absent: a repository item's own, else unknown. */
@@ -133,8 +135,8 @@ export function insertItem(db: DatabaseSync, item: NewItem): string {
     );
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, taint)
-       VALUES (?, ?, ?, ?, ?, ?, 'deterministic', ?)`,
-    ).run(`e-${randomBytes(5).toString('hex')}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now, cleanTaint(item.taint));
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(`e-${randomBytes(5).toString('hex')}`, id, item.source, trust, sha256(item.statement), item.evidenceAt ?? now, item.extractor ?? 'deterministic', cleanTaint(item.taint));
   });
   return id;
 }
