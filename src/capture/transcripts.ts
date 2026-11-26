@@ -107,17 +107,24 @@ function hidePrivate(text: string, state: Spans): string {
   return out + (state.depth > 0 ? HIDDEN : shown);
 }
 
-/** Fields that only structure a record; their strings are not part of the text stream, and must not cut a tag in two. */
-const STRUCTURE = new Set(['type', 'id', 'tool_use_id', 'name', 'role', 'uuid', 'parentUuid', 'sessionId', 'timestamp', 'version', 'cwd', 'gitBranch', 'userType', 'entrypoint', 'requestId', 'model', 'signature', 'stop_reason', 'media_type', 'messageId']);
+/** The closed list of fields that can never hold user text; every other string of a record is part of the stream. */
+const NEVER_TEXT = new Set(['type', 'id', 'tool_use_id', 'role', 'uuid', 'parentUuid', 'messageId', 'sessionId', 'timestamp', 'cwd', 'version', 'gitBranch', 'userType', 'entrypoint', 'requestId']);
 
-/** Every content string inside a JSON value, in order, structural fields left out. */
-const leaves = (v: unknown): string[] =>
-  typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(leaves) : v !== null && typeof v === 'object' ? Object.entries(v).filter(([k]) => !STRUCTURE.has(k)).flatMap(([, x]) => leaves(x)) : [];
-
-/** Moves the span state through a record or block that is never mined; returns '' so a caller can use it as a hidden piece. */
-function scan(v: unknown, state: Spans): string {
-  for (const t of leaves(v)) hidePrivate(t, state);
-  return '';
+/**
+ * Walks every string of a record in document order, through hidePrivate, so each one moves the private depth. Returns the
+ * visible text of the strings `mine` names (the owner's text), left to the caller to use; nothing else is returned.
+ */
+function walk(v: unknown, state: Spans, mine: (path: (string | number)[], parent: unknown) => boolean): string[] {
+  const out: string[] = [];
+  const go = (x: unknown, path: (string | number)[], parent: unknown): void => {
+    if (typeof x === 'string') {
+      const visible = hidePrivate(x, state);
+      if (mine(path, parent)) out.push(visible);
+    } else if (Array.isArray(x)) x.forEach((e, i) => go(e, [...path, i], x));
+    else if (x !== null && typeof x === 'object') for (const [k, e] of Object.entries(x)) if (!NEVER_TEXT.has(k)) go(e, [...path, k], x);
+  };
+  go(v, [], null);
+  return out;
 }
 
 /**
@@ -131,22 +138,18 @@ export function ownerTurns(file: string): Turn[] {
   const turns: Turn[] = [];
   const state: Spans = { depth: 0, held: '' };
   raw.split('\n').forEach((row, i) => {
-    let o: { type?: string; isSidechain?: boolean; isMeta?: boolean; message?: { content?: unknown } };
+    let o: { type?: string; isSidechain?: boolean; isMeta?: boolean };
     try {
       o = JSON.parse(row);
     } catch {
-      scan(row, state);
+      hidePrivate(row, state);
       return;
     }
-    // Every record and block is scanned for private tags, in order, before any filtering decides what is mined.
-    const c = o?.message?.content;
-    if (o?.type !== 'user' || o.isSidechain === true || o.isMeta === true || (typeof c !== 'string' && !Array.isArray(c))) return scan(o, state);
-    const visible = (typeof c === 'string' ? [c] : c).map((b: unknown) => {
-      const t = typeof b === 'string' ? b : (b as { type?: string; text?: unknown } | null)?.type === 'text' ? String((b as { text?: unknown }).text ?? '') : undefined;
-      if (t === undefined) return scan(b, state);
-      return hidePrivate(t, state);
-    }).join(' ');
-    const flat = scrub(visible).replace(/\s+/g, ' ').trim();
+    // Every string of every record moves the span state, in order; only an owner's text block (or string content) is mined.
+    const eligible = o?.type === 'user' && o.isSidechain !== true && o.isMeta !== true;
+    const mine = (path: (string | number)[], parent: unknown): boolean =>
+      eligible && path[0] === 'message' && path[1] === 'content' && (path.length === 2 || (path.length === 4 && path[3] === 'text' && (parent as { type?: unknown } | null)?.type === 'text'));
+    const flat = scrub(walk(o, state, mine).join(' ')).replace(/\s+/g, ' ').trim();
     if (flat !== '' && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
   });
   return turns;

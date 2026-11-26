@@ -415,3 +415,19 @@ test('#85.d a close tag with no open span is ignored and hides nothing, and neve
   assert.deepEqual(mined(fresh(), 'um', row('Deploy the service'), toolResult('stray </private> tag'), row(OWNER_A), row(`${OWNER_B} </private>`)).sort(), [OWNER_A, OWNER_B].sort());
   assert.deepEqual(mined(fresh(), 'um2', row('Deploy the service'), toolResult('</private><private>'), row(OWNER_A)), []);
 });
+
+// ---- #85 last pass: every string moves the private depth, whichever field it is in ----------------------------------------
+
+const textBlock = (extra) => JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'text', ...extra }] } });
+
+test('#85.e a private tag in a sibling field before the text, in a nested field, or in an array of strings hides the owner text that follows', () => {
+  assert.deepEqual(mined(fresh(), 'e1', row('Deploy the service'), textBlock({ title: '<private>', text: OWNER_A })), []);
+  assert.deepEqual(mined(fresh(), 'e2', row('Deploy the service'), textBlock({ annotation: { note: { body: 'x <private>' } }, text: OWNER_A })), []);
+  assert.deepEqual(mined(fresh(), 'e3', row('Deploy the service'), textBlock({ citations: ['a', 'b <private>'], text: OWNER_A })), []);
+  assert.deepEqual(mined(fresh(), 'e4', row('Deploy the service'), JSON.stringify({ type: 'user', isSidechain: false, extra: { pre: '<private>' }, message: { role: 'user', content: OWNER_A } })), []);
+});
+
+test('#85.f a closed private span in a sibling field leaves the text proposed, and a tag after the text does not hide it', () => {
+  assert.deepEqual(mined(fresh(), 'f1', row('Deploy the service'), textBlock({ title: 'a <private>b</private>', text: OWNER_A })), [OWNER_A]);
+  assert.deepEqual(mined(fresh(), 'f2', row('Deploy the service'), textBlock({ text: OWNER_A, title: '<private>' })), [OWNER_A]);
+});
