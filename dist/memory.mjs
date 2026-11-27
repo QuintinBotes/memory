@@ -1446,7 +1446,7 @@ var DATA_CATEGORIES = [
   { id: "scf", since: 11, text: "When you run memory export --to scf, or memory import --scf, for a tenant that has an SCF address in config.json (memory init --scf <tenant>=<url>, https only, or http to this machine), with the key in SCF_API_KEY: that tenant's proposed repository and organisation items are sent to that address as proposals: the statement, type, scope, repository name, rationale, anchored paths and symbols, and each evidence's source reference, role and time, with credentials replaced; an item that holds one is not sent. The tenant's person-file items and every other tenant's items are never sent. memory import --scf asks the same address for the decisions on those proposals and for the run outcomes on accepted ones, and applies them to the items it sent. Nothing is sent for a tenant without an address, or before you agree to this plan" },
   { id: "personTranscripts", since: 12, text: "With the transcripts opt-in on, a session whose working directory matches no tenant is recorded the same way in the person file: the transcript's path, the session id, the repository if there is one and the time, deleted after 30 days. At the next session start or sweep memory reads your own messages in it on this machine, as above, and keeps each correction about your own habits as a person proposal quoting you verbatim; a correction that names a path, code, a tenant or a repository is not kept" },
   { id: "transcriptModel", since: 12, text: "When transcriptModel is set in config.json and you run memory corrections (never in a hook): your own messages of each transcript recorded above, read and redacted as above, are sent to the model it names (Inkling 2 Mini by default, which you install; memory never downloads a model) at its address (a local Ollama at http://127.0.0.1:11434 by default), through the provider runner, so it can find corrections the rules miss. Only a quote found verbatim in your messages is kept, as a proposal. A tenant's messages are sent only to a model on this machine (an address of 127.0.0.1, localhost or [::1]); an address elsewhere is used for the person file only. Without transcriptModel, or before you agree to this plan, nothing is sent" },
-  { id: "seed", since: 16, text: "When you run memory seed --git (never in a hook): the commit subjects, bodies, dates, author and committer names and changed file paths of this repository's history, the last 12 months unless --since says otherwise, are read with git log on this machine, skipping merge commits and bots' commits. A commit whose message gives a reason (a revert with a body, or words such as because, so that, must, never, instead of) gives one sentence of it, kept only when no credential, email, handle or committer's name was in it, as an agent-trusted proposal with the commit hash and date as its evidence and the commit's files that still exist as its anchors, waiting for your approval; at most 20 per run. Names and the rest of the message are not kept. With transcriptModel set and the transcriptModel category agreed, each such commit message is sent to that model only when it is on this machine, to rewrite the sentence using the message's own words. Nothing else is sent; before you agree to this plan, git log is not read" }
+  { id: "seed", since: 16, text: "When you run memory seed --git (never in a hook): the commit subjects, bodies, dates, author and committer names and changed file paths of this repository's history, the last 12 months unless --since says otherwise, are read with git log on this machine, skipping merge commits and bots' commits. A commit whose message gives a reason (a revert with a body, or words such as because, so that, must, never) gives one sentence of it, kept only when no credential, email, handle or committer's name was in it, as an agent-trusted proposal with the commit hash and date as its evidence and the commit's files that still exist as its anchors, waiting for your approval; at most 20 per run. Names and the rest of the message are not kept. With transcriptModel set and the transcriptModel category agreed, each such commit message is sent to that model only when it is on this machine, to rewrite the sentence using the message's own words. Nothing else is sent; before you agree to this plan, git log is not read" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -6470,7 +6470,11 @@ function captureCi(data, config, cwd, limit = 100) {
 // src/capture/seed.ts
 var SEED_LIMIT = 20;
 var MAX_ANCHORS = 10;
-var CUE = /\b(?:because|so that|must|never|instead of)\b(?!-)/i;
+var REASON = /\b(?:because|so that)\b/i;
+var RULE = /\b(?:must|never)\b(?!-)/i;
+var STORY = /^(?:fix|fixed|fixes)\b|\b(?:was|were|had|did|could|would)\b[^]*\b(?:must|never)\b|(?<!\b(?:is|are|be|been)\s)\bnever\s+\w+ed\b/i;
+var cue = (s) => REASON.test(s) || RULE.test(s) && !STORY.test(s.replace(PREFIX, ""));
+var DOC = /(?:^|\/)(?:CHANGELOG|README)[^/]*$|^docs\/|\.md$/i;
 var BOT = /\[bot\]|^(?:dependabot|renovate|github-actions)\b/i;
 var PREFIX = /^\w+(?:\([^)]*\))?!?:\s+/;
 function sentences(text5) {
@@ -6499,10 +6503,10 @@ function reasonOf(message, names) {
   let statement;
   if (reverted !== void 0) {
     const body2 = sentences(rest.join("\n")).filter((s) => !/^This reverts commit [0-9a-f]{7,40}/.test(s));
-    const why = body2.find((s) => CUE.test(s)) ?? body2[0];
+    const why = body2.find(cue) ?? body2[0];
     if (why !== void 0) statement = `Reverted "${reverted.replace(PREFIX, "")}": ${tidy(why)}`;
   } else {
-    const why = sentences(message).find((s) => CUE.test(s));
+    const why = sentences(message).find(cue);
     if (why !== void 0) statement = tidy(why);
   }
   if (statement === void 0 || statement.length > MAX_STATEMENT || statement.split(/\s+/).length < 4) return null;
@@ -6529,8 +6533,10 @@ function seedCandidates(cwd, since) {
   const out = [];
   for (const r of records) {
     if (!/^[0-9a-f]{40}$/.test(r.sha) || BOT.test(r.author) || BOT.test(r.email)) continue;
-    const files = r.files.filter((f) => head.has(f));
-    if (files.length === 0) continue;
+    const kept = r.files.filter((f) => head.has(f));
+    if (kept.length === 0) continue;
+    const source = kept.filter((f) => !DOC.test(f));
+    const files = source.length > 0 ? source : kept;
     const statement = reasonOf(r.message, names);
     if (statement === null) continue;
     out.push({ sha: r.sha, at: Number.isNaN(Date.parse(r.at)) ? (/* @__PURE__ */ new Date()).toISOString() : new Date(r.at).toISOString(), statement, files: files.slice(0, MAX_ANCHORS), message: scrubFailure(r.message, names) });
@@ -7893,9 +7899,9 @@ var USAGE = `usage: memory <command>
       proposal with the fingerprint, the fix commit and both runs as evidence
   seed --git [--since <date>] [--dry-run]
       read this repository's commit history with git log (the last 12 months by default; no merges, no bots' commits):
-      a commit whose message gives a reason (a revert with a body, or because, so that, must, never, instead of) gives
-      one sentence of it as an agent-trusted proposal, with the commit as its source and date and the commit's files
-      that exist at HEAD as anchors. At most 20 per run, newest first; it says how many are left. A rerun stores nothing
+      a commit whose message gives a reason (a revert with a body, because or so that, or a rule with must or never)
+      gives one sentence of it as an agent-trusted proposal, with the commit as its source and date and the commit's
+      files that exist at HEAD as anchors (docs and changelogs only when nothing else changed). At most 20 per run, newest first; it says how many are left. A rerun stores nothing
       new and a rejected statement is not proposed again. With transcriptModel set, a model on this machine may reword
       a sentence with the message's own words. Never run by a hook; --dry-run lists the candidates and writes nothing
   reverts

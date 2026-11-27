@@ -282,13 +282,16 @@ often already say why things are as they are. `memory seed --git [--since <date>
   skipping merge commits and bots' commits. Nothing leaves the machine: no `gh`,
   no capture model.
 - No model by default. A revert with a body gives its reason; any other commit
-  gives the first sentence of its message with *because*, *so that*, *must*,
-  *never* or *instead of*. One sentence per commit, the conventional prefix
-  (`fix:`) dropped.
+  gives the first sentence of its message with *because* or *so that*, or with
+  *must* or *never* when the sentence states a rule rather than tells a bug
+  story (it does not open with *Fix*, has no *was*, *were*, *had*, *did*,
+  *could* or *would* before the cue, and no past-tense *never mentioned*). One
+  sentence per commit, the conventional prefix (`fix:`) dropped.
 - Each is a proposal with agent trust, type `decision`, the commit hash as its
   source (`commit:<sha>`), the commit's date as the evidence time and the
-  commit's files that still exist at HEAD as anchors. A commit none of whose
-  files exist is skipped. `memory recheck` keeps the anchors honest after you
+  commit's files that still exist at HEAD as anchors (at most 10; changelogs,
+  READMEs, `docs/` and other Markdown only when the commit changed nothing
+  else). A commit none of whose files exist is skipped. `memory recheck` keeps the anchors honest after you
   approve.
 - A sentence holding a credential, an email, a handle or a committer's name is
   dropped, not redacted. Text that reads as an instruction is quarantined.

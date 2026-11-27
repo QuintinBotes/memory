@@ -224,3 +224,31 @@ test('SC9 without the seed consent no git log is run, and the command says why',
   assert.equal(run(['seed', '--git', '--dry-run'], { cwd: s.acmeApi, data: s.data, config: s.configA, path: `${bin}:${process.env.PATH}` }).status, 0);
   assert.match(readFileSync(log, 'utf8'), /^log /m);
 });
+
+test('#158 instead of is no cue, and must or never counts only in a rule, not a bug story', () => {
+  const s = setup();
+  const msgs = [
+    'feat: the lexer uses typed arrays instead of strings',
+    'fix: the cache could never expire after a restart',
+    'Fixed the doctor so it must print the proposal',
+    'chore: the report was empty and the counter never reset',
+    'fix: doctor printed nothing and never mentioned the proposal',
+    'feat: tokens are never written to the log file',
+    'fix: never retry a payment that the gateway declined',
+  ];
+  msgs.forEach((m, i) => commitAs(s.acmeApi, { [`src/c${i}.ts`]: `${i}\n` }, m));
+  const r = seed(s, '--dry-run');
+  assert.equal(r.status, 0, r.stderr);
+  const kept = [...r.stdout.matchAll(/^[0-9a-f]{7} \S+ "(.+?)" \(/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(kept, ['Never retry a payment that the gateway declined.', 'Tokens are never written to the log file.']);
+});
+
+test('#158 docs, READMEs and changelogs are not anchored when the commit also changed source files', () => {
+  const s = setup();
+  const files = { 'CHANGELOG.md': 'c\n', 'README.md': 'r\n', 'docs/guide.md': 'g\n', 'notes.md': 'n\n', 'src/pay.ts': 'p\n' };
+  commitAs(s.acmeApi, files, 'fix: round fees down because the bank rounds them down');
+  commitAs(s.acmeApi, { 'docs/limits.md': 'l\n' }, 'docs: uploads must stay under ten megabytes');
+  assert.equal(seed(s).status, 0);
+  const anchors = items(s).map((i) => JSON.parse(i.anchors_json).map((a) => a.path)).sort();
+  assert.deepEqual(anchors, [['docs/limits.md'], ['src/pay.ts']]);
+});

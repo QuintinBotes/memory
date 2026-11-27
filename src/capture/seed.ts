@@ -20,7 +20,13 @@ export interface SeedCandidate {
 }
 
 /** A sentence that gives a reason. shortcut: English cue words only; the model pass does not widen it. */
-const CUE = /\b(?:because|so that|must|never|instead of)\b(?!-)/i;
+const REASON = /\b(?:because|so that)\b/i;
+const RULE = /\b(?:must|never)\b(?!-)/i;
+/** A bug story, not a rule: it opens with a fix, says what was before the cue, or says what never happened (`never mentioned`, not `is never recorded`). */
+const STORY = /^(?:fix|fixed|fixes)\b|\b(?:was|were|had|did|could|would)\b[^]*\b(?:must|never)\b|(?<!\b(?:is|are|be|been)\s)\bnever\s+\w+ed\b/i;
+const cue = (s: string): boolean => REASON.test(s) || (RULE.test(s) && !STORY.test(s.replace(PREFIX, '')));
+/** Files that narrate a change rather than make it; anchored only when a commit changed nothing else. */
+const DOC = /(?:^|\/)(?:CHANGELOG|README)[^/]*$|^docs\/|\.md$/i;
 const BOT = /\[bot\]|^(?:dependabot|renovate|github-actions)\b/i;
 const PREFIX = /^\w+(?:\([^)]*\))?!?:\s+/;
 
@@ -59,10 +65,10 @@ export function reasonOf(message: string, names: string[]): string | null {
   let statement: string | undefined;
   if (reverted !== undefined) {
     const body = sentences(rest.join('\n')).filter((s) => !/^This reverts commit [0-9a-f]{7,40}/.test(s));
-    const why = body.find((s) => CUE.test(s)) ?? body[0];
+    const why = body.find(cue) ?? body[0];
     if (why !== undefined) statement = `Reverted "${reverted.replace(PREFIX, '')}": ${tidy(why)}`;
   } else {
-    const why = sentences(message).find((s) => CUE.test(s));
+    const why = sentences(message).find(cue);
     if (why !== undefined) statement = tidy(why);
   }
   if (statement === undefined || statement.length > MAX_STATEMENT || statement.split(/\s+/).length < 4) return null;
@@ -94,8 +100,10 @@ export function seedCandidates(cwd: string, since: string): SeedCandidate[] | nu
   const out: SeedCandidate[] = [];
   for (const r of records) {
     if (!/^[0-9a-f]{40}$/.test(r.sha) || BOT.test(r.author) || BOT.test(r.email)) continue;
-    const files = r.files.filter((f) => head.has(f));
-    if (files.length === 0) continue;
+    const kept = r.files.filter((f) => head.has(f));
+    if (kept.length === 0) continue;
+    const source = kept.filter((f) => !DOC.test(f));
+    const files = source.length > 0 ? source : kept;
     const statement = reasonOf(r.message, names);
     if (statement === null) continue;
     out.push({ sha: r.sha, at: Number.isNaN(Date.parse(r.at)) ? new Date().toISOString() : new Date(r.at).toISOString(), statement, files: files.slice(0, MAX_ANCHORS), message: scrubFailure(r.message, names) });

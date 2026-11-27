@@ -203,9 +203,9 @@ const USAGE = `usage: memory <command>
       proposal with the fingerprint, the fix commit and both runs as evidence
   seed --git [--since <date>] [--dry-run]
       read this repository's commit history with git log (the last 12 months by default; no merges, no bots' commits):
-      a commit whose message gives a reason (a revert with a body, or because, so that, must, never, instead of) gives
-      one sentence of it as an agent-trusted proposal, with the commit as its source and date and the commit's files
-      that exist at HEAD as anchors. At most 20 per run, newest first; it says how many are left. A rerun stores nothing
+      a commit whose message gives a reason (a revert with a body, because or so that, or a rule with must or never)
+      gives one sentence of it as an agent-trusted proposal, with the commit as its source and date and the commit's
+      files that exist at HEAD as anchors (docs and changelogs only when nothing else changed). At most 20 per run, newest first; it says how many are left. A rerun stores nothing
       new and a rejected statement is not proposed again. With transcriptModel set, a model on this machine may reword
       a sentence with the message's own words. Never run by a hook; --dry-run lists the candidates and writes nothing
   reverts
