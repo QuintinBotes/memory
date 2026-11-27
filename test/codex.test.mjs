@@ -101,6 +101,20 @@ test('SC4 a failed Codex shell command carrying a known signature shows the reci
   assert.equal(passed.stdout, '', 'a command that exited 0 is no failure');
 });
 
+test('SC4 a Codex output with no exit code shows the recipe once and never counts a contradiction', async () => {
+  const s = seeded();
+  const recipe = idOf(s, RECIPE);
+  const passing = `Cannot find module nonexistent-pkg-xyz is the message the test expects; 1 passed\n`;
+  assert.match(context(await codex(s, 'failure-recall', postToolUse(s, passing)), 'PostToolUse'), /run npm ci/);
+  assert.equal((await codex(s, 'failure-recall', postToolUse(s, passing))).stdout, '');
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  try {
+    assert.equal(db.prepare('SELECT contradictions FROM items WHERE id = ?').get(recipe).contradictions, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test('SC5 Codex injections are logged under the agent codex, and Claude Code and Codex sessions each see an item once', async () => {
   const s = seeded();
   const hazard = idOf(s, HAZARD);

@@ -6076,7 +6076,7 @@ var matches = (statement, lines2, all) => {
   return lines2.some((line) => mine.every((w) => line.has(w)));
 };
 var VERIFIED = /(^|\s)passed-after:\S+/;
-function plan(db, matching, session, agent, fingerprint) {
+function plan(db, matching, session, agent, fingerprint, unknownExit) {
   let shown = [];
   let charged = /* @__PURE__ */ new Set();
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'failure_ledger'").get() !== void 0) {
@@ -6084,7 +6084,7 @@ function plan(db, matching, session, agent, fingerprint) {
     charged = new Set(db.prepare("SELECT DISTINCT item_id FROM failure_ledger WHERE session = ? AND contradicted = 1").all(session).map((r) => r.item_id));
   }
   const seen = new Set(shown.map((r) => r.item_id));
-  return { show: matching.filter((id) => !seen.has(id)), charge: matching.filter((id) => seen.has(id) && !charged.has(id)) };
+  return { show: matching.filter((id) => !seen.has(id)), charge: unknownExit ? [] : matching.filter((id) => seen.has(id) && !charged.has(id)) };
 }
 function failureRecall(data, input2, log, event = "PostToolUseFailure") {
   const config = loadConfig(data);
@@ -6100,6 +6100,7 @@ function failureRecall(data, input2, log, event = "PostToolUseFailure") {
   const all = new Set(lines2.flatMap((l) => [...l]));
   const session = str2(input2["session_id"]) ?? "unknown";
   const agent = str2(input2["agent_id"]) ?? MAIN_AGENT;
+  const unknownExit = input2["exit_unknown"] === true;
   const base2 = { session, agent, via: "failure-recall", at: (/* @__PURE__ */ new Date()).toISOString() };
   try {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
@@ -6107,11 +6108,11 @@ function failureRecall(data, input2, log, event = "PostToolUseFailure") {
     try {
       const matching = failureStatements(db, context.tenant, context.repository, context.owner).filter((i) => matches(i.statement, lines2, all)).map((i) => i.id);
       if (matching.length === 0) return "";
-      const first2 = plan(db, matching, session, agent, fingerprint);
+      const first2 = plan(db, matching, session, agent, fingerprint, unknownExit);
       if (first2.show.length === 0 && first2.charge.length === 0) return "";
       const result = inTransaction(db, () => {
         db.exec(CREATE2);
-        const { show, charge } = plan(db, matching, session, agent, fingerprint);
+        const { show, charge } = plan(db, matching, session, agent, fingerprint, unknownExit);
         for (const id of charge) {
           db.prepare("UPDATE items SET contradictions = contradictions + 1 WHERE id = ?").run(id);
           db.prepare("UPDATE failure_ledger SET contradicted = 1 WHERE session = ? AND agent = ? AND fingerprint = ? AND item_id = ?").run(session, agent, fingerprint, id);
@@ -6633,7 +6634,8 @@ function fromCodex(input2) {
     if (typeof response !== "string") return null;
     const head = /^Exit code: (\d+)\n(?:Wall time: [^\n]*\n)?(?:Output:\n)?/.exec(response);
     if (head?.[1] === "0") return out;
-    return { ...out, error: head === null ? response : `Exit code ${head[1]}
+    if (head === null) return { ...out, error: response, exit_unknown: true };
+    return { ...out, error: `Exit code ${head[1]}
 ${response.slice(head[0].length)}` };
   }
   return out;
@@ -8716,7 +8718,7 @@ function failureRecallHook(data, args) {
   } catch {
   }
   try {
-    recordEpisode(data, input2);
+    if (input2["exit_unknown"] !== true) recordEpisode(data, input2);
   } catch {
   }
 }

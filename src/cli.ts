@@ -1261,7 +1261,8 @@ function failureRecallHook(data: string, args: string[]): void {
     // A hook never fails the tool call.
   }
   try {
-    recordEpisode(data, input);
+    // A command that may have passed is no failing-command episode.
+    if (input['exit_unknown'] !== true) recordEpisode(data, input);
   } catch {
     // A busy or unreadable store loses one episode, never the command.
   }

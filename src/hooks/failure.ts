@@ -66,7 +66,7 @@ interface Plan {
 }
 
 /** What this failure needs done, from the ledger as it stands; a store with no ledger has shown nothing. */
-function plan(db: DatabaseSync, matching: string[], session: string, agent: string, fingerprint: string): Plan {
+function plan(db: DatabaseSync, matching: string[], session: string, agent: string, fingerprint: string, unknownExit: boolean): Plan {
   let shown: { item_id: string }[] = [];
   let charged = new Set<string>();
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'failure_ledger'").get() !== undefined) {
@@ -74,7 +74,8 @@ function plan(db: DatabaseSync, matching: string[], session: string, agent: stri
     charged = new Set((db.prepare('SELECT DISTINCT item_id FROM failure_ledger WHERE session = ? AND contradicted = 1').all(session) as { item_id: string }[]).map((r) => r.item_id));
   }
   const seen = new Set(shown.map((r) => r.item_id));
-  return { show: matching.filter((id) => !seen.has(id)), charge: matching.filter((id) => seen.has(id) && !charged.has(id)) };
+  // A command whose exit status is unknown may have passed, so a repeat of it never charges the item.
+  return { show: matching.filter((id) => !seen.has(id)), charge: unknownExit ? [] : matching.filter((id) => seen.has(id) && !charged.has(id)) };
 }
 
 /**
@@ -100,6 +101,7 @@ export function failureRecall(data: string, input: Record<string, unknown>, log:
   const all = new Set(lines.flatMap((l) => [...l]));
   const session = str(input['session_id']) ?? 'unknown';
   const agent = str(input['agent_id']) ?? MAIN_AGENT;
+  const unknownExit = input['exit_unknown'] === true;
   const base = { session, agent, via: 'failure-recall', at: new Date().toISOString() };
   try {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
@@ -107,12 +109,12 @@ export function failureRecall(data: string, input: Record<string, unknown>, log:
     try {
       const matching = failureStatements(db, context.tenant, context.repository, context.owner).filter((i) => matches(i.statement, lines, all)).map((i) => i.id);
       if (matching.length === 0) return '';
-      const first = plan(db, matching, session, agent, fingerprint);
+      const first = plan(db, matching, session, agent, fingerprint, unknownExit);
       if (first.show.length === 0 && first.charge.length === 0) return '';
       const result = inTransaction(db, () => {
         db.exec(CREATE);
         // The ledger may have changed between the read and the lock.
-        const { show, charge } = plan(db, matching, session, agent, fingerprint);
+        const { show, charge } = plan(db, matching, session, agent, fingerprint, unknownExit);
         for (const id of charge) {
           db.prepare('UPDATE items SET contradictions = contradictions + 1 WHERE id = ?').run(id);
           db.prepare('UPDATE failure_ledger SET contradicted = 1 WHERE session = ? AND agent = ? AND fingerprint = ? AND item_id = ?').run(session, agent, fingerprint, id);

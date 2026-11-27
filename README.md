@@ -226,9 +226,11 @@ It writes nothing. It runs `session-start`, `point-of-action` (on
 bundle's absolute path: print it again after the plugin updates. With
 `--agent codex` a hook reads Codex's payload: an `apply_patch` update is read
 as an edit of each hunk's old lines (only the patch's first file), an added or
-deleted file as a Write, and a shell command that did not exit 0 as the error;
+deleted file as a Write, and a shell command that did not exit 0 as the error.
 codex-cli 0.172 sends no exit code for Bash, so its output is read as the error
-and the signature decides. The slice is plain stdout, which Codex adds as
+and the signature decides whether a recipe shows (once per fingerprint); as the
+command may have passed, a repeat never counts as a contradiction and no
+failing-command episode is recorded. The slice is plain stdout, which Codex adds as
 developer context; the other hooks answer with `additionalContext` and never a
 permission decision. Budgets, the fence, tenants, consent and the automation
 check are the same. Injections and the shown-once ledger name the agent

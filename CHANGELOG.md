@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Recall hooks for Codex (#138). `memory hooks --agent codex` prints the `hooks.json` fragment that runs `session-start`, `point-of-action` (on `apply_patch`), `failure-recall` (on Bash) with `--agent codex`, and `capture` at Stop; it writes nothing. With `--agent codex` the hooks read Codex's payload: the slice prints as before, an `apply_patch` reaches point-of-action recall as an edit, and a failed shell command reaches failure recall, answered as Codex's `PostToolUse`. Injection log lines and the shown-once ledger name the agent `codex`. A payload in an unknown shape prints nothing and logs `skipped`. Claude Code hook output is unchanged.
+- Recall hooks for Codex (#138). `memory hooks --agent codex` prints the `hooks.json` fragment that runs `session-start`, `point-of-action` (on `apply_patch`), `failure-recall` (on Bash) with `--agent codex`, and `capture` at Stop; it writes nothing. With `--agent codex` the hooks read Codex's payload: the slice prints as before, an `apply_patch` reaches point-of-action recall as an edit, and a failed shell command reaches failure recall, answered as Codex's `PostToolUse`; as Codex sends no exit code for Bash, such a recall never counts a contradiction or records a failing-command episode. Injection log lines and the shown-once ledger name the agent `codex`. A payload in an unknown shape prints nothing and logs `skipped`. Claude Code hook output is unchanged.
 
 ## [0.9.2] - 2026-11-27
 

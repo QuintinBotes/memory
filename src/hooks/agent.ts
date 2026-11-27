@@ -38,7 +38,8 @@ function fromPatch(patch: string): { tool_name: string; tool_input: Input } | nu
 
 /**
  * Codex's payload as Claude Code's, under the agent `codex`: apply_patch becomes the edit it makes, and a Bash
- * PostToolUse that did not exit 0 carries its output as Claude Code's `error`. Null for a shape this does not know.
+ * PostToolUse that did not exit 0 carries its output as Claude Code's `error`, with `exit_unknown` when Codex gave no
+ * exit code, so failure recall shows but never charges a contradiction. Null for a shape this does not know.
  */
 export function fromCodex(input: Input): Input | null {
   const event = str(input['hook_event_name']);
@@ -56,7 +57,8 @@ export function fromCodex(input: Input): Input | null {
     // as an error and the recipe's signature is what decides.
     const head = /^Exit code: (\d+)\n(?:Wall time: [^\n]*\n)?(?:Output:\n)?/.exec(response);
     if (head?.[1] === '0') return out;
-    return { ...out, error: head === null ? response : `Exit code ${head[1]}\n${response.slice(head[0].length)}` };
+    if (head === null) return { ...out, error: response, exit_unknown: true };
+    return { ...out, error: `Exit code ${head[1]}\n${response.slice(head[0].length)}` };
   }
   return out;
 }
