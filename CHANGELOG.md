@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-27
+
+Installed copies update to this release: everything since 0.8.0 shipped without a version change, so `/plugin update` kept 0.8.0 (#108). The consent plan is at version 13; memory stays off until you agree to it again with `memory init --confirm`.
+
 ### Added
 
 - A review pane and a waiting-proposals band, as a Claude Code mod (#104). `/memory-review` opens a pane listing this repository's tenant's and the person file's proposals, each with its evidence, the agent that proposed it and the shadow gate, with Approve and Reject buttons; a band above the prompt counts the proposals waiting. Both run the bundled CLI and nothing else (`memory review --json`, new, and `memory approve` / `memory reject`), register no tool the model can call, and strip control and bidi characters from what they draw. Needs Claude Code v2.1.287 or later; settings hooks, MCP and the CLI are unchanged, so other agents lose nothing.
