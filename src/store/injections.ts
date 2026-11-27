@@ -19,12 +19,12 @@ export function appendInjections(data: string, lines: string[]): void {
 }
 
 /** Items an instruction file kept out of a recall, by id and the tokens that saved, never their text. Silent on any failure. */
-export function logWithheld(data: string, config: Config, via: string, session: string, withheld: Withheld[]): void {
+export function logWithheld(data: string, config: Config, via: string, session: string, withheld: Withheld[], agent?: string): void {
   if (withheld.length === 0 || !covers(config, 'injections')) return;
   try {
     appendInjections(
       data,
-      withheld.map((w) => `${JSON.stringify({ event: 'withheld', reason: w.reason, session, item: w.item.id, via, tokens: estimate(row(w.item)), at: new Date().toISOString() })}\n`),
+      withheld.map((w) => `${JSON.stringify({ event: 'withheld', reason: w.reason, session, ...(agent === undefined ? {} : { agent }), item: w.item.id, via, tokens: estimate(row(w.item)), at: new Date().toISOString() })}\n`),
     );
   } catch {
     // A busy log costs the count, never the recall.

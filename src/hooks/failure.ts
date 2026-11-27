@@ -85,7 +85,7 @@ function plan(db: DatabaseSync, matching: string[], session: string, agent: stri
  * hash. It reads first and takes the write lock only to show an item or charge one. Returns the hook's JSON, or '' for
  * nothing; a store that cannot be had in time is logged as skipped.
  */
-export function failureRecall(data: string, input: Record<string, unknown>, log: Log): string {
+export function failureRecall(data: string, input: Record<string, unknown>, log: Log, event = 'PostToolUseFailure'): string {
   const config = loadConfig(data);
   const agentType = str(input['agent_type']);
   const error = str(input['error']);
@@ -126,7 +126,7 @@ export function failureRecall(data: string, input: Record<string, unknown>, log:
       });
       if (result.text === '') return '';
       if (covers(config, 'injections')) log(result.shown.map((i) => ({ event: 'injected', ...base, item: i.id, anchors: [], tokens: estimate(row(i)) })));
-      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: result.text } });
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: result.text } });
     } finally {
       db.close();
     }
