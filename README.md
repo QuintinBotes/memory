@@ -660,8 +660,16 @@ repository that matches no tenant is skipped: no model call, nothing written.
   on only PATH, HOME, USER, TMPDIR and CLAUDE_CONFIG_DIR. With neither the key
   nor a `claude` on PATH, capture reports it and does nothing.
 - **Cost:** one call per SessionEnd and per Stop with enough new text; each
-  run's tokens go to `logs/capture.jsonl` in the data directory (never the
-  transcript). Read it to see what capture costs you.
+  run's tokens, and whether it used the key or the Claude Code login, go to
+  `logs/capture.jsonl` in the data directory (never the transcript).
+  `memory capture --cost [--since <YYYY-MM-DD>]` prints, per local day, the
+  runs, the skips by reason and the input and output tokens; it reads only that
+  log.
+- **Daily cap:** at most `maxCallsPerDay` (100) model calls and
+  `maxTokensPerDay` (2,000,000) tokens a local calendar day, counted from
+  `logs/capture.jsonl`. Past either, capture makes no call, logs a `daily cap`
+  skip and says so once per session; the transcript is not marked read, so the
+  next day's first run reads that text.
 - **Consent:** capture is a data category of the consent plan. `memory init`
   proposes it on, but a consent given before it stays off for it until you run
   `memory init` and confirm.
@@ -686,7 +694,7 @@ repository that matches no tenant is skipped: no model call, nothing written.
   that wrote it (`mcp:<clientInfo name>`).
 
 ```json
-{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }
+{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5", "maxCallsPerDay": 100, "maxTokensPerDay": 2000000 } }
 ```
 
 `model` is `haiku` (the Messages API by plain `fetch`, no SDK) or `fake`, the

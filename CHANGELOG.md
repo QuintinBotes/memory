@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A daily cap on capture spend (#140): `capture.maxCallsPerDay` (100) and `capture.maxTokensPerDay` (2,000,000) per local day, counted from `logs/capture.jsonl`. Past either, capture makes no model call, logs a `daily cap` skip, says so once per session and leaves the transcript unread for the next day. `memory capture --cost [--since <date>]` prints per day the runs (API key or Claude Code login), skips by reason and tokens, from the log alone.
+
 ### Fixed
 
 - Capture works without `ANTHROPIC_API_KEY`: the filter falls back to the Claude Code login through `claude -p`, with no tools, hooks, settings or saved session. Subscription users had no capture at all (#130).
