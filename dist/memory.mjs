@@ -2784,6 +2784,8 @@ function openStore(path, create, busyMs = WRITE_BUSY_MS) {
 }
 
 // src/capture/model.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { tmpdir } from "node:os";
 var PROMPT = `You read a redacted coding-session transcript. Each line is "L<number> <role>: <text>".
 Keep only lessons (something learned that will matter again) and decisions (a choice made, with its reason).
 Skip chatter, progress reports, plans, questions and anything one-off.
@@ -2808,7 +2810,7 @@ function haiku(apiModel, env = process.env) {
   const model = {
     async extract(text5) {
       const key2 = env["ANTHROPIC_API_KEY"];
-      if (key2 === void 0 || key2 === "") throw new Error("ANTHROPIC_API_KEY is not set; capture needs it for the haiku filter");
+      if (key2 === void 0 || key2 === "") return viaCli(model, apiModel, text5, env);
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": key2, "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -2822,6 +2824,23 @@ function haiku(apiModel, env = process.env) {
     }
   };
   return model;
+}
+function viaCli(model, apiModel, text5, env) {
+  const pass = {};
+  for (const k of ["PATH", "HOME", "USER", "TMPDIR", "CLAUDE_CONFIG_DIR"]) if (env[k] !== void 0) pass[k] = env[k];
+  const args = ["-p", "--model", apiModel, "--system-prompt", PROMPT, "--output-format", "json", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", '{"disableAllHooks":true}'];
+  const r = spawnSync2("claude", args, { cwd: tmpdir(), env: pass, input: text5, encoding: "utf8", timeout: modelTimeoutMs(env), killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024, stdio: ["pipe", "pipe", "ignore"] });
+  if (r.error !== void 0) throw new Error(r.error.code === "ENOENT" ? "no ANTHROPIC_API_KEY and no claude on PATH; capture needs one of them" : `claude -p failed: ${r.error.message}`);
+  let body2;
+  try {
+    body2 = JSON.parse(r.stdout);
+  } catch {
+    throw new Error(`claude -p exited ${r.status ?? "by signal"} without a JSON answer`);
+  }
+  if (body2.is_error === true || typeof body2.result !== "string") throw new Error(`claude -p answered an error: ${String(body2.result ?? "no result").slice(0, 200)}`);
+  const u = body2.usage ?? {};
+  model.usage = { input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), output: u.output_tokens ?? 0 };
+  return parseCandidates(body2.result);
 }
 function fake() {
   const model = {
@@ -4829,7 +4848,7 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 
 // src/import/orbit.ts
 import { copyFileSync, existsSync as existsSync7, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir as tmpdir2 } from "node:os";
 import { join as join8 } from "node:path";
 import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
 var PASSED = /^(?:passed|succeeded|success|completed|done)$/i;
@@ -4839,7 +4858,7 @@ function orbitFindings(path) {
   let dir;
   let db;
   try {
-    dir = mkdtempSync(join8(tmpdir(), "memory-orbit-"));
+    dir = mkdtempSync(join8(tmpdir2(), "memory-orbit-"));
     const copy = join8(dir, "knowledge.sqlite");
     copyFileSync(path, copy);
     if (existsSync7(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
@@ -6554,7 +6573,7 @@ function afterCompaction(data, input2) {
 }
 
 // src/eval/scorecard.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
   measure: m.measure,
   arm,
@@ -6572,7 +6591,7 @@ var seededRecall = (version) => notRun(
   ["recall"]
 );
 function orbitArm(version) {
-  const r = spawnSync2("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
+  const r = spawnSync3("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
   const found = r.status === 0 ? r.stdout.trim().split("\n")[0] : void 0;
   const note = r.error?.code === "ENOENT" ? "Orbit is not installed (no orbit on PATH), so its arm is skipped" : found === void 0 ? "orbit --version failed, so its arm is skipped" : `Orbit ${found} is installed, but its benchmark has no memory switch until QuintinBotes/orbit#233; a live run calls a model and spends money, which this harness never does`;
   return notRun(
@@ -6642,7 +6661,7 @@ function falseRecall(version, events) {
 
 // src/eval/replay.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
+import { tmpdir as tmpdir3 } from "node:os";
 import { join as join13 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text5) {
@@ -6670,7 +6689,7 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync2(join13(tmpdir2(), "memory-replay-"));
+  const dir = mkdtempSync2(join13(tmpdir3(), "memory-replay-"));
   try {
     const db = openStore(join13(dir, "replay.sqlite"), true);
     try {
@@ -6725,7 +6744,7 @@ function replay(version, pulls, since) {
 
 // src/eval/poison.ts
 import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
+import { tmpdir as tmpdir4 } from "node:os";
 import { join as join14 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
@@ -6853,7 +6872,7 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync3(join14(tmpdir3(), "memory-poison-"));
+  const dir = mkdtempSync3(join14(tmpdir4(), "memory-poison-"));
   const db = openStore(join14(dir, "poison.sqlite"), true);
   try {
     return use(db);
@@ -6930,9 +6949,9 @@ function poison(version) {
 }
 
 // src/eval/lab.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync4 } from "node:child_process";
 import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync14, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
-import { tmpdir as tmpdir4 } from "node:os";
+import { tmpdir as tmpdir5 } from "node:os";
 import { dirname as dirname12, join as join15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
@@ -6956,11 +6975,11 @@ function fixtureRepository(task, repo) {
   cpSync(join15(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
-    check(`set up ${task}'s repository`, spawnSync3("git", args, { cwd: repo, env, encoding: "utf8" }));
+    check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
   }
 }
 function seed(task, t, repo, data) {
-  const memory = (args) => check(`seed ${task}'s memory`, spawnSync3(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
+  const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
 }
@@ -7004,7 +7023,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   if (arm === "on") env["MEMORY_LAB_PLUGIN"] = plugin;
   else delete env["MEMORY_LAB_PLUGIN"];
-  const r = spawnSync3("/bin/sh", ["-c", agent], {
+  const r = spawnSync4("/bin/sh", ["-c", agent], {
     cwd: repo,
     env,
     input: t.prompt,
@@ -7016,7 +7035,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join15(TASKS, task, "hidden");
   const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join15(hidden, f));
-  const grade2 = agentFailed ? null : spawnSync3(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const grade2 = agentFailed ? null : spawnSync4(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
     agentFailed,
@@ -7052,7 +7071,7 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync4(join15(tmpdir4(), "memory-lab-"));
+  const base2 = mkdtempSync4(join15(tmpdir5(), "memory-lab-"));
   try {
     const plugin = join15(base2, "plugin");
     for (const part of PLUGIN_PARTS) if (existsSync13(join15(ROOT, part))) cpSync(join15(ROOT, part), join15(plugin, part), { recursive: true });
@@ -7166,12 +7185,12 @@ import { performance } from "node:perf_hooks";
 // src/eval/head-to-head/arms.ts
 import { spawn } from "node:child_process";
 import { mkdtempSync as mkdtempSync5, rmSync as rmSync6 } from "node:fs";
-import { tmpdir as tmpdir5 } from "node:os";
+import { tmpdir as tmpdir6 } from "node:os";
 import { join as join16 } from "node:path";
 import { createInterface as createInterface2 } from "node:readline";
 var TYPE = { decision: "decision", correction: "convention", lesson: "precedent", hazard: "hazard", failure: "failure-pattern", "code-change": "" };
 function memoryArm() {
-  const dir = mkdtempSync5(join16(tmpdir5(), "memory-head-to-head-"));
+  const dir = mkdtempSync5(join16(tmpdir6(), "memory-head-to-head-"));
   const db = openStore(join16(dir, "arm.sqlite"), true);
   let set;
   const item = /* @__PURE__ */ new Map();

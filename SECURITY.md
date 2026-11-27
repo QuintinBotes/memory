@@ -127,7 +127,8 @@ no tenant, or in a Claude Code config not bound to that tenant.
 - **Capture sends text out.** Automatic capture (on by default once you confirm
   the consent plan that lists it, off with `capture.enabled: false`) sends the
   session transcript's user and assistant text, at most 48,000 characters per
-  run, to `api.anthropic.com` with your `ANTHROPIC_API_KEY`. Credentials, emails,
+  run, to `api.anthropic.com` with your `ANTHROPIC_API_KEY`, or without one through
+  `claude -p` on your Claude Code login. Credentials, emails,
   handles and webhook URLs are replaced before it leaves; pattern matching
   cannot catch a secret that does not look like one, such as a password in
   prose, and the transcript can hold your code. Nothing is sent from a
