@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
 - A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
 
 ## [0.9.2] - 2026-11-27
+
+### Fixed
+
+- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
 
 ### Fixed
 
