@@ -57,7 +57,7 @@ import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { OUTCOMES, recordOutcome, routeToolsets, type Outcome } from './recall/toolsets.ts';
-import { decideById, proposalStores, proposals, renderProposals, type Proposal } from './review/review.ts';
+import { decideById, expiring, proposalStores, proposals, renderExpiring, renderProposals, renew, setPin, type Expiring, type Proposal } from './review/review.ts';
 import { MODEL_DEFAULTS, expireTranscripts, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
 import { modelTimeoutMs, runProvider } from './provider/run.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
@@ -92,13 +92,14 @@ const USAGE = `usage: memory <command>
       the default. --recall on turns recall back on after memory turned it
       off itself, when two memory-linked reverts came within seven days
   remember [--scope repository|organisation|person|global] [--type <type>]
-           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
+           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] [--pin] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
-      conflicts with one queues a supersession in review; --supersedes replaces that item at once
-  list [--repo <owner/repo> | --all-repos]
+      conflicts with one queues a supersession in review; --supersedes replaces that item at once; --pin pins it
+  list [--repo <owner/repo> | --all-repos | --expired]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
-      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read
+      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read.
+      --expired: the active items of this repository's tenant and the person file that read as expired, which no recall shows
   export --to scf [--repo <owner/repo> | --all-repos]
       send this repository's tenant's proposed repository and organisation items to the SCF set for it with memory init
       --scf <tenant>=<url> (key in SCF_API_KEY), as world proposals of layer memory with their evidence; nothing in
@@ -117,8 +118,14 @@ const USAGE = `usage: memory <command>
       and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
       read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
       read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals
-  review
-      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
+  review [--json]
+      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate, and under
+      "Expiring soon" the active items that expire within 14 days or expired in the last 30
+  renew <id>...
+      reset an item's reinforcement date, so its 90 days start again; support is unchanged. Undo with memory undo
+  pin <id> | unpin <id>
+      pin an item you stated or approved so it never expires, or take the pin back. A pinned item still goes stale,
+      can be superseded or rejected, and counts against the budgets. No MCP tool can renew or pin
   approve <id> [--scope repository|organisation|person|global]
       make a proposal active
   reject <id> [--reason <text>]
@@ -133,7 +140,7 @@ const USAGE = `usage: memory <command>
       stores the proposals and lists them; --apply, from a terminal, writes exactly the line shown, marks the item
       promoted and takes it out of recall; --reject keeps the proposal as a tombstone. Nothing is committed or pushed
   undo <audit-id>
-      reverse one merge or supersession, by the audit id its command printed
+      reverse one merge, supersession or renew, by the audit id its command printed
   sweep
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
@@ -493,6 +500,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       rationale: { type: 'string' },
       source: { type: 'string' },
       supersedes: { type: 'string' },
+      pin: { type: 'boolean' },
     },
   });
   const scope = values.scope as Scope;
@@ -547,6 +555,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, 'item_remembered', { type: 'item', id: done.id }, { scope });
       console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      if (values.pin === true) console.log(pinSaid(done.id, setPin(db, done.id, true)));
       await embedAfterWrite(db, config, tenant);
       return;
     }
@@ -561,6 +570,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
     } else {
       throw new Refusal('this statement was already placed as superseded');
     }
+    if (values.pin === true) console.log(pinSaid(stored.id, setPin(db, stored.id, true)));
     await embedAfterWrite(db, config, tenant);
   } finally {
     db.close();
@@ -583,10 +593,17 @@ function reachOf(values: { repo?: string | undefined; 'all-repos'?: boolean | un
 const REACH_OPTIONS = { repo: { type: 'string' }, 'all-repos': { type: 'boolean' } } as const;
 
 function list(args: string[], data: string, cwd: string): void {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: REACH_OPTIONS });
-  if (positionals.length > 0) throw new Refusal('usage: memory list [--repo <owner/repo> | --all-repos]', 2);
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...REACH_OPTIONS, expired: { type: 'boolean' } } });
+  if (positionals.length > 0 || (values.expired === true && (values.repo !== undefined || values['all-repos'] === true))) {
+    throw new Refusal('usage: memory list [--repo <owner/repo> | --all-repos | --expired]', 2);
+  }
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
+  if (values.expired === true) {
+    const gone = expiringHere(data, context, true);
+    if (gone.length === 0) return void console.error('No expired items here.');
+    return void process.stdout.write(`Expired: ${gone.length}. ${RENEW_HINT}\n${fence(PROPOSALS_LABEL, renderExpiring(gone))}`);
+  }
   const items = visibleItems(data, context, cwd, [], undefined, null, reachOf(values, config, context));
   // On stderr, so a script reading stdout still sees nothing (#122).
   if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
@@ -750,14 +767,71 @@ function review(args: string[], data: string, cwd: string): void {
   if (held.length > 0) {
     process.stdout.write(`Accepted in SCF, but the evidence was purged here, so they stay proposed until you decide (memory purge --item <id> removes one): ${held.length}.\n${fence(PROPOSALS_LABEL, held.join(''))}`);
   }
-  if (all.length === 0) return waiting.length > 0 || held.length > 0 ? undefined : void console.error('No proposals to review here.');
-  const quarantined = all.filter((p) => p.quarantine !== null).length;
-  const stale = all.filter((p) => p.status !== 'proposed').length;
-  process.stdout.write(
-    `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. ` +
-      'Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.\n' +
-      fence(PROPOSALS_LABEL, renderProposals(all)),
-  );
+  const soon = expiringHere(data, context);
+  if (all.length === 0 && waiting.length === 0 && held.length === 0 && soon.length === 0) return void console.error('No proposals to review here.');
+  if (all.length > 0) {
+    const quarantined = all.filter((p) => p.quarantine !== null).length;
+    const stale = all.filter((p) => p.status !== 'proposed').length;
+    process.stdout.write(
+      `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. ` +
+        'Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.\n' +
+        fence(PROPOSALS_LABEL, renderProposals(all)),
+    );
+  }
+  // Only when there is one, so a review with nothing near expiry prints what it always did.
+  if (soon.length > 0) process.stdout.write(`Expiring soon: ${soon.length}. ${RENEW_HINT}\n${fence(PROPOSALS_LABEL, renderExpiring(soon))}`);
+}
+
+const RENEW_HINT = 'An item expires 90 days after its last approval, remember or helped report; memory renew <id> starts its 90 days again, memory pin <id> keeps it from expiring.';
+
+/** The items near or past expiry in the stores this repository may review (`expiring`), the tenant's first. */
+function expiringHere(data: string, context: Context, expired = false): Expiring[] {
+  const out: Expiring[] = [];
+  for (const { file, tenant } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      out.push(...expiring(db, tenant, expired));
+    } finally {
+      db.close();
+    }
+  }
+  return out;
+}
+
+/** What `memory pin` and `remember --pin` say, or a refusal when the item may not be pinned. */
+function pinSaid(id: string, done: ReturnType<typeof setPin>): string {
+  if (done === 'missing') throw new Refusal(`no active item ${id} here to pin`);
+  if (typeof done === 'object') throw new Refusal(`not pinned: ${id} has ${done.trust} trust; only an item you stated or approved can be pinned, so approve or remember it first`);
+  return done === 'already' ? `${id} is already pinned` : `pinned ${id}: it does not expire until memory unpin ${id}`;
+}
+
+/** `memory renew <id>...`, `memory pin <id>` and `memory unpin <id>`: the owner's say over expiry (#142), never an MCP tool's. */
+function expiryCommand(args: string[], data: string, cwd: string, verb: 'renew' | 'pin' | 'unpin'): void {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length === 0 || (verb !== 'renew' && positionals.length !== 1)) throw new Refusal(verb === 'renew' ? 'give one or more item ids' : 'give one item id', 2);
+  const stores = proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()));
+  for (const id of positionals) {
+    let said: string | null = null;
+    for (const { file } of stores) {
+      const db = openStore(file, false);
+      if (db === null) continue;
+      try {
+        if (verb === 'renew') {
+          const audit = renew(db, id);
+          if (audit !== null) said = `renewed ${id}: its 90 days start again; undo with memory undo ${audit}`;
+        } else {
+          const done = setPin(db, id, verb === 'pin');
+          if (done !== 'missing') said = verb === 'pin' ? pinSaid(id, done) : done === 'already' ? `${id} is not pinned` : `unpinned ${id}: it expires 90 days after its last reinforcement again`;
+        }
+      } finally {
+        db.close();
+      }
+      if (said !== null) break;
+    }
+    if (said === null) throw new Refusal(`no active item ${id} here; memory list and memory review list them`);
+    console.log(said);
+  }
 }
 
 /**
@@ -988,7 +1062,7 @@ function undoCommand(args: string[], data: string, cwd: string): void {
       db.close();
     }
   }
-  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge or supersession here, or it was already undone`);
+  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge, supersession or renew here, or it was already undone`);
 }
 
 /** `memory recheck [<id>]`: check this repository's anchored items, stale ones included, and restore what holds. */
@@ -1533,6 +1607,10 @@ async function main(argv: string[]): Promise<void> {
       return review(rest, data, process.cwd());
     case 'undo':
       return undoCommand(rest, data, process.cwd());
+    case 'renew':
+    case 'pin':
+    case 'unpin':
+      return expiryCommand(rest, data, process.cwd(), command);
     case 'approve':
     case 'reject':
       return decideCommand(rest, data, process.cwd(), command);

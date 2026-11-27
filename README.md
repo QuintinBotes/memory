@@ -420,7 +420,8 @@ A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal
 commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)`, `Bash(*memory.mjs*reject*)` and
-`Bash(*memory.mjs*close*)` (an agent's shell can run `memory close`).
+`Bash(*memory.mjs*close*)` (an agent's shell can run `memory close`), and
+the same for `renew` and `pin`, which keep an item from expiring.
 
 ### Orbit, both ways
 
@@ -837,6 +838,25 @@ shown as low (below 0.4), medium or high (0.7 or more). These constants are
 provisional until the evaluation slice
 ([#8](https://github.com/QuintinBotes/memory/issues/8)) tunes them. An item
 with no reinforcement for 90 days reads as expired and leaves every recall.
+Being shown is not reinforcement, so you are told before it happens:
+
+```bash
+memory review                  # "Expiring soon": expires within 14 days, or expired in the last 30
+memory list --expired          # every active item that reads as expired
+memory renew <id>...           # its 90 days start again; support is unchanged; memory undo <audit-id> takes it back
+memory pin <id>                # never expires; memory unpin <id> takes the pin back
+memory remember --pin -- <statement>
+```
+
+`memory review --json` lists them under `expiring`, with `days_left`
+(0 or less once expired), and the band above the prompt counts them apart
+from proposals. Only an item you stated or approved can be pinned; one with
+only agent trust is refused. A pinned item still goes stale when its citation
+fails, can still be superseded, contradicted or rejected, and still counts
+against the recall budgets. No MCP tool can renew or pin, but an agent's
+shell can run the commands: add ask rules such as `Bash(*memory.mjs*renew*)`
+and `Bash(*memory.mjs*pin*)`, as for `approve`. Renew, pin and unpin are
+each recorded in the audit log.
 
 `memory report [--tenant <name>]` ranks the active items of each tenant bound to
 this Claude Code config by net score (`helped` minus `wrong` minus agents'

@@ -39,6 +39,9 @@ export type AuditAction =
   | 'transcripts_processed'
   | 'transcripts_modelled'
   | 'transcripts_expired'
+  | 'item_renewed'
+  | 'item_pinned'
+  | 'item_unpinned'
   | 'undone';
 
 export function recordAudit(

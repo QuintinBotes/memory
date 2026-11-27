@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The owner is told before an item expires, and can renew or pin it (#142). `memory review` and `review --json` (a new `expiring` key) list under "Expiring soon" the active items that expire within 14 days or expired in the last 30, with days left, and the band above the prompt counts them apart from proposals; with none, the review prints what it did before. `memory renew <id>...` starts an item's 90 days again without raising support, audited and reversible with `memory undo`. `memory pin <id>`, `memory unpin <id>` and `memory remember --pin` keep an item you stated or approved from expiring; it still goes stale, is superseded or rejected as before. `memory list --expired` lists what has expired. No MCP tool can renew or pin. The store gains a `pinned_at` column (schema 19).
+
 ### Fixed
 
 - Capture works without `ANTHROPIC_API_KEY`: the filter falls back to the Claude Code login through `claude -p`, with no tools, hooks, settings or saved session. Subscription users had no capture at all (#130).

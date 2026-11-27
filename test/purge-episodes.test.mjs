@@ -77,7 +77,7 @@ test('#82 migration: v17 adds the column to a v16 store and its old episodes sta
   db.close();
   assert.equal(purge(s, '--repo', 'acme/api').status, 0);
   assert.deepEqual(repos(s), [null, null]);
-  assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 18);
+  assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 19);
 });
 
 test('#82 review: one session, command and fingerprint failing in two repositories is two episodes, and purging one keeps the other', async () => {
