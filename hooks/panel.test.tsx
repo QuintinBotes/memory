@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 // #104: the review pane and the band, with the memory CLI stood in for by process.run.
 const ESC = String.fromCharCode(27)
@@ -6,11 +7,13 @@ const proposal = (id: string, statement = 'Releases are cut from main') => ({
   id, status: 'proposed', type: 'convention', scope: 'repository', scope_key: 'acme/api', statement, shadow: 'hold',
   evidence: [{ source_ref: 'session-1', author_role: 'agent', agent: 'codex', taint: null }],
 })
-const BAND = { plugin: 'memory', component: 'AbovePrompt', props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 3, bodyColumns: 80 } } as const
+// The person typing /memory-review at the prompt.
+const OPEN = { command: 'memory-review', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as const
+const BAND = { plugin: 'memory', component: 'AbovePrompt', props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 3, bodyColumns: 80, scroll: { offset: 0, bodyRows: 3 }, view: {} } } as const
 const PANE = { plugin: 'memory', component: 'Pane', requestId: 'memory-review', props: { title: 'Memory review', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as const
 
 /** A CLI whose store holds `waiting`; approve and reject take the proposal out, and every call is kept. */
-function cli(on: Parameters<Parameters<typeof test>[1]>[1], waiting: object[]) {
+function cli(on: On, waiting: object[]) {
   const calls: string[][] = []
   let list = [...waiting] as { id: string }[]
   on('command.register', () => ({ value: { command: 'memory-review' } }))
@@ -19,9 +22,9 @@ function cli(on: Parameters<Parameters<typeof test>[1]>[1], waiting: object[]) {
   on('process.run', (_, e) => {
     const args = e.argv.slice(2)
     calls.push(args)
-    if (args[0] === 'review') return { value: { exitCode: 0, stdout: JSON.stringify({ proposals: list, edits: [] }), stderr: '' } }
+    if (args[0] === 'review') return { value: { exitCode: 0, stdout: JSON.stringify({ proposals: list, edits: [] }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     list = list.filter(p => p.id !== args[1])
-    return { value: { exitCode: 0, stdout: `${args[0] === 'approve' ? 'approved' : 'rejected'} ${args[1]}\n`, stderr: '' } }
+    return { value: { exitCode: 0, stdout: `${args[0] === 'approve' ? 'approved' : 'rejected'} ${args[1]}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   return calls
 }
@@ -30,7 +33,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   test(`#104 SC2 the band counts what waits, and Approve in the pane makes it active and clears the band (${surface})`, async ($, on) => {
     const calls = cli(on, [proposal('m-aaaa'), proposal('m-bbbb')])
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    await $.command.run({ command: 'memory-review' })
+    await $.command.run(OPEN)
     const band = await $.ui.mount({ ...BAND, surface })
     expect((await band.find({ type: 'Text', text: /waiting/ }))?.text).toContain('2 proposals waiting')
     await band.unmount()
@@ -52,7 +55,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 test('#104 SC3 Reject in the pane runs memory reject on that proposal only', async ($, on) => {
   const calls = cli(on, [proposal('m-aaaa'), proposal('m-bbbb')])
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'memory-review' })
+  await $.command.run(OPEN)
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'reject-m-bbbb' })
   await pane.unmount()
@@ -62,7 +65,7 @@ test('#104 SC3 Reject in the pane runs memory reject on that proposal only', asy
 test('#104 a statement with control characters is drawn without them', async ($, on) => {
   cli(on, [proposal('m-aaaa', `Run it${ESC}[2J now`)])
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'memory-review' })
+  await $.command.run(OPEN)
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const row = await pane.find({ type: 'Text', text: /Run it/ })
   expect(row?.text.includes(ESC)).toBe(false)
@@ -73,9 +76,9 @@ test('#104 with nothing waiting there is no band, and a failing CLI says so in t
   on('command.register', () => ({ value: { command: 'memory-review' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: 'memory is not set up\n' } }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: 'memory is not set up\n', isStdoutTruncated: false, isStderrTruncated: false } }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'memory-review' })
+  await $.command.run(OPEN)
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await band.find({ type: 'Text', text: /waiting/ })).toBeUndefined()
   await band.unmount()

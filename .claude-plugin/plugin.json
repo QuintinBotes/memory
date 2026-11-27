@@ -15,5 +15,14 @@
     "privacy",
     "local-first"
   ],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "mcpServers": {
+    "memory": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs",
+        "mcp"
+      ]
+    }
+  }
 }

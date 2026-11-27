@@ -6929,7 +6929,7 @@ var RUNS = 3;
 var ROOT = dirname12(dirname12(fileURLToPath2(import.meta.url)));
 var TASKS = join15(ROOT, "lab", "tasks");
 var BUNDLE = join15(ROOT, "dist", "memory.mjs");
-var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", ".mcp.json"];
+var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", "types"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
 var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync13(join15(TASKS, t, "task.json"))).sort();

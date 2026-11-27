@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An optional local reranker (#28): `"rerank": {"model": "inkling-2-mini", "url": "http://127.0.0.1:11434"}` in `config.json` has a generative model on the same Ollama reorder the rows `memory_search` and `memory recall --diff` found; each row adds `rerank <place>`. Off unless named; Inkling 2 Mini is the documented default, not pinned and never downloaded by memory. A tenant's text goes only to a loopback address; a failure, a refusal or a 3-second timeout keeps the fused order and says the rerank was skipped. Never in a hook.
 - No schema change and no new consent version for either; the embeddings category's wording now covers both.
 
+### Fixed
+
+- Opening the repository in Claude Code no longer starts a broken `memory` MCP server (#106). The plugin's server is declared in `.claude-plugin/plugin.json` instead of a root `.mcp.json`, which Claude Code also read as the project's own config, where `${CLAUDE_PLUGIN_ROOT}` is unset. The session lab copies `types/` into its plugin instead of `.mcp.json`.
+
 ### Changed
 
 - Search fuses the keyword ranking and the semantic leg by reciprocal rank fusion (k = 60) instead of adding semantic points to the keyword sum; the `graph` bonus is now a third list in that fusion, of items sharing an anchored path with one of the top three keyword or top three semantic hits. Each row keeps its points, `graph 1` among them, and ends with `rrf`.
