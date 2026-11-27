@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
+
 ## [0.9.2] - 2026-11-27
 
 ### Fixed

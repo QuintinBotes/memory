@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setup, run, remember, commit, fenced, tokens } from './helpers.mjs';
 
@@ -112,6 +112,22 @@ test('edge: a team member\'s strong dismissal arrives with team trust and waits 
   const team = all.find((r) => r.statement.includes('Comment repeats the code'));
   assert.equal(team.origin_trust, 'team');
   assert.equal(team.status, 'proposed');
+});
+
+test('#132 the owner\'s own dismissal by a pull request reply is the owner\'s decision, by .review-voice/config.yaml', () => {
+  const s = precedents({
+    findings: [finding('rv_01', 'src/x/a.ts', CLAIM), finding('rv_02', 'src/x/y.ts', 'Comment repeats the code')],
+    outcomes: [['rv_01', 'dismissed', 'strong', 'QuintinOwner'], ['rv_02', 'dismissed', 'strong', 'teammate']],
+  });
+  mkdirSync(join(s.acmeApi, '.review-voice'), { recursive: true });
+  writeFileSync(join(s.acmeApi, '.review-voice', 'config.yaml'), 'version: 1\nidentity:\n  owner_reviewer: quintinowner # the login\nrepositories: []\n');
+  importIt(s);
+  const all = precedentRows(s);
+  const own = all.find((r) => r.statement.includes(CLAIM));
+  assert.equal(own.origin_trust, 'owner');
+  assert.match(own.statement, /^Owner declined this finding:/);
+  const team = all.find((r) => r.statement.includes('Comment repeats the code'));
+  assert.equal(team.origin_trust, 'team', 'anyone else\'s dismissal keeps team trust');
 });
 
 test('1.2 and SC-001 the approved precedent is recalled for a sibling change under its path, with its link and points', () => {
