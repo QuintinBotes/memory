@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The session lab times memory's Stop hooks again: current Claude Code records them in a `stop_hook_summary` record, not as `hook_success` attachments, so `hook_ms` came back empty with real Claude Code. Hooks that print nothing (such as session start with no recall) are not timed anywhere in the transcript, so `hook_ms` still omits them (#153).
+
 ## [0.9.2] - 2026-11-27
 
 ### Fixed
