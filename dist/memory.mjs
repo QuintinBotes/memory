@@ -8054,7 +8054,9 @@ function list(args, data, cwd) {
   if (positionals.length > 0) throw new Refusal("usage: memory list [--repo <owner/repo> | --all-repos]", 2);
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
-  process.stdout.write(renderAll(visibleItems(data, context, cwd, [], void 0, null, reachOf(values, config, context))));
+  const items = visibleItems(data, context, cwd, [], void 0, null, reachOf(values, config, context));
+  if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
+  process.stdout.write(renderAll(items));
 }
 async function exportCommand(args, data, cwd) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: "string" }, to: { type: "string" }, ...REACH_OPTIONS } });
