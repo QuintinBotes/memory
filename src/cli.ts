@@ -587,7 +587,10 @@ function list(args: string[], data: string, cwd: string): void {
   if (positionals.length > 0) throw new Refusal('usage: memory list [--repo <owner/repo> | --all-repos]', 2);
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
-  process.stdout.write(renderAll(visibleItems(data, context, cwd, [], undefined, null, reachOf(values, config, context))));
+  const items = visibleItems(data, context, cwd, [], undefined, null, reachOf(values, config, context));
+  // On stderr, so a script reading stdout still sees nothing (#122).
+  if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
+  process.stdout.write(renderAll(items));
 }
 
 /** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
