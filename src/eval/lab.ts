@@ -28,7 +28,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TASKS = join(ROOT, 'lab', 'tasks');
 const BUNDLE = join(ROOT, 'dist', 'memory.mjs');
 /** What the on arm's agent may load: the plugin, without the lab's tasks and hidden tests. */
-const PLUGIN_PARTS = ['.claude-plugin', 'hooks', 'dist', 'skills', '.mcp.json'];
+const PLUGIN_PARTS = ['.claude-plugin', 'hooks', 'dist', 'skills', 'types'];
 const RUN_TIMEOUT_MS = 30 * 60_000;
 const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'lab', GIT_AUTHOR_EMAIL: 'lab@example.com', GIT_COMMITTER_NAME: 'lab', GIT_COMMITTER_EMAIL: 'lab@example.com' };
 
