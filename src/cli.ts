@@ -62,6 +62,7 @@ import { MODEL_DEFAULTS, expireTranscripts, modelTranscripts, ollamaClient, pars
 import { modelTimeoutMs, runProvider } from './provider/run.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { captureCi } from './capture/ci.ts';
+import { SEED_LIMIT, parseRewrite, seed, seedCandidates, type Rewrite } from './capture/seed.ts';
 import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './capture/failures.ts';
 import { scanReverts } from './capture/reverts.ts';
 import { failureRecall, weakSignature } from './hooks/failure.ts';
@@ -200,6 +201,13 @@ const USAGE = `usage: memory <command>
   ci
       read this repository's CI runs with gh: a failed run followed by a passing run on another commit becomes a repair
       proposal with the fingerprint, the fix commit and both runs as evidence
+  seed --git [--since <date>] [--dry-run]
+      read this repository's commit history with git log (the last 12 months by default; no merges, no bots' commits):
+      a commit whose message gives a reason (a revert with a body, or because, so that, must, never, instead of) gives
+      one sentence of it as an agent-trusted proposal, with the commit as its source and date and the commit's files
+      that exist at HEAD as anchors. At most 20 per run, newest first; it says how many are left. A rerun stores nothing
+      new and a rejected statement is not proposed again. With transcriptModel set, a model on this machine may reword
+      a sentence with the message's own words. Never run by a hook; --dry-run lists the candidates and writes nothing
   reverts
       count the reverts of commits memory linked items to, as the hook does after a git revert
   pre-compact
@@ -1092,6 +1100,48 @@ function correctionsCommand(data: string, cwd: string): void {
   }
 }
 
+/**
+ * `memory seed --git`: proposals from this repository's commit history (#145), run by the owner, never by a hook. The
+ * consent check comes before any git log. With transcriptModel set, a model on this machine may reword each one.
+ */
+function seedCommand(args: string[], data: string, cwd: string): void {
+  const { values } = parseArgs({ args, options: { git: { type: 'boolean' }, since: { type: 'string' }, 'dry-run': { type: 'boolean' } } });
+  if (values.git !== true) throw new Refusal('memory seed needs --git: commit history is the only source it reads', 2);
+  const config = setUp(data);
+  if (!covers(config, 'seed')) throw new Refusal('your consent does not cover reading commit history yet; run memory init and confirm the plan');
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null) throw new Refusal(`nothing seeded: ${context.reason}`);
+  const candidates = seedCandidates(cwd, values.since ?? new Date(Date.now() - 365 * 864e5).toISOString());
+  if (candidates === null) throw new Refusal('nothing seeded: git could not read this repository\'s history');
+  if (values['dry-run'] === true) {
+    for (const c of candidates.slice(0, SEED_LIMIT)) console.log(`${c.sha.slice(0, 7)} ${c.at.slice(0, 10)} ${JSON.stringify(c.statement)} (${c.files.join(', ')})`);
+    console.log(`${candidates.length} candidate${candidates.length === 1 ? '' : 's'}; at most ${SEED_LIMIT} are stored per run. Dry run: nothing was written`);
+    return;
+  }
+  let rewrite: Rewrite | undefined;
+  const settings = config.transcriptModel;
+  if (settings !== undefined && covers(config, 'transcriptModel')) {
+    const { url, model } = { ...MODEL_DEFAULTS, ...settings };
+    if (!onThisMachine(new URL(url))) console.error(`memory: the model pass did not run for tenant ${context.tenant}: its model at ${url} is not on this machine`);
+    else {
+      const command = settings.command ?? [process.execPath, fileURLToPath(import.meta.url), 'model-client'];
+      rewrite = (c) => {
+        const r = runProvider(command, cwd, { op: 'seed', url, model, message: c.message, statement: c.statement }, modelTimeoutMs());
+        return r.ok ? parseRewrite(r.stdout) : { failed: r.reason };
+      };
+    }
+  }
+  const db = openStore(tenantFile(data, context.tenant), true)!;
+  try {
+    const done = seed(db, { tenant: context.tenant, repository: context.repository }, candidates, rewrite);
+    for (const line of done.lines) console.log(line);
+    if (done.failed !== undefined) console.error(`memory: the model failed (${done.failed}); the rest keep the rule's sentence`);
+    console.log(`stored ${done.stored} proposal${done.stored === 1 ? '' : 's'}; ${done.left} candidate${done.left === 1 ? '' : 's'} left for the next run. They wait in memory review`);
+  } finally {
+    db.close();
+  }
+}
+
 /** The model pass's own Ollama client, run by the provider runner (`correctionsCommand`), never by a person. */
 async function modelClient(): Promise<void> {
   process.stdout.write(await ollamaClient(readFileSync(0, 'utf8')));
@@ -1576,6 +1626,8 @@ async function main(argv: string[]): Promise<void> {
       return commandPassedHook(data);
     case 'ci':
       return ciCommand(data, process.cwd());
+    case 'seed':
+      return seedCommand(rest, data, process.cwd());
     case 'reverts':
       return revertsCommand(data, process.cwd());
     case 'transcript':

@@ -101,6 +101,8 @@ export function addItem(db: DatabaseSync, c: NewItem): Stored {
     )
     .all(c.tenant, c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as unknown as Related[];
   let conflict: { row: Related; sim: number } | undefined;
+  // A dated proposal older than a waiting proposal on the same subject: the older arrives superseded by it (#145).
+  let newer: { row: Related; sim: number } | undefined;
   for (const r of rows) {
     if (!anchorsOverlap(c.anchors, JSON.parse(r.anchors_json) as Anchor[])) continue;
     // The exact statement is a repeat whatever its type, as it always was; a looser match needs the same type.
@@ -111,6 +113,14 @@ export function addItem(db: DatabaseSync, c: NewItem): Stored {
     // "retry 3 times" and "retry 5 times" are about one subject, not one claim.
     if (sim >= REPEAT && sameNumbers(mine, theirs)) return mergeEvidence(db, r.id, c);
     if (sim >= CONFLICT && r.status === 'active' && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (conflict?.sim ?? 0)) conflict = { row: r, sim };
+    if (sim >= CONFLICT && r.status === 'proposed' && c.status === 'proposed' && c.evidenceAt !== undefined && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (newer?.sim ?? 0)) newer = { row: r, sim };
+  }
+  if (conflict === undefined && newer !== undefined) {
+    const by = newer.row.id;
+    const at = (db.prepare('SELECT min(captured_at) AS at FROM evidence WHERE item_id = ?').get(by) as { at: string | null }).at;
+    if (at !== null && c.evidenceAt! < at) {
+      return place(db, c, key, () => ({ kind: 'superseded-on-arrival', id: insertItem(db, { ...c, status: 'superseded', validTo: at, statusReason: `superseded by ${by}` }), by }));
+    }
   }
   if (conflict === undefined) return place(db, c, key, () => ({ kind: 'inserted', id: insertItem(db, c) }));
 

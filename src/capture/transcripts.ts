@@ -325,12 +325,26 @@ Find each sentence in which the owner corrects what the agent did or chose, or s
 Answer JSON only: {"corrections":[{"line":<number>,"quote":"<the sentence, copied character for character>"}]}.
 Never paraphrase, shorten or fix a quote. Answer {"corrections":[]} when there is none.`;
 
+const SEED_PROMPT = `You read a commit message and one sentence taken from it that gives a reason for a decision.
+Rewrite the sentence as one short factual statement of the decision and its reason, using only words that appear in the commit message.
+Answer JSON only: {"statement":"<the statement>"}.`;
+
 /**
  * Memory's own Ollama client, which the provider runner runs as `memory model-client` so the runner's limits hold: the
  * request on stdin, one call to Ollama at its `url`, the answer as the provider protocol's one line.
  */
 export async function ollamaClient(input: string): Promise<string> {
-  const req = JSON.parse(input) as { url: string; model: string; turns: Turn[] };
+  const req = JSON.parse(input) as { op?: string; url: string; model: string; turns: Turn[]; message?: string; statement?: string };
+  if (req.op === 'seed') {
+    const res = await fetch(new URL('/api/generate', req.url), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: req.model, system: SEED_PROMPT, prompt: `Commit message:\n${req.message}\n\nSentence: ${req.statement}`, format: 'json', stream: false, options: { temperature: 0, num_predict: 256 } }),
+    });
+    if (!res.ok) throw new Error(`Ollama answered ${res.status}`);
+    const answer = JSON.parse(((await res.json()) as { response?: string }).response ?? '') as { statement?: unknown };
+    return `${JSON.stringify({ status: 'ok', statement: typeof answer?.statement === 'string' ? answer.statement : '' })}\n`;
+  }
   const res = await fetch(new URL('/api/generate', req.url), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

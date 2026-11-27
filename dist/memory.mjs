@@ -802,10 +802,10 @@ function isNegated(text5, index) {
   const before = text5.slice(0, index);
   let clauseStart = -1;
   for (const mark of [".", ";", ":", "!", "?", "\n", ","]) clauseStart = Math.max(clauseStart, before.lastIndexOf(mark));
-  const words3 = before.slice(clauseStart + 1).toLowerCase().split(/\s+/).map((w) => w.replace(/^[^\p{L}']+|[^\p{L}']+$/gu, "")).filter(Boolean).slice(-NEGATION_REACH);
-  for (let i = words3.length - 1; i >= 0; i--) {
-    if (isNegation(words3[i], words3[i - 1])) return true;
-    if (!NEGATION_FILLER.has(words3[i])) return false;
+  const words4 = before.slice(clauseStart + 1).toLowerCase().split(/\s+/).map((w) => w.replace(/^[^\p{L}']+|[^\p{L}']+$/gu, "")).filter(Boolean).slice(-NEGATION_REACH);
+  for (let i = words4.length - 1; i >= 0; i--) {
+    if (isNegation(words4[i], words4[i - 1])) return true;
+    if (!NEGATION_FILLER.has(words4[i])) return false;
   }
   return false;
 }
@@ -1445,7 +1445,8 @@ var DATA_CATEGORIES = [
   { id: "transcripts", since: 10, text: "When you turn on the separate opt-in for transcripts (memory init --transcripts on), in a repository that matches a tenant: at the end of a session only the path of the session's transcript file, with the session id, the repository and the time, is recorded in the tenant's file; at the next session start or in the daily sweep memory reads that file on this machine, never sending it anywhere, takes only your own messages, replaces credentials, emails and handles in them, and keeps each correction you gave the agent (a sentence such as 'no, use the other branch') as a proposal that quotes your words verbatim, with the session id and line as its source, waiting for your approval. Nothing of the transcript is kept besides those quotes; agent output, subagent reports and tool results are never read as corrections, text between <private> and </private> and a transcript containing DO NOT INDEX THIS CHAT are skipped. After a compaction the compaction summary, redacted, is kept as an episode. The path records and episodes are deleted after 30 days; memory purge removes them with the tenant and --older-than removes those before its cut-off. With the opt-in off, or before you agree to this plan, nothing is recorded" },
   { id: "scf", since: 11, text: "When you run memory export --to scf, or memory import --scf, for a tenant that has an SCF address in config.json (memory init --scf <tenant>=<url>, https only, or http to this machine), with the key in SCF_API_KEY: that tenant's proposed repository and organisation items are sent to that address as proposals: the statement, type, scope, repository name, rationale, anchored paths and symbols, and each evidence's source reference, role and time, with credentials replaced; an item that holds one is not sent. The tenant's person-file items and every other tenant's items are never sent. memory import --scf asks the same address for the decisions on those proposals and for the run outcomes on accepted ones, and applies them to the items it sent. Nothing is sent for a tenant without an address, or before you agree to this plan" },
   { id: "personTranscripts", since: 12, text: "With the transcripts opt-in on, a session whose working directory matches no tenant is recorded the same way in the person file: the transcript's path, the session id, the repository if there is one and the time, deleted after 30 days. At the next session start or sweep memory reads your own messages in it on this machine, as above, and keeps each correction about your own habits as a person proposal quoting you verbatim; a correction that names a path, code, a tenant or a repository is not kept" },
-  { id: "transcriptModel", since: 12, text: "When transcriptModel is set in config.json and you run memory corrections (never in a hook): your own messages of each transcript recorded above, read and redacted as above, are sent to the model it names (Inkling 2 Mini by default, which you install; memory never downloads a model) at its address (a local Ollama at http://127.0.0.1:11434 by default), through the provider runner, so it can find corrections the rules miss. Only a quote found verbatim in your messages is kept, as a proposal. A tenant's messages are sent only to a model on this machine (an address of 127.0.0.1, localhost or [::1]); an address elsewhere is used for the person file only. Without transcriptModel, or before you agree to this plan, nothing is sent" }
+  { id: "transcriptModel", since: 12, text: "When transcriptModel is set in config.json and you run memory corrections (never in a hook): your own messages of each transcript recorded above, read and redacted as above, are sent to the model it names (Inkling 2 Mini by default, which you install; memory never downloads a model) at its address (a local Ollama at http://127.0.0.1:11434 by default), through the provider runner, so it can find corrections the rules miss. Only a quote found verbatim in your messages is kept, as a proposal. A tenant's messages are sent only to a model on this machine (an address of 127.0.0.1, localhost or [::1]); an address elsewhere is used for the person file only. Without transcriptModel, or before you agree to this plan, nothing is sent" },
+  { id: "seed", since: 16, text: "When you run memory seed --git (never in a hook): the commit subjects, bodies, dates, author and committer names and changed file paths of this repository's history, the last 12 months unless --since says otherwise, are read with git log on this machine, skipping merge commits and bots' commits. A commit whose message gives a reason (a revert with a body, or words such as because, so that, must, never, instead of) gives one sentence of it, kept only when no credential, email, handle or committer's name was in it, as an agent-trusted proposal with the commit hash and date as its evidence and the commit's files that still exist as its anchors, waiting for your approval; at most 20 per run. Names and the rest of the message are not kept. With transcriptModel set and the transcriptModel category agreed, each such commit message is sent to that model only when it is on this machine, to rewrite the sentence using the message's own words. Nothing else is sent; before you agree to this plan, git log is not read" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -1975,6 +1976,7 @@ function addItem(db, c) {
        ORDER BY created_at, id`
   ).all(c.tenant, c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
   let conflict2;
+  let newer;
   for (const r of rows) {
     if (!anchorsOverlap(c.anchors, JSON.parse(r.anchors_json))) continue;
     if (r.statement_key === key2) return mergeEvidence(db, r.id, c);
@@ -1983,6 +1985,14 @@ function addItem(db, c) {
     const sim = similarity(mine, theirs);
     if (sim >= REPEAT && sameNumbers(mine, theirs)) return mergeEvidence(db, r.id, c);
     if (sim >= CONFLICT && r.status === "active" && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (conflict2?.sim ?? 0)) conflict2 = { row: r, sim };
+    if (sim >= CONFLICT && r.status === "proposed" && c.status === "proposed" && c.evidenceAt !== void 0 && r.scope === c.scope && r.scope_key === c.scopeKey && sim > (newer?.sim ?? 0)) newer = { row: r, sim };
+  }
+  if (conflict2 === void 0 && newer !== void 0) {
+    const by = newer.row.id;
+    const at3 = db.prepare("SELECT min(captured_at) AS at FROM evidence WHERE item_id = ?").get(by).at;
+    if (at3 !== null && c.evidenceAt < at3) {
+      return place(db, c, key2, () => ({ kind: "superseded-on-arrival", id: insertItem(db, { ...c, status: "superseded", validTo: at3, statusReason: `superseded by ${by}` }), by }));
+    }
   }
   if (conflict2 === void 0) return place(db, c, key2, () => ({ kind: "inserted", id: insertItem(db, c) }));
   const older = db.prepare("SELECT min(captured_at) AS at FROM evidence WHERE item_id = ?").get(conflict2.row.id).at;
@@ -5947,8 +5957,25 @@ var PROMPT3 = `You read the owner's own messages from a coding session, one per 
 Find each sentence in which the owner corrects what the agent did or chose, or says how the agent must work from now on.
 Answer JSON only: {"corrections":[{"line":<number>,"quote":"<the sentence, copied character for character>"}]}.
 Never paraphrase, shorten or fix a quote. Answer {"corrections":[]} when there is none.`;
+var SEED_PROMPT = `You read a commit message and one sentence taken from it that gives a reason for a decision.
+Rewrite the sentence as one short factual statement of the decision and its reason, using only words that appear in the commit message.
+Answer JSON only: {"statement":"<the statement>"}.`;
 async function ollamaClient(input2) {
   const req = JSON.parse(input2);
+  if (req.op === "seed") {
+    const res2 = await fetch(new URL("/api/generate", req.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: req.model, system: SEED_PROMPT, prompt: `Commit message:
+${req.message}
+
+Sentence: ${req.statement}`, format: "json", stream: false, options: { temperature: 0, num_predict: 256 } })
+    });
+    if (!res2.ok) throw new Error(`Ollama answered ${res2.status}`);
+    const answer3 = JSON.parse((await res2.json()).response ?? "");
+    return `${JSON.stringify({ status: "ok", statement: typeof answer3?.statement === "string" ? answer3.statement : "" })}
+`;
+  }
   const res = await fetch(new URL("/api/generate", req.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -6212,13 +6239,13 @@ var git2 = (cwd, ...args) => {
 };
 var SUBCOMMANDS = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "bun", "npx", "cargo", "go", "dotnet", "make", "gradle", "mvn", "pip", "poetry", "uv", "pytest", "tsc", "node", "docker"]);
 function safeCommand(command) {
-  const words3 = command.trim().split(/\s+/).filter(Boolean);
-  while (words3[0] !== void 0 && /^[A-Za-z_]\w*=/.test(words3[0])) words3.shift();
-  const program = words3.shift()?.split("/").pop() ?? "";
+  const words4 = command.trim().split(/\s+/).filter(Boolean);
+  while (words4[0] !== void 0 && /^[A-Za-z_]\w*=/.test(words4[0])) words4.shift();
+  const program = words4.shift()?.split("/").pop() ?? "";
   if (!/^[\w.+-]{1,40}$/.test(program)) return "";
   const out = [program];
   if (SUBCOMMANDS.has(program)) {
-    for (const w of words3.slice(0, 2)) {
+    for (const w of words4.slice(0, 2)) {
       if (!/^[a-z][a-z0-9:_-]{0,20}$/i.test(w)) break;
       out.push(w);
     }
@@ -6438,6 +6465,131 @@ function captureCi(data, config, cwd, limit = 100) {
     db.close();
   }
   return out;
+}
+
+// src/capture/seed.ts
+var SEED_LIMIT = 20;
+var MAX_ANCHORS = 10;
+var CUE = /\b(?:because|so that|must|never|instead of)\b(?!-)/i;
+var BOT = /\[bot\]|^(?:dependabot|renovate|github-actions)\b/i;
+var PREFIX = /^\w+(?:\([^)]*\))?!?:\s+/;
+function sentences(text5) {
+  const chunks = [];
+  let open = false;
+  for (const line of text5.split("\n")) {
+    const t = line.trim();
+    if (t === "" || /^(?:Co-authored-by|Signed-off-by|Reviewed-by|Change-Id|Refs?|Fixes|Closes):/i.test(t)) {
+      open = false;
+      continue;
+    }
+    const item = /^[-*]\s+/.test(t);
+    if (!open || item) chunks.push(t.replace(/^[-*]\s+/, ""));
+    else chunks[chunks.length - 1] += ` ${t}`;
+    open = true;
+  }
+  return chunks.flatMap((c) => c.split(/(?<=[.!?])\s+/)).map((s) => s.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+var tidy = (s) => {
+  const t = s.replace(PREFIX, "").trim();
+  return `${t.charAt(0).toUpperCase()}${t.slice(1)}${/[.!?]$/.test(t) ? "" : "."}`;
+};
+function reasonOf(message, names) {
+  const [subject2 = "", ...rest] = message.split("\n");
+  const reverted = /^(?:Revert|Reapply) "(.+)"\s*$/.exec(subject2.trim())?.[1];
+  let statement;
+  if (reverted !== void 0) {
+    const body2 = sentences(rest.join("\n")).filter((s) => !/^This reverts commit [0-9a-f]{7,40}/.test(s));
+    const why = body2.find((s) => CUE.test(s)) ?? body2[0];
+    if (why !== void 0) statement = `Reverted "${reverted.replace(PREFIX, "")}": ${tidy(why)}`;
+  } else {
+    const why = sentences(message).find((s) => CUE.test(s));
+    if (why !== void 0) statement = tidy(why);
+  }
+  if (statement === void 0 || statement.length > MAX_STATEMENT || statement.split(/\s+/).length < 4) return null;
+  if (scrubFailure(statement, names) !== statement || refusal(statement) !== null) return null;
+  return statement;
+}
+function seedCandidates(cwd, since) {
+  let log;
+  let tree;
+  try {
+    log = git(cwd, "log", "--no-merges", `--since=${since}`, "--name-only", "--format=%x1e%H%x1f%cI%x1f%an%x1f%ae%x1f%cn%x1f%B%x1d");
+    tree = git(cwd, "ls-tree", "-r", "--name-only", "--full-tree", "HEAD");
+  } catch {
+    return null;
+  }
+  if (log === null || tree === null) return null;
+  const head = new Set(tree.split("\n").filter(Boolean));
+  const records = log.split("").slice(1).map((r) => {
+    const [meta = "", files = ""] = r.split("");
+    const [sha = "", at3 = "", author = "", email = "", committer = "", message = ""] = meta.split("");
+    return { sha, at: at3, author, email, committer, message: message.trim(), files: files.split("\n").map((f) => f.trim()).filter(Boolean) };
+  });
+  const names = [.../* @__PURE__ */ new Set([...committerNames(cwd), ...records.flatMap((r) => [r.author, r.committer]).filter((n) => n.trim().length >= 3)])];
+  const out = [];
+  for (const r of records) {
+    if (!/^[0-9a-f]{40}$/.test(r.sha) || BOT.test(r.author) || BOT.test(r.email)) continue;
+    const files = r.files.filter((f) => head.has(f));
+    if (files.length === 0) continue;
+    const statement = reasonOf(r.message, names);
+    if (statement === null) continue;
+    out.push({ sha: r.sha, at: Number.isNaN(Date.parse(r.at)) ? (/* @__PURE__ */ new Date()).toISOString() : new Date(r.at).toISOString(), statement, files: files.slice(0, MAX_ANCHORS), message: scrubFailure(r.message, names) });
+  }
+  return out;
+}
+var words3 = (text5) => text5.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+function keepRewrite(c, rewrite) {
+  const own = new Set(words3(c.message));
+  const t = rewrite.replace(/\s+/g, " ").trim();
+  return t !== "" && words3(t).every((w) => own.has(w)) && refusal(t) === null ? t : c.statement;
+}
+var sourceOf = (c) => `commit:${c.sha}`;
+function seed(db, repo, candidates, rewrite) {
+  const done = { lines: [], stored: 0, left: 0 };
+  for (const [i, c] of candidates.entries()) {
+    if (done.stored >= SEED_LIMIT) {
+      done.left = candidates.length - i;
+      break;
+    }
+    const short = c.sha.slice(0, 7);
+    if (db.prepare("SELECT 1 FROM evidence WHERE source_ref = ?").get(sourceOf(c)) !== void 0) {
+      done.lines.push(`${short}: already known`);
+      continue;
+    }
+    let statement = c.statement;
+    if (rewrite !== void 0 && done.failed === void 0) {
+      const r = rewrite(c);
+      if (typeof r === "string") statement = keepRewrite(c, r);
+      else done.failed = r.failed;
+    }
+    const stored = addItem(db, {
+      tenant: repo.tenant,
+      scope: "repository",
+      scopeKey: repo.repository,
+      type: "decision",
+      statement,
+      rationale: null,
+      anchors: c.files.map((path) => ({ path })),
+      source: sourceOf(c),
+      trust: "agent",
+      status: "proposed",
+      evidenceAt: c.at,
+      extractor: statement === c.statement ? "deterministic" : "model"
+    });
+    if (stored.kind === "inserted" || stored.kind === "superseded-on-arrival") done.stored++;
+    done.lines.push(
+      `${short}: ${stored.kind === "inserted" ? `proposed ${stored.id}` : stored.kind === "superseded-on-arrival" ? `proposed ${stored.id}, already superseded by ${stored.by}` : stored.kind === "rejected" ? "rejected before" : `merged into ${stored.id}`}`
+    );
+  }
+  return done;
+}
+function parseRewrite(stdout) {
+  try {
+    const o = JSON.parse(stdout.split("\n")[0]);
+    return o?.status === "ok" && typeof o.statement === "string" ? o.statement : { failed: "it did not answer status ok with a statement" };
+  } catch {
+    return { failed: "it answered text that is not JSON" };
+  }
 }
 
 // src/hooks/point-of-action.ts
@@ -7002,7 +7154,7 @@ function fixtureRepository(task, repo) {
     check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
   }
 }
-function seed(task, t, repo, data) {
+function seed2(task, t, repo, data) {
   const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
@@ -7036,7 +7188,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   mkdirSync9(data);
   mkdirSync9(out);
   fixtureRepository(task, repo);
-  if (arm === "on") seed(task, t, repo, data);
+  if (arm === "on") seed2(task, t, repo, data);
   const env = cleanEnv({
     MEMORY_DATA_DIR: data,
     MEMORY_LAB_TASK: task,
@@ -7425,8 +7577,8 @@ ${s.key}`)).filter((m) => m !== void 0);
   };
 }
 var sharesNoWord = (question, text5) => {
-  const words3 = new Set(searchTerms(text5, Infinity));
-  return !searchTerms(question, Infinity).some((w) => words3.has(w));
+  const words4 = new Set(searchTerms(text5, Infinity));
+  return !searchTerms(question, Infinity).some((w) => words4.has(w));
 };
 
 // src/eval/head-to-head/scorecard.ts
@@ -7739,6 +7891,13 @@ var USAGE = `usage: memory <command>
   ci
       read this repository's CI runs with gh: a failed run followed by a passing run on another commit becomes a repair
       proposal with the fingerprint, the fix commit and both runs as evidence
+  seed --git [--since <date>] [--dry-run]
+      read this repository's commit history with git log (the last 12 months by default; no merges, no bots' commits):
+      a commit whose message gives a reason (a revert with a body, or because, so that, must, never, instead of) gives
+      one sentence of it as an agent-trusted proposal, with the commit as its source and date and the commit's files
+      that exist at HEAD as anchors. At most 20 per run, newest first; it says how many are left. A rerun stores nothing
+      new and a rejected statement is not proposed again. With transcriptModel set, a model on this machine may reword
+      a sentence with the message's own words. Never run by a hook; --dry-run lists the candidates and writes nothing
   reverts
       count the reverts of commits memory linked items to, as the hook does after a git revert
   pre-compact
@@ -8543,6 +8702,43 @@ function correctionsCommand(data, cwd) {
     if (failed !== void 0) throw new Refusal(`memory: the model failed (${failed}); nothing more was asked this run`);
   }
 }
+function seedCommand(args, data, cwd) {
+  const { values } = parseArgs({ args, options: { git: { type: "boolean" }, since: { type: "string" }, "dry-run": { type: "boolean" } } });
+  if (values.git !== true) throw new Refusal("memory seed needs --git: commit history is the only source it reads", 2);
+  const config = setUp(data);
+  if (!covers(config, "seed")) throw new Refusal("your consent does not cover reading commit history yet; run memory init and confirm the plan");
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null) throw new Refusal(`nothing seeded: ${context.reason}`);
+  const candidates = seedCandidates(cwd, values.since ?? new Date(Date.now() - 365 * 864e5).toISOString());
+  if (candidates === null) throw new Refusal("nothing seeded: git could not read this repository's history");
+  if (values["dry-run"] === true) {
+    for (const c of candidates.slice(0, SEED_LIMIT)) console.log(`${c.sha.slice(0, 7)} ${c.at.slice(0, 10)} ${JSON.stringify(c.statement)} (${c.files.join(", ")})`);
+    console.log(`${candidates.length} candidate${candidates.length === 1 ? "" : "s"}; at most ${SEED_LIMIT} are stored per run. Dry run: nothing was written`);
+    return;
+  }
+  let rewrite;
+  const settings = config.transcriptModel;
+  if (settings !== void 0 && covers(config, "transcriptModel")) {
+    const { url, model } = { ...MODEL_DEFAULTS, ...settings };
+    if (!onThisMachine(new URL(url))) console.error(`memory: the model pass did not run for tenant ${context.tenant}: its model at ${url} is not on this machine`);
+    else {
+      const command = settings.command ?? [process.execPath, fileURLToPath3(import.meta.url), "model-client"];
+      rewrite = (c) => {
+        const r = runProvider(command, cwd, { op: "seed", url, model, message: c.message, statement: c.statement }, modelTimeoutMs());
+        return r.ok ? parseRewrite(r.stdout) : { failed: r.reason };
+      };
+    }
+  }
+  const db = openStore(tenantFile(data, context.tenant), true);
+  try {
+    const done = seed(db, { tenant: context.tenant, repository: context.repository }, candidates, rewrite);
+    for (const line of done.lines) console.log(line);
+    if (done.failed !== void 0) console.error(`memory: the model failed (${done.failed}); the rest keep the rule's sentence`);
+    console.log(`stored ${done.stored} proposal${done.stored === 1 ? "" : "s"}; ${done.left} candidate${done.left === 1 ? "" : "s"} left for the next run. They wait in memory review`);
+  } finally {
+    db.close();
+  }
+}
 async function modelClient() {
   process.stdout.write(await ollamaClient(readFileSync15(0, "utf8")));
 }
@@ -8967,6 +9163,8 @@ async function main(argv) {
       return commandPassedHook(data);
     case "ci":
       return ciCommand(data, process.cwd());
+    case "seed":
+      return seedCommand(rest, data, process.cwd());
     case "reverts":
       return revertsCommand(data, process.cwd());
     case "transcript":

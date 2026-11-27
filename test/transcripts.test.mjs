@@ -89,7 +89,7 @@ test('FR-001 the opt-in is its own consent category: under plan version 9 nothin
   const s = setup();
   optIn(s);
   const plan = JSON.parse(run(['init'], { cwd: s.base, data: s.data, config: s.configA }).stdout);
-  assert.equal(plan.version, 13);
+  assert.equal(plan.version, 16);
   assert.equal(plan.optIns.transcripts, true);
   assert.ok(plan.dataCategories.some((t) => /transcript/.test(t) && /30 days/.test(t) && /verbatim/.test(t)));
   const file = join(s.data, 'config.json');
