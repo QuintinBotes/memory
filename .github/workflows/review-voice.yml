@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: QuintinBotes/review-voice@894fd187b4f70138f71f58fe8d0a93b177e63475 # v1.30.0+fix-508 (main, unreleased)
+      - uses: QuintinBotes/review-voice@f1f6d8bac8756cdc54c31cc51ada0b46f623e9d5 # v1.30.0+fix-520 (main, unreleased)
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           post: true
