@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Recall reads `.claude/rules/**/*.md`, which Claude Code loads, as instruction files: an item a rule repeats or contradicts is withheld, and `memory_propose` of a rule's line is refused naming it. A rule with `paths:` frontmatter counts only for an item anchored under one of its globs. `"instructionFiles"` in `config.json` adds files or directories inside the repository, such as `.cursor/rules` or `.windsurf/rules` (#144).
+- `memory import` reads Codex's own memories (`MEMORY.md` and `memory_summary.md` in `$CODEX_HOME/memories` and `memories_v2`) as agent-trusted proposals, scoped to the repository a statement names or the checkout its task group applies to. It is its own consent category (`codex`, plan version 15); a layout memory does not know is skipped and reported (#144).
+
 ## [0.9.2] - 2026-11-27
 
 ### Fixed

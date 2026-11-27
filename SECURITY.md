@@ -38,6 +38,16 @@ no tenant, or in a Claude Code config not bound to that tenant.
   repository (the user's file must not be a symbolic link), and never commits
   or pushes. No MCP tool, hook or other command writes one. A stored edit holds the
   instruction line and the item's statement, and is deleted with the item.
+- **Rules and Codex memories.** Recall also reads `.claude/rules` and the
+  files or directories `instructionFiles` names, under the same rules as
+  `CLAUDE.md`: an absolute or `..` entry makes the configuration invalid, and
+  a file or directory that resolves outside the repository through a link is
+  not read. `memory import` reads Codex's `MEMORY.md` and
+  `memory_summary.md` under `$CODEX_HOME` (`~/.codex`), its own consent
+  category: model-written, so agent trust, with text that reads as an
+  instruction quarantined, and a statement naming a tenant this config is not
+  bound to is reported and not stored. A task group's working directory is
+  only looked up with `git config`, never run.
 - **Review Voice store.** `decisions` under `imports` opens another tool's
   SQLite store, which holds findings for every repository it reviewed; memory
   filters to one repository only after reading. It is its own consent category

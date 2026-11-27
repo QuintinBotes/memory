@@ -314,7 +314,7 @@ function propose(args: Args, data: string, config: Config, context: Context, cwd
     if (why !== null) throw new ToolError(`not proposed: ${what} is refused because ${why}`);
   }
   // A statement a loaded instruction file already says is closed here, naming the line: it never reaches the owner's queue.
-  const ins = loadInstructions(cwd, currentConfigDir());
+  const ins = loadInstructions(cwd, currentConfigDir(), config.instructionFiles);
   const said = judge(ins, statement);
   if (said?.kind === 'repeats') return `not proposed: duplicates ${displayPath(ins, said.line.file)}:${said.line.line}, which the agent already loads`;
   const tenant = personal ? '' : context.tenant!;

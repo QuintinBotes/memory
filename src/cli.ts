@@ -113,8 +113,8 @@ const USAGE = `usage: memory <command>
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
   import [--dry-run] [--orbit]
-      read the silos (each bound config's auto memory, and the files under "imports" in config.json)
-      and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
+      read the silos (each bound config's auto memory, Codex's memories under $CODEX_HOME or ~/.codex, and
+      the files under "imports" in config.json) and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
       read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
       read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals
   review
@@ -772,8 +772,9 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
     throw new Refusal('usage: memory conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]', 2);
   }
   if ((values.confirm === true || values['yes-non-interactive'] === true) && verb !== 'apply') throw new Refusal('--confirm and --yes-non-interactive go with apply', 2);
-  const context = resolveContext(cwd, setUp(data), currentConfigDir());
-  const ins = loadInstructions(cwd, currentConfigDir());
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const ins = loadInstructions(cwd, currentConfigDir(), config.instructionFiles);
   let listed = 0;
   for (const { file } of proposalStores(data, context)) {
     const db = openStore(file, false);

@@ -6,7 +6,7 @@ import type { Context, Reach } from '../context.ts';
 import { allTenantItems, personItems, tenantItems, textMatches, type Visible } from '../items.ts';
 import { openStore, WRITE_BUSY_MS } from '../store/db.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
-import { currentConfigDir } from '../config.ts';
+import { currentConfigDir, loadConfig } from '../config.ts';
 import { loadInstructions, screen, type Withheld } from '../instructions.ts';
 
 /** `items` of one file, each that matched carrying its text ratio: bm25 depends on the file's own word counts, so a match is measured against the best in its file. */
@@ -35,7 +35,7 @@ export function withTextRatio(items: Visible[], matches: Map<string, number>): V
 export function visibleItems(data: string, context: Context, cwd: string, terms: readonly string[] = [], busyMs = WRITE_BUSY_MS, withheld: Withheld[] | null = [], reach?: Reach, asOf?: string): Visible[] {
   const out: Visible[] = [];
   const other = reach !== undefined && reach !== 'all' && reach.repository !== context.repository;
-  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
+  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir(), loadConfig(data)?.instructionFiles);
   const add = (items: Visible[], matches: Map<string, number>): void => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const file = tenantFile(data, context.tenant);

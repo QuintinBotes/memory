@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { repeats } from './consolidate.ts';
 import { visibleText } from './codefree.ts';
 import { git } from './context.ts';
+import { inside as insideCheckout } from './import/silos.ts';
 import type { Visible } from './items.ts';
 import { defang, safe } from './render/rows.ts';
 import { recordAudit } from './store/audit.ts';
@@ -21,6 +22,10 @@ import { recordAudit } from './store/audit.ts';
 const ROOT_FILES = ['AGENTS.md', 'GEMINI.md', '.github/copilot-instructions.md'];
 /** Files Claude Code loads from the working directory and each parent up to the repository root. */
 const DIR_FILES = ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'];
+/** The rules directory Claude Code loads from the repository root: every Markdown file under it (#144). */
+const RULES_DIR = '.claude/rules';
+/** A rules directory yields at most this many files, so a huge tree costs a bounded walk. */
+const MAX_RULE_FILES = 200;
 /** An instruction file is matched only up to this many bytes. */
 export const MAX_BYTES = 256 * 1024;
 const MAX_IMPORT_DEPTH = 5;
@@ -33,6 +38,8 @@ export interface InstructionLine {
   line: number;
   raw: string;
   text: string;
+  /** A rule's `paths:` (or Cursor's and Windsurf's `globs:`) frontmatter: the line counts only for an item anchored under one; absent, everywhere. */
+  paths?: string[];
 }
 
 export interface Instructions {
@@ -116,24 +123,76 @@ function linesOf(file: string, text: string): InstructionLine[] {
   return out;
 }
 
+/** A rule file's `paths:` or `globs:` frontmatter, and the line its body starts after; no paths when it has none. */
+function frontmatter(text: string): { body: number; paths?: string[] } {
+  const all = text.split('\n');
+  const end = all[0]?.trim() === '---' ? all.findIndex((l, i) => i > 0 && l.trim() === '---') : -1;
+  if (end < 0) return { body: 0 };
+  const globs: string[] = [];
+  let key = '';
+  for (const l of all.slice(1, end)) {
+    const m = /^(\w+):\s*(.*?)\s*$/.exec(l);
+    if (m !== null) key = m[1]!;
+    const value = m !== null ? m[2]!.replace(/^\[|\]$/g, '') : /^\s*-\s*(.*?)\s*$/.exec(l)?.[1];
+    // A comma inside braces is part of the glob: src/**/*.{ts,tsx}.
+    if ((key === 'paths' || key === 'globs') && value) globs.push(...value.split(/,(?![^{]*\})/));
+  }
+  const paths = globs.map((g) => g.trim().replace(/^["']|["']$/g, '').replace(/^\.\//, '')).filter((g) => g !== '');
+  return { body: end + 1, ...(paths.length > 0 ? { paths } : {}) };
+}
+
+const escape = (s: string): string => s.replace(/[.+^$()|[\]\\{}]/g, '\\$&');
+/** Whether a repository-relative path matches a glob: `**` any depth, `*` and `?` within a segment, `{a,b}` either. */
+export function matchesGlob(glob: string, path: string): boolean {
+  const re = glob
+    .split(/(\*\*\/?|\*|\?|\{[^}]*\})/)
+    .map((p) => (p === '**/' ? '(?:.*/)?' : p === '**' ? '.*' : p === '*' ? '[^/]*' : p === '?' ? '[^/]' : /^\{.*\}$/.test(p) ? `(?:${p.slice(1, -1).split(',').map(escape).join('|')})` : escape(p)))
+    .join('');
+  return new RegExp(`^${re}$`).test(path);
+}
+
+/** Every file under `dir` ending in one of `ext`, sorted, at most `MAX_RULE_FILES`. A directory link is not followed. */
+function filesUnder(dir: string, ext: string[]): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(d).sort();
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (out.length >= MAX_RULE_FILES) return;
+      const path = join(d, name);
+      if (lstatSync(path).isDirectory()) walk(path);
+      else if (ext.some((e) => name.endsWith(e))) out.push(path);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
 /**
  * The instruction files an agent in `cwd` loads: CLAUDE.md files from here up to the repository root, the root's
- * AGENTS.md, GEMINI.md and Copilot file, the user's CLAUDE.md in the config directory, and every @-import of those, up
- * to five deep. A file or import that leaves its root (the repository, or the home directory for the user's file) is not read.
+ * AGENTS.md, GEMINI.md and Copilot file, every Markdown file under its .claude/rules, what `extra` (config.json's
+ * instructionFiles) names inside it, the user's CLAUDE.md in the config directory, and every @-import of those, up to
+ * five deep. A file or import that leaves its root (the repository, or the home directory for the user's file) is not
+ * read, nor an `extra` entry that is absolute or climbs out.
  */
-export function loadInstructions(cwd: string, configDir: string): Instructions {
+export function loadInstructions(cwd: string, configDir: string, extra: readonly string[] = []): Instructions {
   const top = git(cwd, 'rev-parse', '--show-toplevel')?.trim() ?? null;
   const lines: InstructionLine[] = [];
   const allowed = new Set<string>();
   const seen = new Set<string>();
-  const read = (path: string, root: string, depth: number): void => {
+  const read = (path: string, root: string, depth: number, rule = false): void => {
     const abs = resolve(path);
     if (seen.has(abs)) return;
     seen.add(abs);
     const text = readInside(abs, root);
     if (text === null) return;
     allowed.add(abs);
-    lines.push(...linesOf(abs, text));
+    const { body, paths } = rule ? frontmatter(text) : { body: 0, paths: undefined };
+    lines.push(...linesOf(abs, text).filter((l) => l.line > body).map((l) => (paths === undefined ? l : { ...l, paths })));
     if (depth >= MAX_IMPORT_DEPTH) return;
     for (const target of importsOf(text)) {
       const to = target.startsWith('~/') ? join(homedir(), target.slice(2)) : isAbsolute(target) ? target : resolve(dirname(abs), target);
@@ -148,6 +207,18 @@ export function loadInstructions(cwd: string, configDir: string): Instructions {
       if (dir === top || dirname(dir) === dir) break;
     }
     for (const f of ROOT_FILES) read(join(top, f), top, 1);
+    for (const f of filesUnder(join(top, RULES_DIR), ['.md'])) read(f, top, 1, true);
+    for (const entry of extra.filter(insideCheckout)) {
+      const path = join(top, entry);
+      let dir: boolean;
+      try {
+        // A directory link out of the repository is not walked; a file link out is refused by readInside.
+        dir = statSync(path).isDirectory() && inside(realpathSync(top), realpathSync(path));
+      } catch {
+        continue;
+      }
+      for (const f of dir ? filesUnder(path, ['.md', '.mdc']) : [path]) read(f, top, 1, true);
+    }
   }
   read(userTarget, homedir(), 1);
   const repositoryTarget = top === null ? null : [join(top, 'CLAUDE.md'), join(top, 'AGENTS.md')].find((p) => existsSync(p)) ?? join(top, 'CLAUDE.md');
@@ -165,13 +236,17 @@ export const displayPath = (ins: Pick<Instructions, 'top'>, file: string): strin
 
 export type Verdict = { kind: 'repeats' | 'contradicts'; line: InstructionLine };
 
-/** What the loaded files say about one statement: it repeats a line, contradicts one, or neither. A repeat wins over a contradiction. */
-export function judge(ins: Instructions, statement: string): Verdict | null {
+/**
+ * What the loaded files say about one statement anchored at `anchors` (repository-relative paths): it repeats a line,
+ * contradicts one, or neither. A repeat wins over a contradiction. A path-scoped rule's line counts only for an anchor it matches.
+ */
+export function judge(ins: Instructions, statement: string, anchors: readonly string[] = []): Verdict | null {
   const polarity = negative(statement);
   const flat = !scoped(statement);
-  const same = ins.lines.find((l) => negative(l.text) === polarity && repeats(statement, l.text));
+  const lines = ins.lines.filter((l) => l.paths === undefined || anchors.some((a) => l.paths!.some((g) => matchesGlob(g, a))));
+  const same = lines.find((l) => negative(l.text) === polarity && repeats(statement, l.text));
   if (same !== undefined) return { kind: 'repeats', line: same };
-  const against = ins.lines.find((l) => flat && negative(l.text) !== polarity && !scoped(l.text) && sameSubject(statement, l.text));
+  const against = lines.find((l) => flat && negative(l.text) !== polarity && !scoped(l.text) && sameSubject(statement, l.text));
   return against === undefined ? null : { kind: 'contradicts', line: against };
 }
 
@@ -206,7 +281,7 @@ function propose(db: DatabaseSync, kind: 'conflict' | 'promotion', item: Visible
 export function screen(db: DatabaseSync, items: Visible[], ins: Instructions, personal: boolean, withheld: Withheld[]): Visible[] {
   const kept: Visible[] = [];
   for (const item of items) {
-    const verdict = judge(ins, item.statement);
+    const verdict = judge(ins, item.statement, item.anchors.map((a) => a.path));
     if (verdict === null) {
       kept.push(item);
       try {

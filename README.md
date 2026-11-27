@@ -385,6 +385,23 @@ tool wrote them; standards, rejections and policies carry owner trust. A
 statement with agent trust that reads as an instruction arrives quarantined
 (see below), and the report counts it.
 
+Codex writes memories of its own, with a model, from past chats, when its
+memories feature is on. `memory import` reads them from `memories` and
+`memories_v2` under `$CODEX_HOME` (`~/.codex` unless set): `MEMORY.md`, whose
+`# Task Group:` blocks each say the working directory they apply to
+(`applies_to: cwd=...`), and `memory_summary.md`, which starts with the line
+`v1`. Each list item under `User preferences`, `Reusable knowledge`,
+`Failures and how to do differently` and `General Tips` is one statement,
+stored with agent trust and `codex memory <folder>/<file>:<line>` as its
+source. It is routed as auto memory is: to the repository it names, else the
+checkout its block applies to, when the config you run import under is bound
+to that repository's tenant; else to person scope when it is
+organisation-free; else reported and not stored. Task lists, keywords, the
+user profile and pointers are not read, nor any other file there; a file in a
+layout memory does not know is skipped and reported. Reading Codex's folder is
+its own consent category (`codex`, plan version 15): until you confirm the
+plan again, import does not open it and says why.
+
 ```bash
 memory review [--json]                 # proposals for this repository's tenant and you
 memory report [--tenant <name>]        # which items help and which mislead, per bound tenant
@@ -583,9 +600,24 @@ memory reads, read-only, the files an agent in this directory loads: the
 `CLAUDE.md`, `CLAUDE.local.md` and `.claude/CLAUDE.md` from here up to the
 repository root, the root's `AGENTS.md`, `GEMINI.md` and
 `.github/copilot-instructions.md`, your `CLAUDE.md` in the Claude Code config
-directory, and every `@path` import of those (five deep). A file, link or
-import that leaves the repository (for your own file, your home directory) is
-not read. Their text is matched, never stored as an item or evidence.
+directory, every Markdown file under the repository's `.claude/rules`, and
+every `@path` import of those (five deep). A file, link or import that leaves
+the repository (for your own file, your home directory) is not read. Their
+text is matched, never stored as an item or evidence.
+
+A rule whose frontmatter has `paths:` (or `globs:`, as Cursor and Windsurf
+write it) counts only for an item anchored under one of those globs; a rule
+without it counts everywhere. Other agents' rules are read when you name
+them, as files or directories inside the repository (a directory gives its
+`.md` and `.mdc` files):
+
+```json
+"instructionFiles": [".cursor/rules", ".windsurf/rules"]
+```
+
+An entry that is absolute or climbs out with `..` makes the configuration
+invalid; one that is a link out of the repository is not read. Promotions
+still go only to `CLAUDE.md`, `AGENTS.md` or your own `CLAUDE.md`.
 
 - **A repeat** (the same statement as a line, by the consolidation matcher: same
   normalised text, or a word overlap of 80% with the same numbers) is left out
