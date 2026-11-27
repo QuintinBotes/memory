@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -144,13 +145,61 @@ test('S5 the filter is the one config names; the fake and a refusing haiku (no k
 
   const t = setup();
   configure(t, { capture: { model: 'haiku' } });
-  const r = capture(t, t.acmeApi, transcript(t, [`LESSON: ${LESSON}`]));
-  assert.match(r.stderr, /ANTHROPIC_API_KEY is not set/);
+  const r = capture(t, t.acmeApi, transcript(t, [`LESSON: ${LESSON}`]), 's1', { path: noClaude() });
+  assert.match(r.stderr, /no ANTHROPIC_API_KEY and no claude on PATH/);
   assert.equal(r.status, 0, 'a failed filter never fails the hook');
   assert.equal(existsSync(join(t.data, 'tenants/acme.sqlite')), false);
 
   configure(t, { capture: { model: 'mystery' } });
   assert.match(capture(t, t.acmeApi, transcript(t, [`LESSON: ${LESSON}`])).stderr, /not a filter/);
+});
+
+/** PATH with git and the system tools but no claude. */
+function noClaude() {
+  const git = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  return `${dirname(git)}:/usr/bin:/bin`;
+}
+
+/** A fake claude CLI on PATH that records its arguments, stdin and environment and prints `answer`. */
+function fakeClaude(s, answer) {
+  const dir = join(s.base, 'fake-claude');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'answer'), JSON.stringify(answer));
+  writeFileSync(join(dir, 'claude'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${dir}/args'\ncat > '${dir}/stdin'\nenv > '${dir}/env'\ncat '${dir}/answer'\n`, { mode: 0o755 });
+  const read = (f) => readFileSync(join(dir, f), 'utf8');
+  return { path: `${dir}:${noClaude()}`, args: () => read('args').split('\n'), stdin: () => read('stdin'), env: () => read('env') };
+}
+
+test('#130 SC1 no key: haiku goes through the claude CLI login, with no tools, hooks, settings or saved session', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku', apiModel: 'claude-haiku-test' } });
+  const cli = fakeClaude(s, { is_error: false, result: JSON.stringify([{ kind: 'lesson', statement: LESSON, evidence: 'L1' }]), usage: { input_tokens: 21, cache_creation_input_tokens: 300, output_tokens: 12 } });
+  const secret = assemble('gh', 'p_', 'a'.repeat(36));
+  const r = capture(s, s.acmeApi, transcript(s, [`token ${secret}`]), 's1', { path: cli.path, env: { USER: 'someone' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(items(s).map((i) => i.statement), [LESSON]);
+  const args = cli.args();
+  for (const flag of ['-p', '--no-session-persistence', '--strict-mcp-config', '--disable-slash-commands']) assert.ok(args.includes(flag), flag);
+  assert.equal(args[args.indexOf('--model') + 1], 'claude-haiku-test');
+  assert.equal(args[args.indexOf('--tools') + 1], '');
+  assert.equal(args[args.indexOf('--setting-sources') + 1], '');
+  assert.equal(args[args.indexOf('--settings') + 1], '{"disableAllHooks":true}');
+  assert.doesNotMatch(cli.stdin(), /ghp_/);
+  const env = cli.env();
+  assert.match(env, /^USER=someone$/m);
+  assert.doesNotMatch(env, /MEMORY_DATA_DIR|NODE_OPTIONS/);
+  const row = JSON.parse(readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').at(-1));
+  assert.equal(row.inputTokens, 321);
+});
+
+test('#130 SC2 a CLI that answers an error fails the run and saves nothing', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const cli = fakeClaude(s, { is_error: true, result: 'Not logged in · Please run /login' });
+  const r = capture(s, s.acmeApi, transcript(s, [`LESSON: ${LESSON}`]), 's1', { path: cli.path });
+  assert.equal(r.status, 0, 'a failed filter never fails the hook');
+  assert.match(r.stderr, /claude -p answered an error: Not logged in/);
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false);
 });
 
 test('S5b haiku sends only redacted text, with no key in the body, to the Messages API (the network is faked)', () => {

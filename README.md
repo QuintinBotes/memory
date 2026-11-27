@@ -653,8 +653,12 @@ repository that matches no tenant is skipped: no model call, nothing written.
 - **What leaves the machine:** the redacted transcript text, to
   `api.anthropic.com`, and nothing else. Redaction is pattern based, so a
   secret that does not look like one (a password in prose) is not caught.
-- **The key:** `ANTHROPIC_API_KEY` in the environment of Claude Code. Without
-  it capture reports the missing key and does nothing.
+- **The key:** `ANTHROPIC_API_KEY` in the environment of Claude Code, sent
+  to the Messages API. Without it, capture uses your Claude Code login (a
+  subscription works). It runs `claude -p` with no tools, MCP servers, hooks,
+  settings or saved session, so the call cannot capture itself, and it passes
+  on only PATH, HOME, USER, TMPDIR and CLAUDE_CONFIG_DIR. With neither the key
+  nor a `claude` on PATH, capture reports it and does nothing.
 - **Cost:** one call per SessionEnd and per Stop with enough new text; each
   run's tokens go to `logs/capture.jsonl` in the data directory (never the
   transcript). Read it to see what capture costs you.
