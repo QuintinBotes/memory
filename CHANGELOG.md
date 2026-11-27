@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-27
+
 ### Fixed
 
 - A Stop on a session still under 4,000 characters says `waiting for more: <n> of 4000 characters` and records the skip in `logs/capture.jsonl`, instead of claiming `nothing new to read` and leaving no trace (#126). A test now pins codex-cli 0.172's rollout format (`world_state`, `turn_context`, `token_usage_record`), which capture reads as Codex.
