@@ -4745,6 +4745,12 @@ var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
 var inside3 = (path) => !isAbsolute6(path) && !normalize3(path).split(/[\\/]/).includes("..");
 
 // src/import/review-voice.ts
+function fit(statement) {
+  if (statement.length <= MAX_STATEMENT) return statement;
+  const room = statement.slice(0, MAX_STATEMENT - 1);
+  const space = room.lastIndexOf(" ");
+  return `${(space > 0 ? room.slice(0, space) : room).trimEnd()}\u2026`;
+}
 var REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/;
 var OWNER_STATEMENTS = {
   keep: (text5) => `Owner kept this finding: ${text5}`,
@@ -4785,8 +4791,9 @@ function reviewVoiceDecisions(path) {
       const { repository, pull_number: pull } = known?.run ?? {};
       if (found === void 0 || repository == null || !REPOSITORY.test(repository)) return;
       if (!inside3(found.path) || found.path.includes("\\")) return;
-      const statement = say(found.text);
-      if (statement === null) return;
+      const said2 = say(found.text);
+      if (said2 === null) return;
+      const statement = fit(said2);
       const dir = posix2.dirname(found.path);
       decisions.push({
         repository: repository.toLowerCase(),

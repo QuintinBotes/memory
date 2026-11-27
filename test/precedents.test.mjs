@@ -237,3 +237,21 @@ test('1.5 (regression guard: nothing here pushes precedents, and this passes wit
     assert.doesNotMatch(r.stdout, new RegExp(CLAIM), agent_type);
   }
 });
+
+// #120: a finding Review Voice allows (up to 40 words) plus the decision's prefix can pass memory's 300 characters.
+test('#120 a kept finding too long for one statement is proposed, cut at a word to at most 300 characters; a short one is unchanged', () => {
+  const long = `[nit] \`src/x/a.ts:3\` - ${'The handler and the validator both check the quantity before the total is computed, '.repeat(4)}so one of them can go.`;
+  const s = precedents({
+    findings: [finding('rv_01', 'src/x/a.ts', long), finding('rv_02', 'src/x/y.ts', 'Name shadows the import')],
+    feedback: [['rv_01', 'keep'], ['rv_02', 'dismiss']],
+  });
+  const report = importIt(s);
+  assert.deepEqual(report.refused, []);
+  const statements = precedentRows(s).map((r) => r.statement);
+  assert.equal(statements.length, 2, JSON.stringify(report));
+  const cut = statements.find((t) => t.startsWith('Owner kept this finding: '));
+  assert.ok(cut.length <= 300, `${cut.length}`);
+  assert.ok(cut.endsWith('…'), cut);
+  assert.ok(long.startsWith(cut.slice('Owner kept this finding: '.length, -1).trimEnd()), 'a prefix of the finding, cut between words');
+  assert.ok(statements.includes('Owner declined this finding: Name shadows the import'));
+});
