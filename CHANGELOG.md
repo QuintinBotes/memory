@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Review Voice workflow posts again (#116): pinned to review-voice main at 98ad060, unreleased, which carries the fixes for its #508 (a clean review exited 4 without posting, the action's own job counted as pending CI), #520 (a failed post names its reason) and #525 (the post's thread re-check failed with 403 under the Actions token). Moves to a release tag once one exists.
+
 ### Added
 
 - `npm run e2e` (#112): real Claude Code sessions with the checkout loaded by `--plugin-dir` check the session-start slice (#114), point-of-action recall, `memory_search` and `memory_propose` over MCP (refused for automation until `--automation on`), and that the plugin validates and the review pane's tests pass. Not run in CI.
