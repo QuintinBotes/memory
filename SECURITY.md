@@ -117,6 +117,13 @@ no tenant, or in a Claude Code config not bound to that tenant.
   needs your consent to the plan's embeddings category, and the owner picks the
   provider in `config.json`. Voyage's own retention terms apply to what it
   receives.
+- **The review pane runs inside Claude Code.** `hooks/panel.tsx` is a mod:
+  it runs in Claude Code's process, unsandboxed, like any mod. It only runs
+  `node dist/memory.mjs` with `review --json`, `review`, `approve <id>` or
+  `reject <id>`, reads no store or file itself, makes no network request and
+  registers no tool, so an agent cannot press its buttons. Statements are drawn
+  with control and bidi characters removed. `claude plugin validate .` lists
+  every call it makes.
 - **Capture sends text out.** Automatic capture (on by default once you confirm
   the consent plan that lists it, off with `capture.enabled: false`) sends the
   session transcript's user and assistant text, at most 48,000 characters per

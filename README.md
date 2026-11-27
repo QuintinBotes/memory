@@ -384,7 +384,7 @@ statement with agent trust that reads as an instruction arrives quarantined
 (see below), and the report counts it.
 
 ```bash
-memory review                          # proposals for this repository's tenant and you
+memory review [--json]                 # proposals for this repository's tenant and you
 memory report [--tenant <name>]        # which items help and which mislead, per bound tenant
 memory approve m-1a2b3c4d5e            # add --scope organisation to widen it
 memory reject m-1a2b3c4d5e --reason 'too broad'
@@ -405,6 +405,16 @@ that command writes only from one; from a pipe or script it is refused unless
 `--yes-non-interactive` is added, and an ask rule should cover it
 (`Bash(*memory.mjs*ui*)`). It shows only this repository's bound tenant and
 the person file.
+
+In Claude Code (v2.1.287 or later, where plugins may run mods) memory also
+draws in the session: `/memory-review` opens a review pane beside the
+transcript with each proposal's evidence and an Approve and a Reject button,
+and while proposals wait a band above the prompt counts them. The pane runs
+`memory review --json`, `memory approve <id>` and `memory reject <id>` and
+nothing else; it registers no tool, so only your press decides. Where a pane
+cannot be drawn, `/memory-review` prints `memory review` instead. Codex and
+`claude -p` sessions are unchanged. To turn it off, disable mods
+(`disableAllHooks`, which also stops memory's other hooks) or the plugin.
 
 A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal

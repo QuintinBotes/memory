@@ -4250,7 +4250,7 @@ async function edit(input2, data, config, context) {
   }
   throw new HttpError(404, `no active item ${id} here`);
 }
-function review(data, context, cwd) {
+function reviewData(data, context, cwd) {
   const ins = loadInstructions(cwd, currentConfigDir());
   const out = { proposals: [], edits: [] };
   for (const { file, tenant } of proposalStores(data, context)) {
@@ -4310,7 +4310,7 @@ async function answer(req, url, data, cwd) {
       return { raw: { statement: found.row.statement }, ...found.view, staleReports: found.row.stale_reports, history: history(found.store, found.row.id) };
     }
     case "GET /api/review":
-      return review(data, context, cwd);
+      return reviewData(data, context, cwd);
     case "POST /api/edit":
       return edit(await body(req), data, config, context);
     case "POST /api/decide": {
@@ -6835,10 +6835,10 @@ function outsideFence(rendering, attacks) {
 }
 var renderings = (db) => {
   const items = tenantItems(db, TENANT2, REPO, OWNER);
-  const review3 = proposals(db, TENANT2);
+  const review2 = proposals(db, TENANT2);
   return {
     recall: [renderAll(items), chooseSlice(items, 300).text],
-    review: review3.length === 0 ? "" : fence(PROPOSALS_LABEL, renderProposals(review3))
+    review: review2.length === 0 ? "" : fence(PROPOSALS_LABEL, renderProposals(review2))
   };
 };
 function withStore(use) {
@@ -8159,10 +8159,13 @@ function openEdits(data, context) {
   }
   return out;
 }
-function review2(data, cwd) {
+function review(args, data, cwd) {
+  const { values } = parseArgs({ args, options: { json: { type: "boolean" } }, strict: true, allowPositionals: false });
   const all = [];
   const held2 = [];
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  if (values.json === true) return void process.stdout.write(`${JSON.stringify(reviewData(data, context, cwd))}
+`);
   for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -8862,7 +8865,7 @@ async function main(argv) {
     case "report":
       return reportCommand(rest, data);
     case "review":
-      return review2(data, process.cwd());
+      return review(rest, data, process.cwd());
     case "undo":
       return undoCommand(rest, data, process.cwd());
     case "approve":

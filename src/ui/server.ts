@@ -134,7 +134,8 @@ async function edit(input: Record<string, unknown>, data: string, config: Config
   throw new HttpError(404, `no active item ${id} here`);
 }
 
-function review(data: string, context: Context, cwd: string): unknown {
+/** The proposals and open instruction-file edits this repository may review: the page's data and memory review --json's (#104). */
+export function reviewData(data: string, context: Context, cwd: string): { proposals: unknown[]; edits: unknown[] } {
   const ins = loadInstructions(cwd, currentConfigDir());
   const out = { proposals: [] as unknown[], edits: [] as unknown[] };
   for (const { file, tenant } of proposalStores(data, context)) {
@@ -199,7 +200,7 @@ async function answer(req: IncomingMessage, url: URL, data: string, cwd: string)
       return { raw: { statement: found.row.statement }, ...found.view, staleReports: (found.row as unknown as { stale_reports: number }).stale_reports, history: history(found.store, found.row.id) };
     }
     case 'GET /api/review':
-      return review(data, context, cwd);
+      return reviewData(data, context, cwd);
     case 'POST /api/edit':
       return edit(await body(req), data, config, context);
     case 'POST /api/decide': {
