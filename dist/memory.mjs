@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, write
 import { homedir } from "node:os";
 import { isAbsolute, join as join2, resolve } from "node:path";
 var EMBEDDING_PROVIDERS = ["ollama", "voyage", "fake"];
-var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5" };
+var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5", skipTainted: false };
 var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
 var SILOS = ["rejections", "standards", "policy", "notes", "decisions", "orbit"];
 var DEFAULT_SESSION_BUDGET = 300;
@@ -125,9 +125,9 @@ function loadConfig(data) {
   const capture2 = c.capture;
   if (capture2 !== void 0) {
     const ok = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
-    const { enabled: enabled2, model, maxCandidates, apiModel } = ok ? capture2 : {};
-    if (!ok || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) {
-      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias }');
+    const { enabled: enabled2, model, maxCandidates, apiModel, skipTainted } = ok ? capture2 : {};
+    if (!ok || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || skipTainted !== void 0 && typeof skipTainted !== "boolean" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) {
+      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, skipTainted: true|false }');
     }
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
@@ -1436,7 +1436,7 @@ var DATA_CATEGORIES = [
   { id: "injections", since: 2, text: "Which items a subagent was shown, and with pointOfAction on which an agent was shown when it read or edited anchored code, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
   { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
   { id: "embeddings", since: 13, text: "Embeddings, only when embeddings in config.json names a provider (off by default; a local Ollama with an embedding model you install, or voyage-4, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query and the changed files' names of memory recall --diff, are sent to that provider and the vectors that come back are kept in the item's own file. A tenant's text is sent only to a provider on this machine (an address of 127.0.0.1, localhost or [::1]); one elsewhere gets the person file's text only. When rerank in config.json names a generative model (off by default; Inkling 2 Mini on the same local Ollama unless set, which you install), each memory_search query or memory recall --diff file list and the statements of the rows it found are sent to it to reorder them, under the same rule for a tenant's text. Quarantined text is never sent, and no hook uses either. Without a provider, a key or a network, nothing is sent and recall uses words and paths only" },
-  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
+  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; text between <private> and </private> is left out, a session in which you typed DO NOT INDEX THIS CHAT is not sent, and with capture.skipTainted true neither is a session that read the web or another MCP server; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
   { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" },
@@ -2443,8 +2443,8 @@ function fuse(items, similarity2, ranked) {
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
-import { appendFileSync as appendFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename2, dirname as dirname8, join as join6 } from "node:path";
+import { appendFileSync as appendFileSync3, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename as basename3, dirname as dirname8, join as join6 } from "node:path";
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
@@ -2861,6 +2861,242 @@ function filterModel(settings, env = process.env) {
   throw new Error(`capture.model "${settings.model}" is not a filter; use haiku or fake`);
 }
 
+// src/capture/transcripts.ts
+import { randomBytes as randomBytes4 } from "node:crypto";
+import { existsSync as existsSync5, readFileSync as readFileSync7 } from "node:fs";
+import { basename as basename2 } from "node:path";
+var TRANSCRIPT_DAYS = 30;
+var MAX_SUMMARY = 4e3;
+var cutoff = () => new Date(Date.now() - TRANSCRIPT_DAYS * 864e5).toISOString();
+var transcriptsOn = (config) => config !== null && consented(config) && config.optIns.transcripts && covers(config, "transcripts");
+var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
+function recordTranscript(data, input2) {
+  const config = loadConfig(data);
+  if (!transcriptsOn(config)) return;
+  const path = str(input2["transcript_path"]);
+  if (automationRefusal(config, process.env) !== null) return;
+  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  const person = context.tenant === null;
+  if (person ? !covers(config, "personTranscripts") : context.repository === null) return;
+  const compaction = input2["hook_event_name"] === "PostCompact";
+  const summary = compaction ? str(input2["compact_summary"]) : void 0;
+  if (compaction ? person || summary === void 0 : path === void 0) return;
+  const session = str(input2["session_id"]) ?? "unknown";
+  const repository = context.repository ?? "";
+  const db = openStore(person ? personFile(data) : tenantFile(data, context.tenant), true, HOOK_BUSY_MS);
+  try {
+    const id = `t-${randomBytes4(5).toString("hex")}`;
+    const at3 = (/* @__PURE__ */ new Date()).toISOString();
+    if (summary !== void 0) {
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, repository, scrub(summary).slice(0, MAX_SUMMARY), at3, at3);
+    } else if (db.prepare("SELECT 1 FROM transcripts WHERE session = ? AND kind = 'path' AND path = ? AND processed_at IS NULL").get(session, path) === void 0) {
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, repository, path, at3);
+    }
+  } finally {
+    db.close();
+  }
+}
+var NOT_TYPED = /^</;
+var HIDDEN = "\uE000";
+var TAGS = ["<private>", "</private>"];
+function hidePrivate(text5, state) {
+  const s = state.held + text5;
+  let out = "";
+  let last = 0;
+  for (const m of s.matchAll(/<(\/?)private>/gi)) {
+    if (state.depth === 0) out += s.slice(last, m.index);
+    if (m[1] === "") {
+      if (state.depth === 0) out += HIDDEN;
+      state.depth++;
+    } else if (state.depth > 0 && --state.depth === 0) out += HIDDEN;
+    last = m.index + m[0].length;
+  }
+  const rest = s.slice(last);
+  let keep = 0;
+  for (let n = Math.min(rest.length, TAGS[1].length - 1); n > 0 && keep === 0; n--) {
+    if (TAGS.some((t) => t.startsWith(rest.slice(rest.length - n).toLowerCase()))) keep = n;
+  }
+  state.held = rest.slice(rest.length - keep);
+  const shown = rest.slice(0, rest.length - keep);
+  return out + (state.depth > 0 ? HIDDEN : shown);
+}
+var NEVER_TEXT = /* @__PURE__ */ new Set(["type", "id", "tool_use_id", "role", "uuid", "parentUuid", "messageId", "sessionId", "timestamp", "cwd", "version", "gitBranch", "userType", "entrypoint", "requestId"]);
+function* writtenStrings(row4) {
+  const stack = [];
+  const pathOf = () => stack.map((f) => f.array ? f.index : f.key);
+  let i = 0;
+  while (i < row4.length) {
+    const c = row4[i];
+    const top = stack[stack.length - 1];
+    if (c === "{" || c === "[") {
+      stack.push({ array: c === "[", index: 0, key: "", expectKey: c === "{", skip: false });
+      i++;
+    } else if (c === "}" || c === "]") {
+      stack.pop();
+      i++;
+    } else if (c === ",") {
+      if (top?.array) top.index++;
+      else if (top) {
+        top.expectKey = true;
+        top.skip = false;
+      }
+      i++;
+    } else if (c === ":") {
+      if (top) top.expectKey = false;
+      i++;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < row4.length && row4[j] !== '"') j += row4[j] === "\\" ? 2 : 1;
+      const text5 = JSON.parse(row4.slice(i, j + 1));
+      i = j + 1;
+      if (top !== void 0 && !top.array && top.expectKey) {
+        top.key = text5;
+        top.skip = NEVER_TEXT.has(text5);
+        if (!stack.some((f) => f.skip) && /[<>]/.test(text5)) yield { path: pathOf().slice(0, -1), text: text5, key: true };
+      } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text: text5, key: false };
+    } else i++;
+  }
+}
+function hidePrivateRecords(raw) {
+  const state = { depth: 0, held: "" };
+  return raw.split("\n").map((row4) => {
+    let o;
+    try {
+      o = JSON.parse(row4);
+    } catch {
+      hidePrivate(row4, state);
+      return null;
+    }
+    for (const t of writtenStrings(row4)) {
+      const visible2 = hidePrivate(t.text, state);
+      if (t.key || t.path.length === 0) continue;
+      let at3 = o;
+      for (const k of t.path.slice(0, -1)) at3 = at3?.[k];
+      if (typeof at3 === "object" && at3 !== null) at3[t.path.at(-1)] = visible2;
+    }
+    return typeof o === "object" && o !== null ? o : null;
+  });
+}
+function ownerTurns(file) {
+  const raw = readFileSync7(file, "utf8");
+  if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
+  const turns = [];
+  const state = { depth: 0, held: "" };
+  raw.split("\n").forEach((row4, i) => {
+    let o;
+    try {
+      o = JSON.parse(row4);
+    } catch {
+      hidePrivate(row4, state);
+      return;
+    }
+    const eligible2 = o?.type === "user" && o.isSidechain !== true && o.isMeta !== true;
+    const content = o?.message?.content;
+    const mine = (path) => eligible2 && path[0] === "message" && path[1] === "content" && (path.length === 2 || path.length === 4 && path[3] === "text" && content?.[path[2]]?.type === "text");
+    const pieces = [];
+    for (const t of writtenStrings(row4)) {
+      const visible2 = hidePrivate(t.text, state);
+      if (!t.key && mine(t.path)) pieces.push(visible2);
+    }
+    const flat = scrub(pieces.join(" ")).replace(/\s+/g, " ").trim();
+    if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
+  });
+  return turns;
+}
+var CORRECTION = /^(?:no(?=[,.!:;])|no\s+(?:use|not|do|don'?t|that|it|the|wait|stop)\b|nope\b|wrong\b|stop\b|don'?t\b|do not\b|never\b|not that\b|that'?s (?:not|wrong)\b|actually\b|instead\b|please (?:don'?t|do not|stop|use)\b)/i;
+function findCorrections(turns) {
+  const out = [];
+  for (const t of turns.slice(1)) {
+    for (const quote of t.text.split(/(?<=[.!?])\s+/)) {
+      if (!quote.includes(HIDDEN) && CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
+    }
+  }
+  return out;
+}
+var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
+function expireTranscripts(db) {
+  const expired = Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
+  if (expired > 0) recordAudit(db, "transcripts_expired", null, { expired });
+  return expired;
+}
+function propose2(db, tenant, config, r, turns, candidates) {
+  const person = tenant === "";
+  const terms = person ? organisationTerms(config, r.repository || null) : void 0;
+  let proposed = 0;
+  for (const c of verbatim(turns, candidates)) {
+    const statement = `Owner correction: "${c.quote}"`;
+    const source = `transcript:${r.session}:L${c.line}:${basename2(r.path)}`;
+    if (refusal(statement, terms) !== null || refusal(source) !== null) continue;
+    const stored = addItem(db, { tenant, scope: person ? "person" : "repository", scopeKey: person ? "" : r.repository, originRepository: r.repository || null, type: "preference", statement, rationale: null, anchors: [], source, trust: "owner", status: "proposed" });
+    if (stored.kind === "inserted") proposed++;
+  }
+  return proposed;
+}
+function processTranscripts(db, tenant, config, extract = findCorrections) {
+  const done = { read: 0, proposed: 0, missing: 0 };
+  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all();
+  for (const r of rows) {
+    let outcome = "read";
+    if (!existsSync5(r.path)) {
+      outcome = "missing";
+      done.missing++;
+    } else if (automationRefusal(config, {}, r.path) !== null) {
+      outcome = "automation";
+    } else {
+      done.read++;
+      const turns = ownerTurns(r.path);
+      done.proposed += propose2(db, tenant, config, r, turns, extract(turns));
+    }
+    db.prepare("UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), outcome, r.id);
+  }
+  if (rows.length > 0) recordAudit(db, "transcripts_processed", null, { ...done });
+  return done;
+}
+var MODEL_DEFAULTS = { url: "http://127.0.0.1:11434", model: "inkling-2-mini" };
+function modelTranscripts(db, tenant, config, ask) {
+  const done = { read: 0, proposed: 0 };
+  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND outcome = 'read' ORDER BY at, id").all();
+  for (const r of rows) {
+    const turns = existsSync5(r.path) && automationRefusal(config, {}, r.path) === null ? ownerTurns(r.path).slice(1) : [];
+    const found = turns.length === 0 ? [] : ask(turns);
+    if ("failed" in found) {
+      done.failed = found.failed;
+      break;
+    }
+    done.read++;
+    done.proposed += propose2(db, tenant, config, r, turns, found);
+    db.prepare("UPDATE transcripts SET outcome = 'model' WHERE id = ?").run(r.id);
+  }
+  if (done.read > 0) recordAudit(db, "transcripts_modelled", null, { read: done.read, proposed: done.proposed });
+  return done;
+}
+function parseCorrections(stdout) {
+  let o;
+  try {
+    o = JSON.parse(stdout.split("\n")[0]);
+  } catch {
+    return { failed: "it answered text that is not JSON" };
+  }
+  if (o?.status !== "ok" || !Array.isArray(o.corrections)) return { failed: "it did not answer status ok with corrections" };
+  return o.corrections.flatMap((c) => Number.isInteger(c?.line) && typeof c?.quote === "string" ? [{ line: c.line, quote: c.quote }] : []);
+}
+var PROMPT2 = `You read the owner's own messages from a coding session, one per line as "L<number>: <text>".
+Find each sentence in which the owner corrects what the agent did or chose, or says how the agent must work from now on.
+Answer JSON only: {"corrections":[{"line":<number>,"quote":"<the sentence, copied character for character>"}]}.
+Never paraphrase, shorten or fix a quote. Answer {"corrections":[]} when there is none.`;
+async function ollamaClient(input2) {
+  const req = JSON.parse(input2);
+  const res = await fetch(new URL("/api/generate", req.url), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: req.model, system: PROMPT2, prompt: req.turns.map((t) => `L${t.line}: ${t.text}`).join("\n"), format: "json", stream: false, options: { temperature: 0, num_predict: 2048 } })
+  });
+  if (!res.ok) throw new Error(`Ollama answered ${res.status}`);
+  const answer2 = JSON.parse((await res.json()).response ?? "");
+  return `${JSON.stringify({ status: "ok", corrections: Array.isArray(answer2?.corrections) ? answer2.corrections : [] })}
+`;
+}
+
 // src/capture/capture.ts
 var MAX_TRANSCRIPT_CHARS = 48e3;
 var STOP_MIN_CHARS = 4e3;
@@ -2889,8 +3125,10 @@ var ADAPTERS = [
     }
   }
 ];
+var OPT_OUT = "DO NOT INDEX THIS CHAT";
 function readLog(file) {
-  const records = readFileSync7(file, "utf8").split("\n").map((line) => {
+  const raw = readFileSync8(file, "utf8");
+  const records = /<\/?private>/i.test(raw) ? hidePrivateRecords(raw) : raw.split("\n").map((line) => {
     try {
       const o = JSON.parse(line);
       return typeof o === "object" && o !== null ? o : null;
@@ -2900,12 +3138,15 @@ function readLog(file) {
   });
   const adapter = ADAPTERS.find((a) => records.some((o) => o !== null && a.owns(o)));
   if (adapter === void 0) return null;
+  let optedOut = false;
   const lines2 = records.map((o, i) => {
     const turn = o === null ? null : adapter.turn(o);
-    const flat = turn?.[1].replace(/\s+/g, " ").trim() ?? "";
+    if (turn?.[0] === "user" && o.isMeta !== true && o.isSidechain !== true && !/^\s*</.test(turn[1]) && turn[1].includes(OPT_OUT)) optedOut = true;
+    let flat = turn?.[1].replace(/\s+/g, " ").trim() ?? "";
+    if (flat.includes(HIDDEN)) flat = flat.split(/(?<=[.!?])\s+/).filter((s) => !s.includes(HIDDEN)).join(" ");
     return flat === "" ? "" : `L${i + 1} ${turn[0]}: ${flat}`;
   });
-  return { agent: adapter.agent, lines: lines2 };
+  return { agent: adapter.agent, lines: lines2, optedOut };
 }
 var summarise = (data, record) => {
   mkdirSync6(join6(data, "logs"), { recursive: true, mode: 448 });
@@ -2915,7 +3156,7 @@ var summarise = (data, record) => {
 function externalSources(file) {
   const found = /* @__PURE__ */ new Set();
   const label = (s) => s.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 60);
-  for (const line of readFileSync7(file, "utf8").split("\n")) {
+  for (const line of readFileSync8(file, "utf8").split("\n")) {
     try {
       const o = JSON.parse(line);
       if (o.payload?.type === "web_search_call") found.add("web:search");
@@ -2943,7 +3184,7 @@ function externalSources(file) {
 var stateFile2 = (data) => join6(data, "logs", "capture-state.json");
 var readState = (data) => {
   try {
-    return JSON.parse(readFileSync7(stateFile2(data), "utf8"));
+    return JSON.parse(readFileSync8(stateFile2(data), "utf8"));
   } catch {
     return {};
   }
@@ -2998,7 +3239,7 @@ async function capture(data, input2) {
   if (context.tenant === null || context.repository === null) return `nothing captured: ${context.reason}`;
   const path = input2["transcript_path"];
   const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
-  if (typeof path !== "string" || !existsSync5(path)) return "nothing captured: no transcript";
+  if (typeof path !== "string" || !existsSync6(path)) return "nothing captured: no transcript";
   const lock = join6(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
   if (!tryLock(lock)) return "nothing captured: another capture of this session is already running";
   try {
@@ -3042,11 +3283,17 @@ function keepCandidates(db, context, candidates, from2) {
 async function captureLocked(data, config, context, path, session, input2) {
   const log = readLog(path);
   if (log === null) {
-    const skipped = `${basename2(path)}: unknown log format`;
+    const skipped = `${basename3(path)}: unknown log format`;
     summarise(data, { session, skipped, saved: 0 });
     return `nothing captured: skipped ${skipped}`;
   }
   const { agent, lines: lines2 } = log;
+  const taint = externalSources(path);
+  const optOut = log.optedOut ? `the owner wrote ${OPT_OUT}` : captureSettings(config).skipTainted && taint.length > 0 ? `the session read ${taint.join(", ")} and skipTainted is on` : null;
+  if (optOut !== null) {
+    summarise(data, { session, agent, skipped: optOut, saved: 0 });
+    return `nothing captured: ${optOut}`;
+  }
   const seen = readState(data)[session] ?? 0;
   let text5 = lines2.slice(seen).filter((l) => l !== "").join("\n");
   if (text5.length > MAX_TRANSCRIPT_CHARS) text5 = text5.slice(text5.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, "");
@@ -3058,11 +3305,10 @@ async function captureLocked(data, config, context, path, session, input2) {
   const settings = captureSettings(config);
   const model = filterModel(settings);
   const candidates = (await model.extract(scrub(text5))).slice(0, settings.maxCandidates);
-  const taint = externalSources(path);
   const db = openStore(tenantFile(data, context.tenant), true);
   let kept;
   try {
-    kept = keepCandidates(db, context, candidates, { session, agent, source: `capture:${agent}:${session}:${basename2(path)}`, taint });
+    kept = keepCandidates(db, context, candidates, { session, agent, source: `capture:${agent}:${session}:${basename3(path)}`, taint });
   } finally {
     db.close();
   }
@@ -3180,7 +3426,7 @@ function providerFor(config, timeoutMs, env = process.env) {
 // src/recall/rerank.ts
 var RERANK_DEFAULTS = { url: OLLAMA_URL, model: "inkling-2-mini" };
 var RERANK_TIMEOUT_MS = 3e3;
-var PROMPT2 = `You rank remembered facts by how well each answers a search query.
+var PROMPT3 = `You rank remembered facts by how well each answers a search query.
 The facts are numbered. Answer JSON only: {"order":[<the numbers, most relevant first>]}.`;
 async function rerank(config, context, query, hits) {
   if (config.rerank === void 0 || hits.length < 2) return { hits };
@@ -3199,7 +3445,7 @@ async function rerank(config, context, query, hits) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model,
-        system: PROMPT2,
+        system: PROMPT3,
         format: "json",
         stream: false,
         options: { temperature: 0 },
@@ -3603,7 +3849,7 @@ function itemDetail(data, context, cwd, id) {
   };
   return { ...found, view, anchors, status, anchorStatus, level, taint };
 }
-function propose2(args, data, config, context, cwd, agent) {
+function propose3(args, data, config, context, cwd, agent) {
   const automated = automationRefusal(config);
   if (automated !== null) throw new ToolError(`not proposed: ${automated}`);
   const statement = text2(args, "statement");
@@ -3690,7 +3936,7 @@ async function call(name, args, data, cwd, agent) {
     case "memory_related":
       return relatedTool(args, data, config, context, cwd);
     case "memory_propose":
-      return propose2(args, data, config, context, cwd, agent);
+      return propose3(args, data, config, context, cwd, agent);
     case "memory_feedback":
       return feedback(args, data, context, cwd);
     default:
@@ -3764,7 +4010,7 @@ function serve(data, cwd, version) {
 }
 
 // src/ui/server.ts
-import { randomBytes as randomBytes4, timingSafeEqual } from "node:crypto";
+import { randomBytes as randomBytes5, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/review/review.ts
@@ -4356,8 +4602,8 @@ async function answer(req, url, data, cwd) {
   }
 }
 function serveUi(data, cwd, port) {
-  const token = randomBytes4(32).toString("hex");
-  const nonce = randomBytes4(16).toString("base64");
+  const token = randomBytes5(32).toString("hex");
+  const nonce = randomBytes5(16).toString("base64");
   const peerOverride = process.env["MEMORY_TEST_HARNESS"] === "1" ? process.env["MEMORY_UI_PEER"] : void 0;
   const server = createServer((req, res) => {
     const send = (status, type, payload) => {
@@ -4408,8 +4654,8 @@ function serveUi(data, cwd, port) {
 }
 
 // src/promote/promote.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
-import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync8, realpathSync as realpathSync3 } from "node:fs";
+import { randomBytes as randomBytes6 } from "node:crypto";
+import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute5, join as join7, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
 var DEFAULT_STANDARDS = "docs/review-standards.md";
 var BAR = `tenant = ? AND scope = 'repository' AND scope_key = ? AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}
@@ -4433,7 +4679,7 @@ function lineRefusal(statement, top) {
   const names = committers(top);
   return names.some((n) => new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u").test(statement)) ? "it names a committer" : null;
 }
-function propose3(db, tenant, repository, top, file) {
+function propose4(db, tenant, repository, top, file) {
   let made = 0;
   const insert = db.prepare(
     `INSERT OR IGNORE INTO promotions (id, item_id, target, symbol, file, line, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)`
@@ -4443,7 +4689,7 @@ function propose3(db, tenant, repository, top, file) {
       const symbol = untested(item);
       const row4 = symbol !== null ? ["test", symbol, null, null] : file !== null && PROMOTABLE.has(item.type) && lineRefusal(item.statement, top) === null ? ["review-standards", "", file, `- ${item.statement.trim()}`] : null;
       if (row4 === null) continue;
-      const id = `p-${randomBytes5(5).toString("hex")}`;
+      const id = `p-${randomBytes6(5).toString("hex")}`;
       if (Number(insert.run(id, item.id, row4[0], row4[1], row4[2], row4[3], (/* @__PURE__ */ new Date()).toISOString()).changes) === 1) {
         made++;
         recordAudit(db, "promotion_proposed", { type: "item", id: item.id }, { promotion: id, target: row4[0] });
@@ -4500,7 +4746,7 @@ function readPlain(path, name) {
   }
   try {
     const { dev, ino } = fstatSync(fd);
-    const bytes = readFileSync8(fd);
+    const bytes = readFileSync9(fd);
     if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
     try {
       return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), dev, ino };
@@ -4665,7 +4911,7 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync8, lstatSync as lstatSync3, readFileSync as readFileSync9, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync3, readFileSync as readFileSync10, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join9, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
@@ -4847,7 +5093,7 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 }
 
 // src/import/orbit.ts
-import { copyFileSync, existsSync as existsSync7, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync as existsSync8, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join8 } from "node:path";
 import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
@@ -4861,7 +5107,7 @@ function orbitFindings(path) {
     dir = mkdtempSync(join8(tmpdir2(), "memory-orbit-"));
     const copy = join8(dir, "knowledge.sqlite");
     copyFileSync(path, copy);
-    if (existsSync7(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
+    if (existsSync8(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
     db = new DatabaseSync3(copy);
   } catch (error) {
     if (dir !== void 0) rmSync(dir, { recursive: true, force: true });
@@ -4955,13 +5201,13 @@ function orbitFindings(path) {
 var ORBIT_STORE = ".orbit/knowledge.sqlite";
 function readInside2(path, root) {
   try {
-    if (!existsSync8(path)) return { reason: "not there" };
+    if (!existsSync9(path)) return { reason: "not there" };
     const link2 = lstatSync3(path).isSymbolicLink();
     const real = realpathSync4(path);
     const top = realpathSync4(root);
     if (!real.startsWith(top + sep3)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
     if (!statSync4(real).isFile()) return { reason: "not a file" };
-    return { text: readFileSync9(real, "utf8") };
+    return { text: readFileSync10(real, "utf8") };
   } catch (error) {
     return { reason: `cannot be read (${error.code ?? "error"})` };
   }
@@ -4998,15 +5244,15 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
   };
   for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
     const projects = join9(dir, "projects");
-    if (!existsSync8(projects)) continue;
+    if (!existsSync9(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
       const folder = join9(projects, project, "memory");
-      if (!existsSync8(folder) || !statSync4(folder).isDirectory()) continue;
+      if (!existsSync9(folder) || !statSync4(folder).isDirectory()) continue;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
         const path = join9(folder, name);
         const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link2 of parsed2.links) if (!existsSync8(join9(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
+        for (const link2 of parsed2.links) if (!existsSync9(join9(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line, text: text5 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -5045,7 +5291,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
       report.skippedFiles.push({ path, reason: "your consent does not cover reading an Orbit knowledge store yet; run memory init and confirm" });
       return;
     }
-    if (!existsSync8(path)) {
+    if (!existsSync9(path)) {
       report.skippedFiles.push({ path, reason: "not there" });
       return;
     }
@@ -5237,7 +5483,7 @@ ${coverage === void 0 ? "" : `${coverage}
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync9, mkdirSync as mkdirSync8, readFileSync as readFileSync10, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync10, mkdirSync as mkdirSync8, readFileSync as readFileSync11, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS2 = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
@@ -5302,7 +5548,7 @@ function read(db, tenant, repository) {
 function writeIfChanged(path, content, mayExist) {
   if (mayExist) {
     try {
-      if (readFileSync10(path, "utf8") === content) return;
+      if (readFileSync11(path, "utf8") === content) return;
     } catch {
     }
   }
@@ -5317,7 +5563,7 @@ function exportMarkdown(stores2, dir, repository) {
   const current = new Set(all.map((a) => a.row.id));
   let previous = "";
   try {
-    previous = readFileSync10(join10(dir, "index.md"), "utf8");
+    previous = readFileSync11(join10(dir, "index.md"), "utf8");
   } catch {
   }
   const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
@@ -5337,7 +5583,7 @@ function exportMarkdown(stores2, dir, repository) {
 }
 function foreignRepository(dir, config, tenant) {
   let at3 = resolve5(dir);
-  while (!existsSync9(at3)) at3 = dirname10(at3);
+  while (!existsSync10(at3)) at3 = dirname10(at3);
   const top = git(at3, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0) return null;
   const url = git(top, "config", "--get", "remote.origin.url");
@@ -5622,18 +5868,18 @@ async function diffRecall(data, config, context, cwd, range) {
 }
 
 // src/recall/orbit.ts
-import { existsSync as existsSync10, readFileSync as readFileSync11 } from "node:fs";
+import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
 import { join as join11 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
 function lessonsInPrompts(root) {
   const file = join11(root, ".orbit", "config.yaml");
-  if (!existsSync10(file)) return false;
+  if (!existsSync11(file)) return false;
   let sections = 0;
   let inKnowledge = false;
   let indent = 0;
   const seen = {};
-  for (const line of readFileSync11(file, "utf8").split(/\r?\n/)) {
+  for (const line of readFileSync12(file, "utf8").split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
     if (line.includes("	")) return false;
     const spaces = /^ */.exec(line)[0].length;
@@ -5691,7 +5937,7 @@ function orbitRecall(data, context, cwd, ask) {
 }
 
 // src/recall/toolsets.ts
-import { randomBytes as randomBytes6 } from "node:crypto";
+import { randomBytes as randomBytes7 } from "node:crypto";
 var OUTCOMES = ["accepted", "rejected"];
 function recordOutcome(db, id, outcome, cost, source) {
   return inTransaction(db, () => {
@@ -5702,7 +5948,7 @@ function recordOutcome(db, id, outcome, cost, source) {
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, outcome, cost)
        VALUES (?, ?, ?, 'owner', ?, ?, 'deterministic', ?, ?)`
-    ).run(`e-${randomBytes6(5).toString("hex")}`, id, source ?? "run", sha256(item.statement), now, outcome, cost);
+    ).run(`e-${randomBytes7(5).toString("hex")}`, id, source ?? "run", sha256(item.statement), now, outcome, cost);
     if (outcome === "accepted") db.prepare("UPDATE items SET reinforced_at = ? WHERE id = ?").run(now, id);
     recordAudit(db, "toolset_outcome", { type: "item", id }, { outcome, cost });
     return "recorded";
@@ -5718,222 +5964,6 @@ function routeToolsets(db, task) {
   if (hits.length === 0) return "";
   return fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why)} \xB7 accepted ${h.accepted} \xB7 rejected ${h.rejected} \xB7 cost ${h.cost}
 `).join(""));
-}
-
-// src/capture/transcripts.ts
-import { randomBytes as randomBytes7 } from "node:crypto";
-import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
-import { basename as basename3 } from "node:path";
-var TRANSCRIPT_DAYS = 30;
-var MAX_SUMMARY = 4e3;
-var cutoff = () => new Date(Date.now() - TRANSCRIPT_DAYS * 864e5).toISOString();
-var transcriptsOn = (config) => config !== null && consented(config) && config.optIns.transcripts && covers(config, "transcripts");
-var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
-function recordTranscript(data, input2) {
-  const config = loadConfig(data);
-  if (!transcriptsOn(config)) return;
-  const path = str(input2["transcript_path"]);
-  if (automationRefusal(config, process.env) !== null) return;
-  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
-  const person = context.tenant === null;
-  if (person ? !covers(config, "personTranscripts") : context.repository === null) return;
-  const compaction = input2["hook_event_name"] === "PostCompact";
-  const summary = compaction ? str(input2["compact_summary"]) : void 0;
-  if (compaction ? person || summary === void 0 : path === void 0) return;
-  const session = str(input2["session_id"]) ?? "unknown";
-  const repository = context.repository ?? "";
-  const db = openStore(person ? personFile(data) : tenantFile(data, context.tenant), true, HOOK_BUSY_MS);
-  try {
-    const id = `t-${randomBytes7(5).toString("hex")}`;
-    const at3 = (/* @__PURE__ */ new Date()).toISOString();
-    if (summary !== void 0) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, repository, scrub(summary).slice(0, MAX_SUMMARY), at3, at3);
-    } else if (db.prepare("SELECT 1 FROM transcripts WHERE session = ? AND kind = 'path' AND path = ? AND processed_at IS NULL").get(session, path) === void 0) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, repository, path, at3);
-    }
-  } finally {
-    db.close();
-  }
-}
-var NOT_TYPED = /^</;
-var HIDDEN = "\uE000";
-var TAGS = ["<private>", "</private>"];
-function hidePrivate(text5, state) {
-  const s = state.held + text5;
-  let out = "";
-  let last = 0;
-  for (const m of s.matchAll(/<(\/?)private>/gi)) {
-    if (state.depth === 0) out += s.slice(last, m.index);
-    if (m[1] === "") {
-      if (state.depth === 0) out += HIDDEN;
-      state.depth++;
-    } else if (state.depth > 0 && --state.depth === 0) out += HIDDEN;
-    last = m.index + m[0].length;
-  }
-  const rest = s.slice(last);
-  let keep = 0;
-  for (let n = Math.min(rest.length, TAGS[1].length - 1); n > 0 && keep === 0; n--) {
-    if (TAGS.some((t) => t.startsWith(rest.slice(rest.length - n).toLowerCase()))) keep = n;
-  }
-  state.held = rest.slice(rest.length - keep);
-  const shown = rest.slice(0, rest.length - keep);
-  return out + (state.depth > 0 ? HIDDEN : shown);
-}
-var NEVER_TEXT = /* @__PURE__ */ new Set(["type", "id", "tool_use_id", "role", "uuid", "parentUuid", "messageId", "sessionId", "timestamp", "cwd", "version", "gitBranch", "userType", "entrypoint", "requestId"]);
-function* writtenStrings(row4) {
-  const stack = [];
-  const pathOf = () => stack.map((f) => f.array ? f.index : f.key);
-  let i = 0;
-  while (i < row4.length) {
-    const c = row4[i];
-    const top = stack[stack.length - 1];
-    if (c === "{" || c === "[") {
-      stack.push({ array: c === "[", index: 0, key: "", expectKey: c === "{", skip: false });
-      i++;
-    } else if (c === "}" || c === "]") {
-      stack.pop();
-      i++;
-    } else if (c === ",") {
-      if (top?.array) top.index++;
-      else if (top) {
-        top.expectKey = true;
-        top.skip = false;
-      }
-      i++;
-    } else if (c === ":") {
-      if (top) top.expectKey = false;
-      i++;
-    } else if (c === '"') {
-      let j = i + 1;
-      while (j < row4.length && row4[j] !== '"') j += row4[j] === "\\" ? 2 : 1;
-      const text5 = JSON.parse(row4.slice(i, j + 1));
-      i = j + 1;
-      if (top !== void 0 && !top.array && top.expectKey) {
-        top.key = text5;
-        top.skip = NEVER_TEXT.has(text5);
-        if (!stack.some((f) => f.skip) && /[<>]/.test(text5)) yield { path: pathOf().slice(0, -1), text: text5, key: true };
-      } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text: text5, key: false };
-    } else i++;
-  }
-}
-function ownerTurns(file) {
-  const raw = readFileSync12(file, "utf8");
-  if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
-  const turns = [];
-  const state = { depth: 0, held: "" };
-  raw.split("\n").forEach((row4, i) => {
-    let o;
-    try {
-      o = JSON.parse(row4);
-    } catch {
-      hidePrivate(row4, state);
-      return;
-    }
-    const eligible2 = o?.type === "user" && o.isSidechain !== true && o.isMeta !== true;
-    const content = o?.message?.content;
-    const mine = (path) => eligible2 && path[0] === "message" && path[1] === "content" && (path.length === 2 || path.length === 4 && path[3] === "text" && content?.[path[2]]?.type === "text");
-    const pieces = [];
-    for (const t of writtenStrings(row4)) {
-      const visible2 = hidePrivate(t.text, state);
-      if (!t.key && mine(t.path)) pieces.push(visible2);
-    }
-    const flat = scrub(pieces.join(" ")).replace(/\s+/g, " ").trim();
-    if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
-  });
-  return turns;
-}
-var CORRECTION = /^(?:no(?=[,.!:;])|no\s+(?:use|not|do|don'?t|that|it|the|wait|stop)\b|nope\b|wrong\b|stop\b|don'?t\b|do not\b|never\b|not that\b|that'?s (?:not|wrong)\b|actually\b|instead\b|please (?:don'?t|do not|stop|use)\b)/i;
-function findCorrections(turns) {
-  const out = [];
-  for (const t of turns.slice(1)) {
-    for (const quote of t.text.split(/(?<=[.!?])\s+/)) {
-      if (!quote.includes(HIDDEN) && CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
-    }
-  }
-  return out;
-}
-var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
-function expireTranscripts(db) {
-  const expired = Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
-  if (expired > 0) recordAudit(db, "transcripts_expired", null, { expired });
-  return expired;
-}
-function propose4(db, tenant, config, r, turns, candidates) {
-  const person = tenant === "";
-  const terms = person ? organisationTerms(config, r.repository || null) : void 0;
-  let proposed = 0;
-  for (const c of verbatim(turns, candidates)) {
-    const statement = `Owner correction: "${c.quote}"`;
-    const source = `transcript:${r.session}:L${c.line}:${basename3(r.path)}`;
-    if (refusal(statement, terms) !== null || refusal(source) !== null) continue;
-    const stored = addItem(db, { tenant, scope: person ? "person" : "repository", scopeKey: person ? "" : r.repository, originRepository: r.repository || null, type: "preference", statement, rationale: null, anchors: [], source, trust: "owner", status: "proposed" });
-    if (stored.kind === "inserted") proposed++;
-  }
-  return proposed;
-}
-function processTranscripts(db, tenant, config, extract = findCorrections) {
-  const done = { read: 0, proposed: 0, missing: 0 };
-  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all();
-  for (const r of rows) {
-    let outcome = "read";
-    if (!existsSync11(r.path)) {
-      outcome = "missing";
-      done.missing++;
-    } else if (automationRefusal(config, {}, r.path) !== null) {
-      outcome = "automation";
-    } else {
-      done.read++;
-      const turns = ownerTurns(r.path);
-      done.proposed += propose4(db, tenant, config, r, turns, extract(turns));
-    }
-    db.prepare("UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), outcome, r.id);
-  }
-  if (rows.length > 0) recordAudit(db, "transcripts_processed", null, { ...done });
-  return done;
-}
-var MODEL_DEFAULTS = { url: "http://127.0.0.1:11434", model: "inkling-2-mini" };
-function modelTranscripts(db, tenant, config, ask) {
-  const done = { read: 0, proposed: 0 };
-  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND outcome = 'read' ORDER BY at, id").all();
-  for (const r of rows) {
-    const turns = existsSync11(r.path) && automationRefusal(config, {}, r.path) === null ? ownerTurns(r.path).slice(1) : [];
-    const found = turns.length === 0 ? [] : ask(turns);
-    if ("failed" in found) {
-      done.failed = found.failed;
-      break;
-    }
-    done.read++;
-    done.proposed += propose4(db, tenant, config, r, turns, found);
-    db.prepare("UPDATE transcripts SET outcome = 'model' WHERE id = ?").run(r.id);
-  }
-  if (done.read > 0) recordAudit(db, "transcripts_modelled", null, { read: done.read, proposed: done.proposed });
-  return done;
-}
-function parseCorrections(stdout) {
-  let o;
-  try {
-    o = JSON.parse(stdout.split("\n")[0]);
-  } catch {
-    return { failed: "it answered text that is not JSON" };
-  }
-  if (o?.status !== "ok" || !Array.isArray(o.corrections)) return { failed: "it did not answer status ok with corrections" };
-  return o.corrections.flatMap((c) => Number.isInteger(c?.line) && typeof c?.quote === "string" ? [{ line: c.line, quote: c.quote }] : []);
-}
-var PROMPT3 = `You read the owner's own messages from a coding session, one per line as "L<number>: <text>".
-Find each sentence in which the owner corrects what the agent did or chose, or says how the agent must work from now on.
-Answer JSON only: {"corrections":[{"line":<number>,"quote":"<the sentence, copied character for character>"}]}.
-Never paraphrase, shorten or fix a quote. Answer {"corrections":[]} when there is none.`;
-async function ollamaClient(input2) {
-  const req = JSON.parse(input2);
-  const res = await fetch(new URL("/api/generate", req.url), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: req.model, system: PROMPT3, prompt: req.turns.map((t) => `L${t.line}: ${t.text}`).join("\n"), format: "json", stream: false, options: { temperature: 0, num_predict: 2048 } })
-  });
-  if (!res.ok) throw new Error(`Ollama answered ${res.status}`);
-  const answer2 = JSON.parse((await res.json()).response ?? "");
-  return `${JSON.stringify({ status: "ok", corrections: Array.isArray(answer2?.corrections) ? answer2.corrections : [] })}
-`;
 }
 
 // src/capture/ci.ts
@@ -8298,7 +8328,7 @@ function promoteCommand(args, data, cwd) {
       const configured = Object.entries(config.imports ?? {}).find(([checkout]) => realpathOrSelf(checkout) === realpathOrSelf(top))?.[1].standards;
       const rel = insidePath(configured ?? DEFAULT_STANDARDS);
       if (rel === null) console.error(`The review-standards path ${configured} is not a path inside the repository for a standards file (not absolute, not under .git, .claude or .github/workflows, not an instruction file); no line is proposed for it.`);
-      const made = propose3(db, context.tenant, context.repository, top, rel);
+      const made = propose4(db, context.tenant, context.repository, top, rel);
       console.error(`${made} new promotion proposal${made === 1 ? "" : "s"}.`);
     }
     const id = values.apply ?? values.reject;

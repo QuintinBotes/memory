@@ -15,6 +15,7 @@ import { openStore } from '../store/db.ts';
 import { tenantFile } from '../store/paths.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { filterModel, type Candidate } from './model.ts';
+import { HIDDEN, hidePrivateRecords } from './transcripts.ts';
 
 /** The newest this many characters of a session go to the model. */
 export const MAX_TRANSCRIPT_CHARS = 48_000;
@@ -66,26 +67,38 @@ const ADAPTERS: { agent: string; owns: (o: LogRecord) => boolean; turn: (o: LogR
   },
 ];
 
-/** The agent that wrote the log, and its user and assistant text, one line each as "L<n> <role>: <text>"; null for a format no adapter knows. */
-function readLog(file: string): { agent: string; lines: string[] } | null {
-  const records: LogRecord[] = readFileSync(file, 'utf8')
-    .split('\n')
-    .map((line) => {
-      try {
-        const o: unknown = JSON.parse(line);
-        return typeof o === 'object' && o !== null ? o : null;
-      } catch {
-        return null;
-      }
-    });
+/** The owner's opt-out for a whole session; only in a message the owner typed, never in agent text or a tool result (#143). */
+export const OPT_OUT = 'DO NOT INDEX THIS CHAT';
+
+/**
+ * The agent that wrote the log, its user and assistant text, one line each as "L<n> <role>: <text>", and whether the
+ * owner wrote OPT_OUT; null for a format no adapter knows. Text inside `<private>` spans is hidden first, and a sentence
+ * that touches one is dropped whole.
+ */
+function readLog(file: string): { agent: string; lines: string[]; optedOut: boolean } | null {
+  const raw = readFileSync(file, 'utf8');
+  // shortcut: a tag split across records with no whole tag anywhere in the log is not seen; the plain parse keeps a log without spans byte-identical.
+  const records: LogRecord[] = /<\/?private>/i.test(raw)
+    ? hidePrivateRecords(raw)
+    : raw.split('\n').map((line) => {
+        try {
+          const o: unknown = JSON.parse(line);
+          return typeof o === 'object' && o !== null ? o : null;
+        } catch {
+          return null;
+        }
+      });
   const adapter = ADAPTERS.find((a) => records.some((o) => o !== null && a.owns(o)));
   if (adapter === undefined) return null;
+  let optedOut = false;
   const lines = records.map((o, i) => {
     const turn = o === null ? null : adapter.turn(o);
-    const flat = turn?.[1].replace(/\s+/g, ' ').trim() ?? '';
+    if (turn?.[0] === 'user' && o.isMeta !== true && o.isSidechain !== true && !/^\s*</.test(turn[1]) && turn[1].includes(OPT_OUT)) optedOut = true;
+    let flat = turn?.[1].replace(/\s+/g, ' ').trim() ?? '';
+    if (flat.includes(HIDDEN)) flat = flat.split(/(?<=[.!?])\s+/).filter((s) => !s.includes(HIDDEN)).join(' ');
     return flat === '' ? '' : `L${i + 1} ${turn![0]}: ${flat}`;
   });
-  return { agent: adapter.agent, lines };
+  return { agent: adapter.agent, lines, optedOut };
 }
 
 const summarise = (data: string, record: Record<string, unknown>): void => {
@@ -272,6 +285,13 @@ async function captureLocked(
     return `nothing captured: skipped ${skipped}`;
   }
   const { agent, lines } = log;
+  // The owner's opt-outs (#143), checked at every run before any model call.
+  const taint = externalSources(path);
+  const optOut = log.optedOut ? `the owner wrote ${OPT_OUT}` : captureSettings(config).skipTainted && taint.length > 0 ? `the session read ${taint.join(', ')} and skipTainted is on` : null;
+  if (optOut !== null) {
+    summarise(data, { session, agent, skipped: optOut, saved: 0 });
+    return `nothing captured: ${optOut}`;
+  }
   const seen = readState(data)[session] ?? 0;
   let text = lines.slice(seen).filter((l) => l !== '').join('\n');
   if (text.length > MAX_TRANSCRIPT_CHARS) text = text.slice(text.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, '');
@@ -286,7 +306,6 @@ async function captureLocked(
   const model = filterModel(settings);
   const candidates = (await model.extract(scrub(text))).slice(0, settings.maxCandidates);
 
-  const taint = externalSources(path);
   const db = openStore(tenantFile(data, context.tenant), true)!;
   let kept;
   try {

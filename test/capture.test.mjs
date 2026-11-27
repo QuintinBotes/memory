@@ -509,3 +509,131 @@ test('#126 SC3 a log in codex-cli 0.172\'s format (world_state, turn_context, to
   const line = JSON.parse(readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').at(-1));
   assert.equal(line.agent, 'codex');
 });
+
+// #143: the owner's <private> spans and DO NOT INDEX THIS CHAT, and skipTainted. The faked network records what is sent.
+const cc = (type, content, extra = {}) => JSON.stringify({ type, sessionId: 'p1', message: { role: type, content }, ...extra });
+const ccLog = (s, records, name = 'p.jsonl') => {
+  const file = join(s.base, name);
+  writeFileSync(file, records.join('\n') + '\n');
+  return file;
+};
+/** Runs capture against haiku with the network faked; the text it sent, or null when it made no call. */
+function sentText(s, file, session = 'p1', event = 'SessionEnd') {
+  const netLog = join(s.base, 'net.jsonl');
+  if (existsSync(netLog)) writeFileSync(netLog, '');
+  const r = run(['capture', '--foreground'], {
+    cwd: s.acmeApi, data: s.data, config: s.configA, net: true, netLog, env: { ANTHROPIC_API_KEY: 'sk-test-key' },
+    input: JSON.stringify({ session_id: session, hook_event_name: event, transcript_path: file, cwd: s.acmeApi }),
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const raw = existsSync(netLog) ? readFileSync(netLog, 'utf8').trim() : '';
+  return { r, text: raw === '' ? null : JSON.parse(JSON.parse(raw).body).messages[0].content };
+}
+const skips = (s) => readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.skipped);
+
+test('#143 SC1 a <private> span in an owner message is not sent, nor any sentence touching it', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = ccLog(s, [
+    cc('user', 'Deploy the api. Note <private>the staging password is hunter2</private> for later. Then run the tests.'),
+    cc('assistant', [{ type: 'text', text: 'Deploying now.' }]),
+  ]);
+  const { text } = sentText(s, file);
+  assert.doesNotMatch(text, /hunter2|staging password|for later|private/);
+  assert.equal(text, 'L1 user: Deploy the api. Then run the tests.\nL2 assistant: Deploying now.');
+});
+
+test('#143 SC2 a span opened in a tool result or a skipped record and closed later hides everything between', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = ccLog(s, [
+    cc('user', 'Start here.'),
+    cc('user', [{ type: 'tool_result', tool_use_id: 't1', content: 'output <private>' }]),
+    cc('assistant', [{ type: 'text', text: 'Secret-A is in the vault.' }]),
+    cc('user', 'Secret-B too. </private>Visible after.'),
+    JSON.stringify({ type: 'system', sessionId: 'p1', content: 'hook said <private>' }),
+    cc('assistant', [{ type: 'text', text: 'Secret-C stays.' }]),
+    cc('user', 'closing </private>. Visible at the end.'),
+  ]);
+  const { text } = sentText(s, file);
+  assert.doesNotMatch(text, /Secret-/);
+  assert.match(text, /Start here\./);
+  assert.match(text, /Visible at the end\./);
+});
+
+test('#143 SC3 DO NOT INDEX THIS CHAT from the owner makes no model call at Stop or SessionEnd and logs the skip; in agent text or a tool result it does not', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = ccLog(s, [cc('user', 'DO NOT INDEX THIS CHAT please'), cc('assistant', [{ type: 'text', text: 'x'.repeat(5000) }])]);
+  for (const event of ['Stop', 'Stop', 'SessionEnd']) {
+    const { r, text } = sentText(s, file, 'p1', event);
+    assert.equal(text, null, event);
+    assert.match(r.stderr, /nothing captured: the owner wrote DO NOT INDEX THIS CHAT/);
+  }
+  assert.deepEqual(skips(s).map((l) => l.skipped), Array(3).fill('the owner wrote DO NOT INDEX THIS CHAT'));
+
+  const t = setup();
+  configure(t, { capture: { model: 'haiku' } });
+  const other = ccLog(t, [
+    cc('user', 'Fix the ledger.'),
+    cc('assistant', [{ type: 'text', text: 'The doc says DO NOT INDEX THIS CHAT.' }]),
+    cc('user', [{ type: 'tool_result', tool_use_id: 't1', content: 'DO NOT INDEX THIS CHAT' }]),
+  ]);
+  assert.match(sentText(t, other).text, /Fix the ledger/);
+});
+
+test('#143 SC4 skipTainted skips a session that called WebFetch; off, it is kept and labelled tainted', () => {
+  const records = [
+    cc('user', `LESSON: ${LESSON}`),
+    cc('assistant', [{ type: 'tool_use', id: 't1', name: 'WebFetch', input: { url: 'https://example.org/x' } }]),
+  ];
+  const s = setup();
+  fakeModel(s, { skipTainted: true });
+  const r = capture(s, s.acmeApi, ccLog(s, records));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /the session read web:example\.org and skipTainted is on/);
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false);
+  assert.deepEqual(skips(s).map((l) => l.skipped), ['the session read web:example.org and skipTainted is on']);
+
+  const t = setup();
+  fakeModel(t);
+  assert.equal(capture(t, t.acmeApi, ccLog(t, records)).status, 0);
+  const [item] = items(t);
+  assert.equal(item.statement, LESSON);
+  assert.equal(evidence(t, item.id)[0].taint, 'web:example.org');
+});
+
+test('#143 SC5 a transcript with no marker and no span sends the same text as before', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const { text } = sentText(s, transcript(s, ['Use a <', '<b>bold</b> stays']), 's1');
+  const noise = Array.from({ length: 12 }, (_, i) => `L${i + 1} ${i % 2 ? 'assistant' : 'user'}: ok, looking at step ${i}; running the tests again`);
+  assert.equal(text, [...noise, 'L13 assistant: Use a <', 'L14 assistant: <b>bold</b> stays', 'L15 user: thanks'].join('\n'));
+});
+
+test('#143 SC6 both markers work for a Codex session log', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const { text } = sentText(s, codexLog(s, ['Keep this. <private>codex-secret</private> gone too.', 'Also kept.']), 'c1');
+  assert.doesNotMatch(text, /codex-secret|gone too/);
+  assert.match(text, /Keep this\./);
+  assert.match(text, /Also kept\./);
+
+  const t = setup();
+  configure(t, { capture: { model: 'haiku' } });
+  const file = codexLog(t, ['Agent text.']);
+  writeFileSync(file, readFileSync(file, 'utf8').replace('"thanks"', '"thanks, DO NOT INDEX THIS CHAT"'));
+  assert.equal(sentText(t, file, 'c2').text, null);
+  assert.deepEqual(skips(t).map((l) => [l.agent, l.skipped]), [['codex', 'the owner wrote DO NOT INDEX THIS CHAT']]);
+});
+
+test('#143 SC7 the hook returns at once and never fails the session when it skips', async () => {
+  const s = setup();
+  fakeModel(s, { skipTainted: true });
+  const file = ccLog(s, [cc('user', 'DO NOT INDEX THIS CHAT'), cc('user', 'a <private>never closed')]);
+  const r = run(['capture'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 'p1', hook_event_name: 'Stop', transcript_path: file, cwd: s.acmeApi }) });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  await until(() => existsSync(join(logs(s), 'capture.jsonl')));
+  assert.equal(skips(s)[0].skipped, 'the owner wrote DO NOT INDEX THIS CHAT');
+});
