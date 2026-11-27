@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory doctor [--json]`, and `/memory:doctor` in a session, says why memory does or does not recall and capture in this directory (#141): one line per check, `ok`, `off` or `fail` with the command that fixes it, covering the data directory, plugin version, consent plan, tenant and binding, hooks, MCP server, capture and its last run, recall, `pointOfAction`, embedder, reranker, anchor provider and item counts. Read only; never prints an item's text; exits 1 when a check fails.
+
 ### Fixed
 
 - Capture works without `ANTHROPIC_API_KEY`: the filter falls back to the Claude Code login through `claude -p`, with no tools, hooks, settings or saved session. Subscription users had no capture at all (#130).
