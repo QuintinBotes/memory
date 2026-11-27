@@ -1094,12 +1094,17 @@ Every pull request here is reviewed by the [Review Voice](https://github.com/Qui
 action (`.github/workflows/review-voice.yml`, configured by `.review-voice/config.yaml`
 at the base commit), which posts only verified findings. It needs an
 `ANTHROPIC_API_KEY` Actions secret scoped to an Anthropic Console workspace,
-and skips without one; it is not a required check. Your answer to a finding is
-the feedback: reply to it, resolve it or dismiss it on GitHub, then
-`/review-voice:sync` brings the outcomes into Review Voice's store and
-`/review-voice:feedback` records an explicit keep or dismiss. With that store
-named as `decisions` under `imports` (above), `memory import` turns your
-decisions on this repository's findings into memory proposals.
+and skips without one; it is not a required check. Answer a finding there by
+replying, resolving or dismissing it. Those answers do not reach memory yet:
+the Action's review run stays in the runner's store, so locally
+`/review-voice:sync` keeps your reply only as a sample of your voice and
+`review-voice outcomes` tracks none of the Action's findings
+([review-voice#529](https://github.com/QuintinBotes/review-voice/issues/529)).
+What reaches memory today is a review you run locally (`/review-voice:review`,
+posted with `/review-voice:draft-review`): its findings' outcomes, and what you
+record with `/review-voice:feedback`, are decisions in Review Voice's store,
+and with that store named as `decisions` under `imports` (above),
+`memory import` turns them into memory proposals.
 
 ## Licence
 
