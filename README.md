@@ -637,7 +637,8 @@ file is never committed or pushed.
 At Stop and SessionEnd a hook runs `memory capture`. It hands the work to a
 detached process and returns at once, and it never fails the session. The
 process reads the session transcript (user and assistant text, newest 48,000
-characters, and at a Stop only once 4,000 new characters have come in), takes
+characters, and at a Stop only once 4,000 new characters have come in; a Stop
+before that says so and is recorded in `logs/capture.jsonl` as skipped), takes
 credentials, emails, handles and webhook URLs out of it, and asks a small model
 for lessons and decisions only: one sentence each, with the transcript line
 that shows it. At most `maxCandidates` (5) are kept per run.

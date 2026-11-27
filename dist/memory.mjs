@@ -3031,7 +3031,11 @@ async function captureLocked(data, config, context, path, session, input2) {
   const seen = readState(data)[session] ?? 0;
   let text5 = lines2.slice(seen).filter((l) => l !== "").join("\n");
   if (text5.length > MAX_TRANSCRIPT_CHARS) text5 = text5.slice(text5.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, "");
-  if (text5 === "" || input2["hook_event_name"] === "Stop" && text5.length < STOP_MIN_CHARS) return "nothing new to read";
+  if (text5 === "") return "nothing new to read";
+  if (input2["hook_event_name"] === "Stop" && text5.length < STOP_MIN_CHARS) {
+    summarise(data, { session, agent, skipped: `shorter than ${STOP_MIN_CHARS} characters`, saved: 0 });
+    return `waiting for more: ${text5.length} of ${STOP_MIN_CHARS} characters; the session's end reads it whatever its length`;
+  }
   const settings = captureSettings(config);
   const model = filterModel(settings);
   const candidates = (await model.extract(scrub(text5))).slice(0, settings.maxCandidates);

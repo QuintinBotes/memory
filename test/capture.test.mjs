@@ -411,3 +411,52 @@ test('#48 a Claude Code transcript with no user or assistant record yet has noth
   assert.match(r.stderr, /nothing new to read/);
   assert.doesNotMatch(r.stderr, /unknown log format/);
 });
+
+// #126: a Stop on a short session waits for more, says so, and leaves a trace; only no new text is "nothing new to read".
+test('#126 SC1 SC2 a Stop on a session under 4,000 characters waits, saying how much it has, and logs the skip', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = codexLog(s, [`LESSON: ${LESSON}`]);
+  const stop = run(['capture', '--foreground'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 'c3', hook_event_name: 'Stop', transcript_path: file, cwd: s.acmeApi }) });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.match(stop.stderr, /waiting for more: \d+ of 4000 characters/);
+  assert.doesNotMatch(stop.stderr, /nothing new to read/);
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false, 'nothing captured');
+  const lines = readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => [l.session, l.agent, l.skipped, l.saved]), [['c3', 'codex', 'shorter than 4000 characters', 0]]);
+  // The session's end reads it whatever its length.
+  assert.equal(capture(s, s.acmeApi, file, 'c3').status, 0);
+  assert.deepEqual(items(s).map((i) => i.statement), [LESSON]);
+  // And then nothing is new.
+  assert.match(capture(s, s.acmeApi, file, 'c3').stderr, /nothing new to read/);
+});
+
+test('#126 SC3 a log in codex-cli 0.172\'s format (world_state, turn_context, token_usage_record) is read as Codex, injected text left out', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = join(s.base, 'rollout-2026-11-27T17-49-00-0000.jsonl');
+  const at = '2026-11-27T17:49:00.000Z';
+  const rec = (type, payload) => JSON.stringify({ timestamp: at, type, payload });
+  const msg = (role, type, text) => rec('response_item', { type: 'message', role, content: [{ type, text }] });
+  writeFileSync(file, [
+    rec('session_meta', { id: 'c0ffee00-0000-4000-8000-000000000002', session_id: 'c0ffee00-0000-4000-8000-000000000002', timestamp: at, cwd: '/work/acme/api', originator: 'codex_exec', cli_version: '0.172.0', source: 'exec', model_provider: 'openai', history_mode: 'default' }),
+    rec('event_msg', { type: 'task_started' }),
+    rec('response_item', { type: 'additional_tools', tools: [] }),
+    msg('developer', 'input_text', 'LESSON: developer instructions are not the session'),
+    msg('user', 'input_text', '<environment_context>\n  <cwd>/work/acme/api</cwd>\n  Injected-env: deploys go through the blue pipeline\n</environment_context>'),
+    rec('world_state', { full: true, state: {} }),
+    rec('turn_context', { cwd: '/work/acme/api', approval_policy: 'never', model: 'codex', turn_id: 't1' }),
+    rec('event_msg', { type: 'thread_settings_applied' }),
+    msg('user', 'input_text', `LESSON: ${LESSON}`),
+    rec('event_msg', { type: 'item_completed' }),
+    msg('assistant', 'output_text', 'noted.'),
+    rec('token_usage_record', { response_id: 'r1', turn_id: 't1', usage: {} }),
+    rec('event_msg', { type: 'task_complete' }),
+  ].join('\n') + '\n');
+  const r = capture(s, s.acmeApi, file, 'c4');
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(items(s).map((i) => i.statement), [LESSON]);
+  assert.equal(evidence(s, items(s)[0].id)[0].source_ref, 'capture:codex:c4:rollout-2026-11-27T17-49-00-0000.jsonl');
+  const line = JSON.parse(readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').at(-1));
+  assert.equal(line.agent, 'codex');
+});
