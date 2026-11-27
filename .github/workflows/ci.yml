@@ -71,10 +71,13 @@ jobs:
       - name: Install Claude Code
         # Pinned: an unpinned global install is a mutable dependency running
         # in CI. Bump it consciously.
-        run: npm install -g @anthropic-ai/claude-code@2.1.273
+        run: npm install -g @anthropic-ai/claude-code@2.1.322
 
       - name: Validate plugin and marketplace manifests
         run: claude plugin validate . --strict
+
+      - name: Test the review pane mod
+        run: claude plugin test .
 
   secrets:
     name: secret scan

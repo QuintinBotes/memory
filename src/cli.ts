@@ -37,7 +37,7 @@ import { adoptCandidate, atHead, logAnchors, managedBy, providerConfig, refreshA
 import { networkFilesystem } from './store/filesystem.ts';
 import { withFileLock, withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
-import { UI_HOST, serveUi } from './ui/server.ts';
+import { UI_HOST, reviewData, serveUi } from './ui/server.ts';
 import { EmbedError, WRITE_TIMEOUT_MS, notOnThisMachine, providerFor } from './embed/provider.ts';
 import { embedAfterWrite, embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
@@ -719,10 +719,13 @@ function openEdits(data: string, context: Context): ReturnType<typeof edits> {
   return out;
 }
 
-function review(data: string, cwd: string): void {
+function review(args: string[], data: string, cwd: string): void {
+  const { values } = parseArgs({ args, options: { json: { type: 'boolean' } }, strict: true, allowPositionals: false });
   const all: Proposal[] = [];
   const held: string[] = [];
   const context = resolveContext(cwd, setUp(data), currentConfigDir());
+  // For the review pane (#104): the page's data, read by a program, never shown to the model.
+  if (values.json === true) return void process.stdout.write(`${JSON.stringify(reviewData(data, context, cwd))}\n`);
   for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
@@ -1524,7 +1527,7 @@ async function main(argv: string[]): Promise<void> {
     case 'report':
       return reportCommand(rest, data);
     case 'review':
-      return review(data, process.cwd());
+      return review(rest, data, process.cwd());
     case 'undo':
       return undoCommand(rest, data, process.cwd());
     case 'approve':

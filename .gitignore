@@ -20,3 +20,6 @@ dist/*
 
 # Local identity guard wordlist (never committed). One term per line.
 .identity-guard.local
+
+# Laid by Claude Code beside a mod it hot-reloads (the API types of that build).
+.claude-plugin/types/
