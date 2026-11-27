@@ -670,11 +670,22 @@ repository that matches no tenant is skipped: no model call, nothing written.
   proposes it on, but a consent given before it stays off for it until you run
   `memory init` and confirm.
 - **Off:** `"capture": { "enabled": false }` in `config.json`.
+- **Not this part:** text you wrap in `<private>` and `</private>` is taken
+  out before redaction and never sent; a sentence that touches the span is
+  dropped whole. A span opened anywhere in the transcript (a tool result too)
+  hides everything up to its close.
+- **Not this session:** a session in which you wrote `DO NOT INDEX THIS CHAT`
+  is not captured at all: no model call, and each Stop and SessionEnd records
+  a `skipped` line in `logs/capture.jsonl` naming the marker. The marker counts
+  only in a message you typed, not in agent text or a tool result. Both
+  markers work for a Codex session log too.
 - **Tainted sessions:** when the transcript shows the session read a web page
   or search (`WebFetch`, `WebSearch`) or called a tool of any MCP server but
   memory's own, what capture keeps is still saved active, labelled `tainted
   by web:<host>` or `mcp:<server>` in recall and review. Imperative text from
-  such a session is quarantined as usual.
+  such a session is quarantined as usual. With `"skipTainted": true` under
+  `capture` (off by default) such a session is not captured at all: no model
+  call, and a `skipped` line in `logs/capture.jsonl` names what it read.
 - **Automation sessions:** a session started by automation (`claude -p`, the
   SDK, a GitHub Actions job) neither captures nor proposes unless the consent plan names
   them: `memory init --automation on --confirm`. See SECURITY.md for how a
@@ -694,7 +705,8 @@ repository that matches no tenant is skipped: no model call, nothing written.
 ```
 
 `model` is `haiku` (the Messages API by plain `fetch`, no SDK) or `fake`, the
-deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
+deterministic filter the tests use; `apiModel` is the Claude Haiku alias;
+`skipTainted` (default `false`) is described above.
 
 ## What agents can do
 
