@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Review Voice reviews this repository's pull requests (#110): a pinned workflow posts its verified findings, and the owner's answers flow back through `/review-voice:sync` into `memory import` as proposals. Not a required check; it skips without an `ANTHROPIC_API_KEY` secret.
+
 ## [0.9.0] - 2026-11-27
 
 Installed copies update to this release: everything since 0.8.0 shipped without a version change, so `/plugin update` kept 0.8.0 (#108). The consent plan is at version 13; memory stays off until you agree to it again with `memory init --confirm`.

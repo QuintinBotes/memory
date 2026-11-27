@@ -1089,6 +1089,17 @@ npm run verify  # typecheck, bundle drift, tests, identity guard, action pins
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Every pull request here is reviewed by the [Review Voice](https://github.com/QuintinBotes/review-voice)
+action (`.github/workflows/review-voice.yml`, configured by `.review-voice/config.yaml`
+at the base commit), which posts only verified findings. It needs an
+`ANTHROPIC_API_KEY` Actions secret scoped to an Anthropic Console workspace,
+and skips without one; it is not a required check. Your answer to a finding is
+the feedback: reply to it, resolve it or dismiss it on GitHub, then
+`/review-voice:sync` brings the outcomes into Review Voice's store and
+`/review-voice:feedback` records an explicit keep or dismiss. With that store
+named as `decisions` under `imports` (above), `memory import` turns your
+decisions on this repository's findings into memory proposals.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
