@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { posix } from 'node:path';
 import type { Trust } from '../items.ts';
 import { authorityViolations } from '../authority.ts';
+import { MAX_STATEMENT } from '../gate.ts';
 import { inside } from './silos.ts';
 
 /**
@@ -28,6 +29,17 @@ interface Run {
 interface Found {
   path: string;
   text: string;
+}
+
+/**
+ * A decision's statement within the gate's limit (#120): a finding may run to 40 words, and with its prefix pass it.
+ * Cut between words, with an ellipsis; the evidence's source points to the whole finding.
+ */
+function fit(statement: string): string {
+  if (statement.length <= MAX_STATEMENT) return statement;
+  const room = statement.slice(0, MAX_STATEMENT - 1);
+  const space = room.lastIndexOf(' ');
+  return `${(space > 0 ? room.slice(0, space) : room).trimEnd()}…`;
 }
 
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/;
@@ -83,8 +95,9 @@ export function reviewVoiceDecisions(path: string): { decisions: Decision[]; unr
       const { repository, pull_number: pull } = known?.run ?? {};
       if (found === undefined || repository == null || !REPOSITORY.test(repository)) return;
       if (!inside(found.path) || found.path.includes('\\')) return;
-      const statement = say(found.text);
-      if (statement === null) return;
+      const said = say(found.text);
+      if (said === null) return;
+      const statement = fit(said);
       const dir = posix.dirname(found.path);
       decisions.push({
         repository: repository.toLowerCase(),
