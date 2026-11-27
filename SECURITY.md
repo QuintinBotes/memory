@@ -13,8 +13,13 @@ no tenant, or in a Claude Code config not bound to that tenant.
 ## What memory protects, and what it does not
 
 - **Isolation by tenant.** Each tenant has its own SQLite file, and a process
-  opens only the tenant its repository's github.com `origin` remote and its
-  Claude Code config allow. Anything ambiguous means no tenant. The tenant is
+  opens only the tenant its repository's `origin` remote and its Claude Code
+  config allow. A remote on a host no tenant pattern names (github.com is
+  named by every pattern without a host) matches no tenant, and the host stays
+  part of the repository's name, so `acme/api` on two hosts are two
+  repositories. The configured remote URL is read, not one `url.*.insteadOf`
+  rewrites, so a rewrite cannot make one host read as another. Anything
+  ambiguous means no tenant. The tenant is
   whatever `origin` says: a directory delivered with its own `.git` (an
   archive, a shared drive) can claim a repository it is not.
 - **Refusal at the boundary.** A statement is checked before it is stored, and

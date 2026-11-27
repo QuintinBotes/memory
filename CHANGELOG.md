@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Tenants for repositories on hosts other than github.com (#139). A tenant pattern may start with a host, such as `gitlab.com/acme/*` or `git.example.com/platform/*`, and `*` takes nested groups. A pattern with no host is on github.com, so existing configs and stores work unchanged. Off github.com the repository is named with its host (`gitlab.com/acme/api`), so it is never the same repository as `acme/api` on GitHub; `--repo`, `memory_search`'s `repository` and `purge --repo` take that name. A host no pattern names still matches no tenant, the consent plan lists the hosts named, and `memory ci` says it does nothing off github.com.
+
 ## [0.9.2] - 2026-11-27
 
 ### Fixed

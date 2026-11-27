@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { visibleText } from './codefree.ts';
-import { cleanTaint, insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
+import { cleanTaint, insertItem, knownItem, organisationKey, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
 import { recordAudit } from './store/audit.ts';
 import { inTransaction } from './store/transaction.ts';
 
@@ -70,7 +70,7 @@ function place(db: DatabaseSync, c: NewItem, key: string, write: () => Stored): 
         `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
            AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?)) ORDER BY created_at, id`,
       )
-      .all(c.tenant, key, c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as { id: string; anchors_json: string }[];
+      .all(c.tenant, key, c.scope, c.scopeKey, organisationKey(c)) as { id: string; anchors_json: string }[];
     const repeat = same.find((r) => anchorsOverlap(c.anchors, JSON.parse(r.anchors_json) as Anchor[]));
     return repeat === undefined ? write() : mergeEvidence(db, repeat.id, c);
   });
@@ -99,7 +99,7 @@ export function addItem(db: DatabaseSync, c: NewItem): Stored {
          AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
        ORDER BY created_at, id`,
     )
-    .all(c.tenant, c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as unknown as Related[];
+    .all(c.tenant, c.scope, c.scopeKey, organisationKey(c)) as unknown as Related[];
   let conflict: { row: Related; sim: number } | undefined;
   for (const r of rows) {
     if (!anchorsOverlap(c.anchors, JSON.parse(r.anchors_json) as Anchor[])) continue;

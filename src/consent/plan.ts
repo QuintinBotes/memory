@@ -1,6 +1,7 @@
 // Adapted from Review Voice, plugins/review-voice/src/consent/plan.ts at 707ba60
 // (https://github.com/QuintinBotes/review-voice, MIT).
 import type { Config } from '../config.ts';
+import { hostOf } from '../context.ts';
 
 /**
  * Every data category, with the plan version that first disclosed it. A new
@@ -37,6 +38,8 @@ export interface ConsentPlan {
   /** Which data categories this plan discloses; a consent records the version it agreed to. */
   version: number;
   tenants: Record<string, string[]>;
+  /** The git hosts the tenant patterns name; a remote on any other host matches no tenant. */
+  hosts: string[];
   configs: Record<string, string[]>;
   /** Exactly what will be read and kept, in the user's terms. */
   dataCategories: string[];
@@ -58,6 +61,7 @@ export function buildConsentPlan(config: Config, storageLocation: string): Conse
   return {
     version: PLAN_VERSION,
     tenants: config.tenants,
+    hosts: [...new Set(Object.values(config.tenants).flat().map(hostOf))].sort(),
     configs: config.configs,
     dataCategories: DATA_CATEGORIES.map((c) => c.text),
     optIns: { ...config.optIns },

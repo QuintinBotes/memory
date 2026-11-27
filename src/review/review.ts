@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { organisationTerms, type Config } from '../config.ts';
-import type { Context } from '../context.ts';
+import { ownerOf, type Context } from '../context.ts';
 import { embedAfterWrite } from '../embed/vectors.ts';
 import { Refusal, refusal } from '../gate.ts';
 import { taintList, type Scope } from '../items.ts';
@@ -187,7 +187,7 @@ export async function decideById(
       const to = options.scope ?? p.scope;
       if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(' or ')} only`);
       if (to === 'organisation' && p.anchors_json !== '[]') throw new Refusal('only a repository item can have an anchor');
-      const scopeKey = to === 'organisation' && p.scope === 'repository' ? p.scope_key.split('/')[0]! : p.scope_key;
+      const scopeKey = to === 'organisation' && p.scope === 'repository' ? ownerOf(p.scope_key) : p.scope_key;
       const superseded = decide(db, p, 'approve', { scope: to, scopeKey });
       const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
       const replaced = superseded === null ? '' : `; it supersedes ${p.older!.id}, which stays on record; undo with memory undo ${superseded}`;
