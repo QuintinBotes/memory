@@ -1,5 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { EmbedError, type EmbeddingProvider } from './provider.ts';
+import type { Config } from '../config.ts';
+import { covers } from '../consent/plan.ts';
+import { EmbedError, WRITE_TIMEOUT_MS, notOnThisMachine, providerFor, type EmbeddingProvider } from './provider.ts';
 
 const toBlob = (v: Float32Array): Uint8Array => new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
 // Copied first: a blob read from SQLite is not aligned for a Float32Array.
@@ -53,4 +55,25 @@ export async function embedPending(db: DatabaseSync, provider: EmbeddingProvider
 export function loadVectors(db: DatabaseSync, model: string): Map<string, Float32Array> {
   const rows = db.prepare('SELECT item_id, vector FROM item_vectors WHERE model = ?').all(model) as { item_id: string; vector: Uint8Array }[];
   return new Map(rows.map((r) => [r.item_id, fromBlob(r.vector)]));
+}
+
+/**
+ * After a write: embeds what is now active here and has no vector. A failure never undoes the write; it is said, and
+ * `memory embed --backfill` fills the gap. No key is the normal state of a machine that does not use embeddings, so it is not said.
+ */
+export async function embedAfterWrite(db: DatabaseSync, config: Config, tenant: string): Promise<void> {
+  if (!covers(config, 'embeddings')) return;
+  const provider = providerFor(config, WRITE_TIMEOUT_MS);
+  if (provider === null) return;
+  // `tenant` is the file's tenant, '' for the person file: a tenant's text goes only to an embedder on this machine (#28).
+  if (tenant !== '' && !provider.local) {
+    console.error(`memory: not embedded (${notOnThisMachine(provider, tenant)})`);
+    return;
+  }
+  try {
+    await embedPending(db, provider);
+  } catch (error) {
+    if (!(error instanceof EmbedError)) throw error;
+    if (!error.noKey) console.error(`memory: not embedded (${error.message}); memory embed --backfill fills it later`);
+  }
 }

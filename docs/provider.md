@@ -57,6 +57,13 @@ A symbol is `{ key, kind, signature?, start, end?, hash }`:
 print the answers to `symbol_at`, `symbol_impact` and `tests`. The last two are defined now so a provider is built once;
 point-of-action recall (#14) and test links (#17) use them.
 
+`corrections` (#80) is the transcript model's op, sent by `memory corrections` to `transcriptModel.command`, or to memory's
+own Ollama client when no command is set, through the same runner with a 120-second limit. The request carries `url`,
+`model` and `turns: [{ line, text }]`, the owner's redacted messages; the answer is `{"status": "ok", "corrections":
+[{ line, quote }]}`. A quote not verbatim in the turn it names is dropped. `url` decides whether a tenant's messages may be
+sent: only an address of 127.0.0.1, localhost or [::1] counts as this machine, so a command set here must use the model at
+that address.
+
 ## How memory uses it
 
 `memory remember --anchor path#qualified_name#kind` asks `key` and stores the anchor with the key, signature, line range,

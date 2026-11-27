@@ -332,7 +332,7 @@ test('the opt-in is its own consent category: under plan version 6 nothing is ca
   const s = setup();
   enable(s);
   const plan = JSON.parse(run(['init'], { cwd: s.base, data: s.data, config: s.configA }).stdout);
-  assert.equal(plan.version, 11);
+  assert.equal(plan.version, 13);
   assert.equal(plan.optIns.failingCommands, true);
   assert.ok(plan.dataCategories.some((t) => /failing command/.test(t) && /30 days/.test(t)));
   const file = join(s.data, 'config.json');
@@ -438,7 +438,7 @@ test('migrating a store from schema 11 adds the failure tables', () => {
   assert.equal(before.length, 2);
   exec(s, 'DROP TABLE revert_counts; DROP TABLE episodes; DROP TABLE commit_items; DROP TABLE reverts; PRAGMA user_version = 11;');
   assert.equal(run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
-  assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 17);
+  assert.equal(sql(s, 'PRAGMA user_version')[0].user_version, 18);
   assert.deepEqual(sql(s, "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('episodes', 'commit_items', 'reverts', 'revert_counts') ORDER BY name").map((r) => r.name), ['commit_items', 'episodes', 'revert_counts', 'reverts']);
   assert.deepEqual(sql(s, 'SELECT i.id, i.statement, e.source_ref, e.quote_hash FROM items i JOIN evidence e ON e.item_id = i.id'), before, 'the item and its evidence survive');
 });

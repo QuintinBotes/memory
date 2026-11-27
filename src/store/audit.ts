@@ -22,6 +22,7 @@ export type AuditAction =
   | 'question_closed'
   | 'proposal_received'
   | 'feedback'
+  | 'toolset_outcome'
   | 'tombstones_reduced'
   | 'evidence_merged'
   | 'merge_proposed'
@@ -36,6 +37,7 @@ export type AuditAction =
   | 'scf_exported'
   | 'scf_feedback'
   | 'transcripts_processed'
+  | 'transcripts_modelled'
   | 'transcripts_expired'
   | 'undone';
 

@@ -23,8 +23,17 @@ export interface Config {
   /** Subagent types, beyond general-purpose, that get the slice at their start. */
   subagentTypes?: string[];
   imports?: Record<string, RepositorySilos>;
-  /** Which embedding provider and model recall uses; absent means voyage-4. */
-  embeddings?: { provider: (typeof EMBEDDING_PROVIDERS)[number]; model?: string };
+  /**
+   * The semantic leg's embedder (#28), off when absent: a local Ollama at `url` (http://127.0.0.1:11434 unless set)
+   * with an embedding model the owner installs, Voyage, or the offline test provider.
+   */
+  embeddings?: { provider: (typeof EMBEDDING_PROVIDERS)[number]; model?: string; url?: string };
+  /**
+   * The optional reranker (#28): a generative model on Ollama at `url` (http://127.0.0.1:11434 unless set; the server
+   * #80's model pass uses) that reorders memory_search's and diff recall's top rows. `model` is inkling-2-mini unless set,
+   * which the owner installs. Off when absent.
+   */
+  rerank?: { url?: string; model?: string };
   /** `version` is the consent plan's version agreed to; absent in a consent saved before plans had one. */
   consent?: { planHash: string; grantedAt: string; version?: number };
   /** Automatic capture at the end of a session; on unless `enabled` is false, and only once the owner has confirmed the plan that lists it. */
@@ -37,11 +46,17 @@ export interface Config {
   impactProvider?: { command: string[] };
   /** The SCF each tenant exports its proposals to (#13), by tenant name; a tenant without an entry sends nothing. Part of the consent plan. */
   scf?: Record<string, { url: string }>;
+  /**
+   * The model `memory corrections` asks for corrections the rules miss (#80): an Ollama address (a local one by default)
+   * and a model name, or a provider command speaking docs/provider.md's protocol in place of memory's own Ollama client.
+   * The pass is off unless this is set; `url` says where the model runs either way.
+   */
+  transcriptModel?: { url?: string; model?: string; command?: string[] };
   /** Set by memory itself when two memory-linked reverts came within seven days (#18); every recall stays off until the owner runs `memory init --recall on`. */
   recallOff?: { reason: string; at: string };
 }
 
-export const EMBEDDING_PROVIDERS = ['voyage', 'fake'] as const;
+export const EMBEDDING_PROVIDERS = ['ollama', 'voyage', 'fake'] as const;
 /** `model` names the filter ('haiku' or 'fake'); `apiModel` is the Anthropic model alias the haiku filter calls. */
 export interface CaptureConfig {
   enabled?: boolean;
@@ -68,6 +83,18 @@ export const neverSubagent = (type: string): boolean =>
 export const subagentAllowed = (config: Config, type: string): boolean =>
   !neverSubagent(type) && (type === 'general-purpose' || (config.subagentTypes ?? []).includes(type));
 /** The configured address as a URL, or why it is refused: https, or http to this machine only; no credentials, query or fragment. */
+const plainHttp = (text: string): boolean => {
+  try {
+    const u = new URL(text);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.username === '' && u.password === '';
+  } catch {
+    return false;
+  }
+};
+
+/** Whether an address is on the owner's machine, judged by its host: a loopback name or address. */
+export const onThisMachine = (u: URL): boolean => ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+
 export function scfUrl(text: string): URL | string {
   let u: URL;
   try {
@@ -75,8 +102,7 @@ export function scfUrl(text: string): URL | string {
   } catch {
     return `"${text}" is not a URL`;
   }
-  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) return 'an SCF address must be https (http only to this machine)';
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && onThisMachine(u))) return 'an SCF address must be https (http only to this machine)';
   if (u.username !== '' || u.password !== '' || u.search !== '' || u.hash !== '') return 'an SCF address carries no credentials, query or fragment';
   // No empty or dot segment: "//host" in a path would read as another host once a route is appended.
   if (!/^(\/[A-Za-z0-9._~-]+)*\/?$/.test(u.pathname) || u.pathname.split('/').some((seg) => seg === '.' || seg === '..')) return 'an SCF address path holds only plain segments';
@@ -153,10 +179,22 @@ export function loadConfig(data: string): Config | null {
     !(
       typeof emb === 'object' && emb !== null && !Array.isArray(emb) &&
       (EMBEDDING_PROVIDERS as readonly string[]).includes(emb.provider) &&
-      (emb.model === undefined || (typeof emb.model === 'string' && emb.model !== ''))
+      (emb.model === undefined || (typeof emb.model === 'string' && emb.model !== '')) &&
+      (emb.url === undefined || (emb.provider === 'ollama' && typeof emb.url === 'string' && plainHttp(emb.url)))
     )
   ) {
-    throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(' or ')}, "model"?: a name}`);
+    throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(' or ')}, "model"?: a name, "url"?: Ollama's http(s) address without credentials}`);
+  }
+  const rr = c.rerank;
+  if (
+    rr !== undefined &&
+    !(
+      typeof rr === 'object' && rr !== null && !Array.isArray(rr) &&
+      (rr.url === undefined || (typeof rr.url === 'string' && plainHttp(rr.url))) &&
+      (rr.model === undefined || (typeof rr.model === 'string' && rr.model !== ''))
+    )
+  ) {
+    throw new ConfigError('rerank must be {"url"?: an http(s) address without credentials, "model"?: a name}');
   }
   const capture = c.capture;
   if (capture !== undefined) {
@@ -191,6 +229,20 @@ export function loadConfig(data: string): Config | null {
     const bad = entries === null ? 'scf must map a tenant name to {"url": an address}' : entries.map(([t, v]) => (!(t in c.tenants!) ? `scf names tenant "${t}", which does not exist` : typeof v?.url !== 'string' ? `scf.${t} needs a "url"` : typeof scfUrl(v.url) === 'string' ? `scf.${t}: ${scfUrl(v.url) as string}` : null)).find((m) => m !== null);
     if (bad !== undefined && bad !== null) throw new ConfigError(bad);
   }
+  const tm = c.transcriptModel;
+  if (tm !== undefined) {
+    const ok = typeof tm === 'object' && tm !== null && !Array.isArray(tm);
+    const { url, model, command } = ok ? tm : ({} as NonNullable<Config['transcriptModel']>);
+    const http = (u: string): boolean => URL.canParse(u) && ['http:', 'https:'].includes(new URL(u).protocol) && new URL(u).username === '' && new URL(u).password === '';
+    if (
+      !ok ||
+      (url !== undefined && !(typeof url === 'string' && http(url))) ||
+      (model !== undefined && !(typeof model === 'string' && model !== '')) ||
+      (command !== undefined && !(isList(command) && command.length > 0 && isAbsolute(command[0]!)))
+    ) {
+      throw new ConfigError('transcriptModel must be {"url"?: an http(s) address without credentials, "model"?: a name, "command"?: [absolute program path, arguments...]}');
+    }
+  }
   const off = c.recallOff;
   if (off !== undefined && !(typeof off === 'object' && off !== null && typeof off.reason === 'string' && typeof off.at === 'string')) {
     throw new ConfigError('recallOff must be { reason: text, at: a time }');
@@ -203,12 +255,14 @@ export function loadConfig(data: string): Config | null {
     ...(types !== undefined ? { subagentTypes: types } : {}),
     ...(imports !== undefined ? { imports } : {}),
     ...(emb !== undefined ? { embeddings: emb } : {}),
+    ...(rr !== undefined ? { rerank: rr } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
     ...(capture !== undefined ? { capture } : {}),
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
     ...(impact !== undefined ? { impactProvider: impact } : {}),
     ...(scf !== undefined ? { scf } : {}),
+    ...(tm !== undefined ? { transcriptModel: tm } : {}),
     ...(off !== undefined ? { recallOff: off } : {}),
   };
 }

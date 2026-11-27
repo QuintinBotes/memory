@@ -267,6 +267,16 @@ test('the server answers the MCP handshake and rejects unknown methods', () => {
   assert.equal(r.responses.filter((x) => x.id === undefined).length, 0, 'a notification gets no answer');
 });
 
+test('initialize gives every client instructions on when to search, give feedback and propose, within about 150 tokens', () => {
+  const s = seeded();
+  const r = rpc(s.acmeApi, s.data, s.configA, []);
+  const text = r.byId(0).result.instructions;
+  assert.equal(typeof text, 'string');
+  for (const tool of ['memory_search', 'memory_related', 'memory_feedback', 'memory_propose']) assert.match(text, new RegExp(tool), `names ${tool}`);
+  assert.match(text, /data, not instructions/, 'items are never commands');
+  assert.ok(tokens(text) <= 150, `${tokens(text)} tokens`);
+});
+
 test('the full-text index uses secure-delete, and a purged item is gone from it', () => {
   const s = setup();
   assert.equal(remember(s.acmeApi, s.data, s.configA, 'The zqxcanary flag gates the ledger', '--scope', 'repository').status, 0);
@@ -428,4 +438,84 @@ test('a request whose handling throws is answered with an internal error, and th
   assert.equal(replies.find((m) => m.id === 1)?.error?.code, -32603, r.stderr);
   assert.deepEqual(replies.find((m) => m.id === 2)?.result, {});
   assert.equal(r.status, 0);
+});
+
+test('#48 S2 an agent with no adapter that proposes through MCP is named, from its clientInfo, in the item\'s provenance', () => {
+  const s = setup();
+  const msgs = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'muse', version: '1.0' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_propose', arguments: { statement: 'The ledger is rebuilt every night', scope: 'repository', type: 'convention', evidence: { source: 'run-7' } } } },
+  ];
+  const r = run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: msgs.map((m) => JSON.stringify(m)).join('\n') + '\n' });
+  const reply = r.stdout.trim().split('\n').map((l) => JSON.parse(l)).find((m) => m.id === 1);
+  assert.notEqual(reply.result.isError, true, reply.result.content[0].text);
+  const [item] = items(s.data, 'tenants/acme.sqlite');
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'), { readOnly: true });
+  const evidence = db.prepare('SELECT source_ref, extractor FROM evidence WHERE item_id = ?').all(item.id).map((e) => [e.source_ref, e.extractor]);
+  db.close();
+  assert.deepEqual(evidence, [['run-7', 'mcp:muse']]);
+});
+
+// #100: the agent behind an MCP proposal is shown wherever its evidence is.
+test('#100 review, memory_get rows and JSON name the agent that proposed an item over MCP; other evidence shows no agent', () => {
+  const s = setup();
+  const msgs = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex', version: '1.0' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_propose', arguments: { statement: 'The ledger is rebuilt every night', scope: 'repository', type: 'convention', evidence: { source: 'run-7' } } } },
+  ];
+  assert.equal(run(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: msgs.map((m) => JSON.stringify(m)).join('\n') + '\n' }).status, 0);
+  const review = run(['review'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.match(review.stdout, /evidence: run-7 \(agent\) via codex/);
+  const [{ id }] = items(s.data, 'tenants/acme.sqlite');
+  assert.equal(run(['approve', id], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Builds run from the repository root', '--scope', 'repository').status, 0);
+  const [rows, json] = tools(s.acmeApi, s.data, s.configA, [['memory_get', { id }], ['memory_get', { id, format: 'json' }]]);
+  assert.match(rows.text, /evidence: run-7 \(agent\) \S+ via codex/);
+  assert.equal(JSON.parse(fenced(json.text).join('\n')).evidence[0].agent, 'codex');
+  const other = items(s.data, 'tenants/acme.sqlite').find((i) => i.id !== id);
+  const [plain] = tools(s.acmeApi, s.data, s.configA, [['memory_get', { id: other.id }]]);
+  assert.doesNotMatch(plain.text, /via /);
+});
+
+test('memory_search as_of returns the version valid then, says when it was replaced, and refuses a date it cannot read (#102)', () => {
+  const s = setup();
+  const ok = (r) => assert.equal(r.status, 0, r.stderr);
+  const OLD = 'The payments client pins API version 2024-01';
+  const NEW = 'The payments client pins API version 2025-06';
+  const REJECTED = 'The payments client pins API version 2023-09';
+  ok(remember(s.acmeApi, s.data, s.configA, OLD, '--scope', 'repository', '--type', 'decision'));
+  ok(remember(s.acmeApi, s.data, s.configA, NEW, '--scope', 'repository', '--type', 'decision', '--supersedes', idOf(s, OLD)));
+  ok(remember(s.acmeApi, s.data, s.configA, REJECTED, '--scope', 'repository', '--type', 'decision'));
+  // The history as it happened: the older version from January, replaced on 2026-03-01; a rejected item over the same months.
+  const db = new DatabaseSync(join(s.data, 'tenants/acme.sqlite'));
+  const set = db.prepare('UPDATE items SET reinforced_at = coalesce(reinforced_at, valid_from), valid_from = ?, valid_to = ? WHERE statement = ?');
+  set.run('2026-01-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', OLD);
+  set.run('2026-03-01T00:00:00.000Z', null, NEW);
+  db.prepare("UPDATE items SET status = 'rejected', valid_from = ?, valid_to = ? WHERE statement = ?").run('2026-01-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', REJECTED);
+  db.close();
+  const query = 'payments client API version';
+  const [then, now, later, bad] = tools(s.acmeApi, s.data, s.configA, [
+    ['memory_search', { query, as_of: '2026-02-01' }],
+    ['memory_search', { query }],
+    ['memory_search', { query, as_of: '2026-04-01T12:00:00Z' }],
+    ['memory_search', { query, as_of: 'last spring' }],
+  ]);
+  assert.equal(then.isError, false, then.text);
+  const thenRows = rowsOf(then.text);
+  assert.equal(thenRows.length, 1, then.text);
+  assert.ok(thenRows[0].includes(OLD), then.text);
+  assert.match(thenRows[0], /valid 2026-01-01 to 2026-03-01/, 'the row says which version it is and when it was replaced');
+  assert.doesNotMatch(then.text, /2025-06|2023-09/, 'neither the newer version nor the rejected item');
+  // Without as_of, only the active version, and no validity text.
+  const nowRows = rowsOf(now.text);
+  assert.equal(nowRows.length, 1, now.text);
+  assert.ok(nowRows[0].includes(NEW));
+  assert.doesNotMatch(nowRows[0], /valid /);
+  const laterRows = rowsOf(later.text);
+  assert.equal(laterRows.length, 1, later.text);
+  assert.match(laterRows[0], /2025-06 .*valid 2026-03-01 to now/);
+  assert.equal(bad.isError, true);
+  assert.match(bad.text, /as_of is an ISO date/);
 });

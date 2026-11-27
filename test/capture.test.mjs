@@ -234,10 +234,10 @@ test('S6c a version 3 consent covers capture but not embeddings; confirming the 
   assert.equal(vectors(), 0, 'embeddings did not');
 
   const init = run(['init'], { cwd: s.acmeApi, data: s.data, config: s.configA });
-  assert.match(init.stderr, /Embeddings, with the provider/);
+  assert.match(init.stderr, /Embeddings, only when embeddings in config.json names a provider/);
   assert.doesNotMatch(init.stderr, /sent to Anthropic's API/);
   assert.equal(run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 11);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 13);
   assert.equal(run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   assert.equal(vectors(), 1);
 });
@@ -339,4 +339,75 @@ test('the default filter model is claude-haiku-5-5', () => {
   const netLog = join(s.base, 'net.jsonl');
   capture(s, s.acmeApi, transcript(s, ['x']), 's1', { net: true, netLog, env: { ANTHROPIC_API_KEY: 'sk-test-key' } });
   assert.equal(JSON.parse(JSON.parse(readFileSync(netLog, 'utf8').trim()).body).model, 'claude-haiku-5-5');
+});
+
+/** A Codex rollout log (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl), synthetic: session_meta, then response items and events. */
+function codexLog(s, lines, name = 'rollout-2026-01-02T03-04-05-0000.jsonl', injected = []) {
+  const file = join(s.base, name);
+  const at = '2026-01-02T03:04:05.000Z';
+  const rec = (type, payload) => JSON.stringify({ timestamp: at, type, payload });
+  const msg = (role, text) => rec('response_item', { type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
+  const noise = Array.from({ length: 12 }, (_, i) => msg(i % 2 ? 'assistant' : 'user', `ok, looking at step ${i}; running the tests again`));
+  writeFileSync(file, [
+    rec('session_meta', { id: 'c0ffee00-0000-4000-8000-000000000001', timestamp: at, cwd: '/work/acme/api', originator: 'codex_cli_rs', cli_version: '0.0.0', source: 'cli' }),
+    msg('developer', 'LESSON: developer instructions are not the session'),
+    ...injected.map((t) => msg('user', t)),
+    ...noise,
+    rec('response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["npm","test"]}', call_id: 'call_1' }),
+    rec('response_item', { type: 'function_call_output', call_id: 'call_1', output: 'LESSON: tool output is not the session' }),
+    ...lines.map((l) => msg('assistant', l)),
+    rec('event_msg', { type: 'agent_message', message: lines[0] ?? '' }),
+    msg('user', 'thanks'),
+  ].join('\n') + '\n');
+  return file;
+}
+
+test('#48 S1 a Codex session log with one lesson saves one item whose provenance names Codex', () => {
+  const s = setup();
+  fakeModel(s);
+  const r = capture(s, s.acmeApi, codexLog(s, [`LESSON: ${LESSON}`]), 'c1');
+  assert.equal(r.status, 0, r.stderr);
+  const all = items(s);
+  assert.deepEqual(all.map((i) => i.statement), [LESSON]);
+  assert.equal(all[0].origin_trust, 'agent');
+  assert.equal(evidence(s, all[0].id)[0].source_ref, 'capture:codex:c1:rollout-2026-01-02T03-04-05-0000.jsonl');
+});
+
+test('#48 S3 a log in an unknown format is skipped and reported in the capture summary, and nothing is saved from it', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = join(s.base, 'other-agent.jsonl');
+  writeFileSync(file, [{ speaker: 'bot', body: `LESSON: ${LESSON}` }, { speaker: 'human', body: 'thanks' }].map((o) => JSON.stringify(o)).join('\n') + '\n');
+  const r = capture(s, s.acmeApi, file, 'u1');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /skipped other-agent\.jsonl: unknown log format/);
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false);
+  const lines = readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => [l.session, l.skipped, l.saved]), [['u1', 'other-agent.jsonl: unknown log format', 0]]);
+});
+
+test('#48 Codex\'s own injected user-role text (environment, user instructions, AGENTS.md) never reaches the filter model', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const netLog = join(s.base, 'net.jsonl');
+  const file = codexLog(s, [`LESSON: ${LESSON}`], undefined, [
+    '<environment_context>\n  <cwd>/work/acme/api</cwd>\n  Injected-env: deploys go through the blue pipeline\n</environment_context>',
+    '<user_instructions>\nInjected-user: the ledger owns every refund\n</user_instructions>',
+    '# AGENTS.md instructions for /work/acme/api\n\n<INSTRUCTIONS>\nInjected-agents: migrations run before the release\n</INSTRUCTIONS>',
+  ]);
+  capture(s, s.acmeApi, file, 'c2', { net: true, netLog, env: { ANTHROPIC_API_KEY: 'sk-test-key' } });
+  const text = JSON.parse(JSON.parse(readFileSync(netLog, 'utf8').trim()).body).messages[0].content;
+  assert.match(text, /idempotent/);
+  assert.doesNotMatch(text, /Injected-|environment_context|user_instructions|AGENTS\.md/);
+});
+
+test('#48 a Claude Code transcript with no user or assistant record yet has nothing new to read, not an unknown format', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = join(s.base, 'early.jsonl');
+  writeFileSync(file, `${JSON.stringify({ type: 'system', subtype: 'init', sessionId: 's9', uuid: 'u-1', timestamp: '2026-01-02T03:04:05.000Z' })}\n`);
+  const r = capture(s, s.acmeApi, file, 's9');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /nothing new to read/);
+  assert.doesNotMatch(r.stderr, /unknown log format/);
 });

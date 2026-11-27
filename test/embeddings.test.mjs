@@ -26,6 +26,7 @@ const setEmbeddings = (s, embeddings) => {
   writeFileSync(p, JSON.stringify(c));
 };
 const FAKE = { provider: 'fake' };
+const VOYAGE = { provider: 'voyage' };
 
 function seeded(embeddings = FAKE) {
   const s = setup();
@@ -38,7 +39,7 @@ function seeded(embeddings = FAKE) {
 
 const search = (s, query, paths) => tools(s.acmeApi, s.data, s.configA, [['memory_search', { query, ...(paths ? { paths } : {}) }]])[0];
 const rowsOf = (text) => (text.includes('~~~') ? fenced(text).filter((l) => l.startsWith('[')) : []);
-const NOTE = /Embeddings not used/g;
+const NOTE = /Semantic leg skipped/g;
 const vectors = (file, data) => {
   const db = new DatabaseSync(join(data, file), { readOnly: true });
   const rows = db.prepare('SELECT v.item_id, v.model, v.dims, i.statement FROM item_vectors v LEFT JOIN items i ON i.id = v.item_id').all();
@@ -46,8 +47,8 @@ const vectors = (file, data) => {
   return rows;
 };
 
-test('with no key, recall is today\'s lexical ranking and says once that embeddings were not used', () => {
-  const s = seeded(null); // the default provider, voyage, and no VOYAGE_API_KEY
+test('with voyage at its own servers, a client tenant\'s recall is today\'s lexical ranking and says once that the leg was skipped', () => {
+  const s = seeded(VOYAGE);
   const r = search(s, QUESTION);
   assert.equal(r.isError, false, r.text);
   const rows = rowsOf(r.text);
@@ -55,7 +56,7 @@ test('with no key, recall is today\'s lexical ranking and says once that embeddi
   assert.ok(!rows.some((l) => l.includes(TARGET)), 'the decision shares no word stem with the question, so words alone miss it');
   assert.ok(!rows.some((l) => /semantic|graph/.test(l)), 'no vector points');
   assert.equal(r.text.match(NOTE)?.length, 1, r.text);
-  assert.match(r.text, /VOYAGE_API_KEY is not set/);
+  assert.match(r.text, /acme is a client tenant, .*; voyage is not/);
   assert.equal(vectors('tenants/acme.sqlite', s.data).length, 0, 'nothing was embedded or sent');
 });
 
@@ -75,14 +76,14 @@ test('changing the config key swaps the provider with no code change', () => {
   const s = seeded();
   assert.ok(rowsOf(search(s, QUESTION).text).some((l) => l.includes(TARGET)));
 
-  setEmbeddings(s, { provider: 'voyage' });
+  setEmbeddings(s, VOYAGE);
   const voyage = search(s, QUESTION);
-  assert.match(voyage.text, /Embeddings not used \(VOYAGE_API_KEY is not set\)/);
+  assert.match(voyage.text, /Semantic leg skipped \(acme is a client tenant/);
   assert.ok(!rowsOf(voyage.text).some((l) => l.includes(TARGET)));
 
   // Another model of the same provider: the stored vectors are the other model's, so they are not used until embedded again.
   setEmbeddings(s, { provider: 'fake', model: 'fake-b' });
-  assert.match(search(s, QUESTION).text, /Embeddings not used \(no vectors from fake-b/);
+  assert.match(search(s, QUESTION).text, /Semantic leg skipped \(no vectors from fake-b/);
   const filled = run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA });
   assert.equal(filled.status, 0, filled.stderr);
   assert.match(filled.stdout, /embedded 4 .*fake-b/);
@@ -90,7 +91,7 @@ test('changing the config key swaps the provider with no code change', () => {
   assert.deepEqual([...new Set(vectors('tenants/acme.sqlite', s.data).map((v) => v.model))], ['fake-b'], 'an item keeps one vector: the current model\'s');
 });
 
-test('items that share an anchored path with a top hit get a graph bonus, only when embeddings are used', () => {
+test('items that share an anchored path with a top hit enter as the graph list of the fusion, only when embeddings are used', () => {
   const s = setup();
   setEmbeddings(s, FAKE);
   commit(s.acmeApi, { 'src/billing.ts': 'export const bill = 1;\nexport const pay = 2;\n' });
@@ -100,7 +101,8 @@ test('items that share an anchored path with a top hit get a graph bonus, only w
   const withVectors = rowsOf(search(s, QUESTION).text);
   const sibling = withVectors.find((l) => l.includes('invoice export'));
   assert.ok(sibling, withVectors.join('\n'));
-  assert.match(sibling, /graph 1/);
+  // In the graph list only, first: 1 / 61, and its graph point listed.
+  assert.match(sibling, /why: repository 2, graph 1, confidence \w+ [\d.]+, rrf 0\.0164/);
   setEmbeddings(s, undefined);
   assert.ok(!rowsOf(search(s, QUESTION).text).some((l) => l.includes('invoice export')));
 });
@@ -184,7 +186,7 @@ const searchCall = (query) => JSON.stringify({ jsonrpc: '2.0', id: 1, method: 't
 const textOf = (stdout) => JSON.parse(stdout.split('\n').find((l) => l.includes('"id":1'))).result.content[0].text;
 
 test('the voyage provider posts to the embeddings endpoint with the key and voyage-4, and ranks by what it returns', async () => {
-  const s = seeded(null);
+  const s = seeded(VOYAGE);
   const stub = await voyageStub((res, body) => {
     const data = body.input.map((text, index) => ({ index, embedding: [text.includes('Subscription') || text.includes('subscribe') ? 1 : 0, 0.05, 0.05] }));
     res.setHeader('content-type', 'application/json');
@@ -196,7 +198,8 @@ test('the voyage provider posts to the embeddings endpoint with the key and voya
     assert.equal(filled.status, 0, filled.stderr);
     const r = await runAsync(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, env, input: searchCall(QUESTION) });
     const text = textOf(r.stdout);
-    assert.ok(rowsOf(text)[0].includes(TARGET), text);
+    // Fused by RRF: first in the semantic leg, it ties the keyword ranking's first.
+    assert.ok(rowsOf(text).slice(0, 2).some((l) => l.includes(TARGET)), text);
     assert.doesNotMatch(text, NOTE);
     assert.ok(!(r.stdout + r.stderr + filled.stdout + filled.stderr).includes('test-key-123'), 'the key is never printed');
     assert.deepEqual(new Set(stub.requests.map((q) => q.url)), new Set(['/v1/embeddings']));
@@ -209,7 +212,7 @@ test('the voyage provider posts to the embeddings endpoint with the key and voya
 });
 
 test('a provider that does not answer cannot hold recall up: it falls back and says so', async () => {
-  const s = seeded(null);
+  const s = seeded(VOYAGE);
   const stub = await voyageStub(() => {}); // never answers
   try {
     // Vectors have to exist for a query to be embedded at all: store one directly.
@@ -221,7 +224,7 @@ test('a provider that does not answer cannot hold recall up: it falls back and s
     const text = textOf(r.stdout);
     // Not how long it took (that depends on the machine's load): the query asked the provider once and went on without it.
     assert.deepEqual(stub.requests.map((q) => q.url), ['/v1/embeddings']);
-    assert.match(text, /Embeddings not used \(Voyage is unreachable or too slow\)/);
+    assert.match(text, /Semantic leg skipped \(Voyage is unreachable or too slow\)/);
     assert.ok(rowsOf(text).length >= 3, 'lexical results are still returned');
   } finally {
     await stub.close();
@@ -230,7 +233,7 @@ test('a provider that does not answer cannot hold recall up: it falls back and s
 
 /** Backfills the seeded items' voyage vectors through the stub, then clears the request log. */
 async function voyageSeeded() {
-  const s = seeded(null);
+  const s = seeded(VOYAGE);
   const stub = await voyageStub((res, body) => {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ data: body.input.map((_, index) => ({ index, embedding: [1, 0.05, 0.05] })) }));
@@ -248,7 +251,7 @@ test('a query that carries a key or an email never reaches the embedding provide
   try {
     for (const secret of [assemble('ghp_', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'), 'bob.smith@example.com']) {
       const text = await searched(s, env, `customers pay ${secret}`);
-      assert.match(text, /Embeddings not used \(the query .*(secret|email)/);
+      assert.match(text, /Semantic leg skipped \(the query .*(secret|email)/);
       assert.ok(rowsOf(text).length >= 3, 'lexical results are still returned');
     }
     assert.deepEqual(stub.requests, [], 'nothing was sent');
@@ -261,27 +264,27 @@ test('a query that carries a key or an email never reaches the embedding provide
 });
 
 test('with no vectors to compare against, a search sends no request at all', async () => {
-  const s = seeded(null);
+  const s = seeded(VOYAGE);
   const stub = await voyageStub((res) => res.end('{}'));
   try {
     const text = await searched(s, { VOYAGE_API_KEY: 'k', VOYAGE_BASE_URL: stub.url }, QUESTION);
-    assert.match(text, /Embeddings not used \(no vectors from voyage-4/);
+    assert.match(text, /Semantic leg skipped \(no vectors from voyage-4/);
     assert.deepEqual(stub.requests, []);
   } finally {
     await stub.close();
   }
 });
 
-test('a consent that covers capture only keeps embeddings off until memory init is confirmed again; version 11 covers all', () => {
+test('a consent that covers capture only keeps embeddings off until memory init is confirmed again; version 13 covers all', () => {
   const s = seeded();
   const path = join(s.data, 'config.json');
   const version = (n) => writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), consent: { ...JSON.parse(readFileSync(path, 'utf8')).consent, version: n } }));
   const embedded = () => vectors('tenants/acme.sqlite', s.data).length;
   assert.equal(embedded(), 4);
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 11);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 13);
 
   version(3);
-  assert.match(search(s, QUESTION).text, /Embeddings not used \(your consent does not cover them yet/);
+  assert.match(search(s, QUESTION).text, /Semantic leg skipped \(your consent does not cover embeddings yet/);
   assert.equal(remember(s.acmeApi, s.data, s.configA, 'Refunds go through billing', '--scope', 'repository').status, 0);
   assert.equal(embedded(), 4, 'a new item is not embedded');
   const backfill = run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA });
@@ -289,7 +292,7 @@ test('a consent that covers capture only keeps embeddings off until memory init 
   assert.match(backfill.stderr, /consent does not cover embeddings/);
 
   assert.equal(run(['init', '--confirm'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 11);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).consent.version, 13);
   assert.doesNotMatch(search(s, QUESTION).text, NOTE);
   assert.equal(run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA }).status, 0);
   assert.equal(embedded(), 5);
@@ -304,8 +307,10 @@ test('the test guard fails a test that would reach the network', () => {
   writeFileSync(log, '');
   spawnSync(process.execPath, [`--import=${guard}`, script], { env: { ...process.env, NO_NET_LOG: log } });
   assert.match(readFileSync(log, 'utf8'), /api\.voyageai\.com/);
-  // and a bundle run that reaches out makes run() throw: a configured voyage with a key set tries the network.
-  const s = seeded(null);
+  // and a bundle run that reaches out makes run() throw: a configured voyage with a key set tries the network for the
+  // person file, the one store whose text may leave this machine.
+  const s = seeded(VOYAGE);
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Prefer small pull requests', '--scope', 'person').status, 0);
   assert.throws(
     () => run(['embed', '--backfill'], { cwd: s.acmeApi, data: s.data, config: s.configA, env: { VOYAGE_API_KEY: 'k' } }),
     /a test reached the network/,

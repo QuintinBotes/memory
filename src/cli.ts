@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { suppressSqliteExperimentalWarning } from './warnings.ts';
 import { pluginVersion } from './version.ts';
@@ -14,6 +15,7 @@ import {
   scfEndpoint,
   consented,
   recallOn,
+  onThisMachine,
   currentConfigDir,
   emptyConfig,
   loadConfig,
@@ -25,7 +27,7 @@ import {
   type Config,
 } from './config.ts';
 import { filterRepository, git, resolveContext, type Context, type Reach } from './context.ts';
-import { refusal } from './gate.ts';
+import { Refusal, refusal } from './gate.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from './items.ts';
 import { chooseSlice, estimate, renderAll, row } from './slice.ts';
@@ -35,8 +37,9 @@ import { adoptCandidate, atHead, logAnchors, managedBy, providerConfig, refreshA
 import { networkFilesystem } from './store/filesystem.ts';
 import { withFileLock, withRefreshLock } from './store/refresh-lock.ts';
 import { serve } from './mcp/server.ts';
-import { EmbedError, WRITE_TIMEOUT_MS, providerFor } from './embed/provider.ts';
-import { embedPending } from './embed/vectors.ts';
+import { UI_HOST, serveUi } from './ui/server.ts';
+import { EmbedError, WRITE_TIMEOUT_MS, notOnThisMachine, providerFor } from './embed/provider.ts';
+import { embedAfterWrite, embedPending } from './embed/vectors.ts';
 import { visibleItems } from './recall/visible.ts';
 import { DEFAULT_STANDARDS, applyPromotion, insidePath, promotions, propose as proposePromotions, rejectPromotion, renderPromotion } from './promote/promote.ts';
 import { applyEdit, edits, loadInstructions, rejectEdit, renderEdit, type Withheld } from './instructions.ts';
@@ -53,8 +56,10 @@ import { withFileLockAsync } from './store/refresh-lock.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
-import { declineSupersession, decide, isPendingSupersession, proposals, reanchorCandidates, renderProposals, type Proposal } from './review/review.ts';
-import { expireTranscripts, processTranscripts, recordTranscript, transcriptsOn } from './capture/transcripts.ts';
+import { OUTCOMES, recordOutcome, routeToolsets, type Outcome } from './recall/toolsets.ts';
+import { decideById, proposalStores, proposals, renderProposals, type Proposal } from './review/review.ts';
+import { MODEL_DEFAULTS, expireTranscripts, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
+import { modelTimeoutMs, runProvider } from './provider/run.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
 import { captureCi } from './capture/ci.ts';
 import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './capture/failures.ts';
@@ -70,6 +75,8 @@ import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
 import { poison } from './eval/poison.ts';
 import { LAB, lab, labTasks, parseRows, verdict } from './eval/lab.ts';
+import { buildReplaySet, parseHistory } from './eval/head-to-head/replay-set.ts';
+import { headToHead, headToHeadDir, parseArms } from './eval/head-to-head/scorecard.ts';
 
 suppressSqliteExperimentalWarning();
 
@@ -130,9 +137,14 @@ const USAGE = `usage: memory <command>
   sweep
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
+  corrections
+      the model pass over recorded transcripts (transcriptModel in config.json; a local Ollama with inkling-2-mini by
+      default, which you install): quotes of your corrections the rules missed, kept only when verbatim, as proposals.
+      A tenant's messages go only to a model on this machine. Never run by a hook; stops at the first failure
   embed --backfill
-      embed every active item here that has no vector from the configured provider (voyage-4 unless config.json says
-      otherwise; needs VOYAGE_API_KEY). Remember and approve embed the item they make active
+      embed every active item here that has no vector from the provider embeddings in config.json names (none by
+      default; a local Ollama, or voyage-4 with VOYAGE_API_KEY). A tenant's items go only to a provider on this machine.
+      Remember and approve embed the item they make active
   recheck [<id>]
       check anchored items against HEAD, searching the whole file: a gone citation makes an item stale,
       one that holds again restores it
@@ -149,6 +161,12 @@ const USAGE = `usage: memory <command>
   related <path-or-symbol> [--depth <n>]
       the active items anchored at or under that path (or symbol key, path#name#kind) in this repository, as the session
       slice prints them, within its budget: whole rows only. --depth limits the path segments matched below it
+  route -- <task>
+      the toolsets (items of type toolset, global) ranked against the task by the search's own points, equal points going
+      to more accepted outcomes; each row carries its accepted and rejected counts and total cost. Read only
+  outcome <id> accepted|rejected [--cost <n>] [--source <run>]
+      record one run's outcome with a toolset as evidence on it: its accepted or rejected count rises by one and the cost
+      is added; an accepted one reinforces it
   close <id>
       close an open question, an owner action: it leaves recall at once and stays on record as closed. Only an approved
       (active) open_question can be closed; an agent proposes one with memory_propose and it waits for memory approve
@@ -160,6 +178,11 @@ const USAGE = `usage: memory <command>
       nothing unless the repository's .orbit/config.yaml has knowledge.lessons_in_prompts true. Exits 2 without a context
   mcp
       the MCP server over stdio: memory_search, memory_get, memory_related, memory_propose, memory_feedback
+  ui [--port <n>] [--yes-non-interactive]
+      a local page to browse, search (ranked as memory_search), edit (as a supersession) and review what review lists,
+      on 127.0.0.1 only; any other --host is refused. Prints the address with this run's token; stop it with Ctrl-C.
+      It can apply instruction-file edits, so it starts only from a terminal, as conflicts apply does, unless
+      --yes-non-interactive is given (put an ask rule on it)
   session-start
       the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
   subagent-start
@@ -205,19 +228,16 @@ const USAGE = `usage: memory <command>
       throwaway store, one JSON line per family with attacks attempted, reached active, rendered outside the fence and
       raised support, then the owner's 50 benign items accepted and recalled, then a summary. Exit 1 when any attack got
       through. Not part of the no-measure run
+  eval head-to-head --since <date> --history <file> [--arms <file>] [--checked <file>]
+      the head-to-head replay (#25): questions built from the history's corrections, decisions and failures after
+      --since, in seven categories, answered by this plugin, memory off, Claude Code auto memory, the whole history in
+      context and each alternative --arms names (Mem0, Graphiti, Basic Memory, a community plugin; README, Head to head),
+      all from the evidence before --since. Prints the bars, then per arm and category recall at 1 and 5, abstention,
+      stale recall, tokens and latency, then the verdict and the vocabulary-miss share. The replay set, every
+      per-question result and 30 grades to check by hand (pass them back as --checked) stay in the data directory
   eval verdict --scorecard <file> --lab <file>
       whether auto memory may be switched off: only when both files of rows show memory no worse
   --version`;
-
-/** Exit 1: refused, nothing was written. Exit 2: the command cannot run as given. */
-class Refusal extends Error {
-  constructor(
-    message: string,
-    readonly code: 1 | 2 = 1,
-  ) {
-    super(message);
-  }
-}
 
 const NOT_SET_UP = 'memory is not set up, or its configuration changed since you agreed to it; run memory init and confirm the plan';
 
@@ -300,20 +320,6 @@ function init(args: string[], data: string): void {
   console.error('Consent recorded. Memory is on for the tenants this config is bound to.');
 }
 
-/**
- * After a write: embeds what is now active here and has no vector. A failure never undoes the write; it is said, and
- * `memory embed --backfill` fills the gap. No key is the normal state of a machine that does not use embeddings, so it is not said.
- */
-async function embedAfterWrite(db: DatabaseSync, config: Config): Promise<void> {
-  if (!covers(config, 'embeddings')) return;
-  try {
-    await embedPending(db, providerFor(config, WRITE_TIMEOUT_MS));
-  } catch (error) {
-    if (!(error instanceof EmbedError)) throw error;
-    if (!error.noKey) console.error(`memory: not embedded (${error.message}); memory embed --backfill fills it later`);
-  }
-}
-
 /** `memory embed --backfill`: the stores this repository's tenant and the person file hold. */
 async function embedCommand(args: string[], data: string, cwd: string): Promise<void> {
   const { values } = parseArgs({ args, options: { backfill: { type: 'boolean' } } });
@@ -321,8 +327,13 @@ async function embedCommand(args: string[], data: string, cwd: string): Promise<
   const config = setUp(data);
   if (!covers(config, 'embeddings')) throw new Refusal('your consent does not cover embeddings yet; run memory init and confirm');
   const provider = providerFor(config, WRITE_TIMEOUT_MS);
+  if (provider === null) throw new Refusal('no embedder is configured: embeddings in config.json names one (README, Semantic search)');
   let total = 0;
-  for (const { file } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+  for (const { file, tenant } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+    if (tenant !== '' && !provider.local) {
+      console.error(`not embedded: ${notOnThisMachine(provider, tenant)}`);
+      continue;
+    }
     const db = openStore(file, false);
     if (db === null) continue;
     try {
@@ -487,6 +498,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
   const scope = values.scope as Scope;
   if (!SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(', ')}`, 2);
   if (!(TYPES as readonly string[]).includes(values.type)) throw new Refusal(`--type is one of ${TYPES.join(', ')}`, 2);
+  if (values.type === 'toolset' && scope !== 'global') throw new Refusal('a toolset is global and names no repository: give --scope global', 2);
   if (positionals.length !== 1) throw new Refusal('give exactly one statement, after --', 2);
   const statement = positionals[0]!.trim();
 
@@ -527,7 +539,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       rationale: values.rationale?.trim() ?? null,
       anchors,
       source: values.source?.trim() || 'remember',
-      originRepository: context.repository,
+      originRepository: values.type === 'toolset' ? null : context.repository,
     };
     const where = `${scope}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''}`;
     if (values.supersedes !== undefined) {
@@ -535,7 +547,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, 'item_remembered', { type: 'item', id: done.id }, { scope });
       console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
-      await embedAfterWrite(db, config);
+      await embedAfterWrite(db, config, tenant);
       return;
     }
     const stored = addItem(db, { ...candidate, status: 'active' });
@@ -549,7 +561,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
     } else {
       throw new Refusal('this statement was already placed as superseded');
     }
-    await embedAfterWrite(db, config);
+    await embedAfterWrite(db, config, tenant);
   } finally {
     db.close();
   }
@@ -692,11 +704,6 @@ async function importCommand(args: string[], data: string): Promise<void> {
   if (dryRun) console.error('Nothing was written. Run memory import without --dry-run to store these as proposals.');
 }
 
-/** The stores whose proposals may be reviewed here: this repository's tenant, then the person file. */
-function proposalStores(data: string, context: Context): { file: string; tenant: string }[] {
-  return [...(context.tenant === null ? [] : [{ file: tenantFile(data, context.tenant), tenant: context.tenant }]), { file: personFile(data), tenant: '' }];
-}
-
 /** The edits to instruction files that wait for the owner, in the stores this repository may see. */
 function openEdits(data: string, context: Context): ReturnType<typeof edits> {
   const out: ReturnType<typeof edits> = [];
@@ -784,9 +791,7 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
       }
       process.stdout.write(renderEdit(ins, e));
       if (values.confirm !== true) return void console.error('Nothing was written. Run the same command with --confirm to write this edit.');
-      if (!process.stdin.isTTY && values['yes-non-interactive'] !== true) {
-        throw new Refusal('nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command', 2);
-      }
+      ownerTerminal(values['yes-non-interactive'], 'nothing was written: apply is');
       try {
         return void console.log(applyEdit(db, ins, e));
       } catch (error) {
@@ -801,6 +806,13 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
     return;
   }
   throw new Refusal(`no edit ${id} here; memory conflicts lists them`);
+}
+
+/** What lets a command write an instruction file: the owner's terminal (stdin a TTY), or --yes-non-interactive under an ask rule. */
+function ownerTerminal(yes: boolean | undefined, refused: string): void {
+  if (!process.stdin.isTTY && yes !== true) {
+    throw new Refusal(`${refused} run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command`, 2);
+  }
 }
 
 /**
@@ -843,9 +855,7 @@ function promoteCommand(args: string[], data: string, cwd: string): void {
         return void console.log(`rejected ${p.id}; it is kept so it is not proposed again, and no file was written`);
       }
       process.stdout.write(fence(PROPOSALS_LABEL, renderPromotion(p)));
-      if (!process.stdin.isTTY && values['yes-non-interactive'] !== true) {
-        throw new Refusal('nothing was written: apply is run by the owner in a terminal. From a script or an agent shell, pass --yes-non-interactive, and have an ask rule on this command', 2);
-      }
+      ownerTerminal(values['yes-non-interactive'], 'nothing was written: apply is');
       console.log(applyPromotion(db, p, top, context.tenant, context.repository));
     } catch (error) {
       throw error instanceof Refusal ? error : new Refusal((error as Error).message);
@@ -863,6 +873,19 @@ const realpathOrSelf = (path: string): string => {
   }
 };
 
+/** `memory ui [--port <n>]`: the local page. The host is checked before anything is opened, so a refused one binds no socket. */
+function uiCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { host: { type: 'string' }, port: { type: 'string' }, 'yes-non-interactive': { type: 'boolean' } } });
+  if (positionals.length > 0) throw new Refusal('usage: memory ui [--port <n>] [--yes-non-interactive]', 2);
+  if (values.host !== undefined && values.host !== UI_HOST) throw new Refusal(`memory ui binds ${UI_HOST} only; --host ${values.host} is refused`, 2);
+  const port = values.port === undefined ? 0 : Number(values.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535 || (values.port !== undefined && !/^\d+$/.test(values.port))) throw new Refusal('--port is a whole number from 0 to 65535', 2);
+  // The page can apply edits to instruction files, so it starts only where conflicts apply would write.
+  ownerTerminal(values['yes-non-interactive'], 'nothing was served: memory ui applies edits to instruction files, so it is');
+  setUp(data);
+  serveUi(data, cwd, port);
+}
+
 /** `memory approve <id> [--scope]` and `memory reject <id> [--reason]`: the owner's decision on one proposal. */
 async function decideCommand(args: string[], data: string, cwd: string, decision: 'approve' | 'reject'): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -874,49 +897,10 @@ async function decideCommand(args: string[], data: string, cwd: string, decision
   const id = positionals[0]!;
   const scope = values.scope as Scope | undefined;
   if (scope !== undefined && !SCOPES.includes(scope)) throw new Refusal(`--scope is one of ${SCOPES.join(', ')}`, 2);
-  const reason = typeof values.reason === 'string' ? values.reason.trim() : '';
   const config = setUp(data);
-  const context = resolveContext(cwd, config, currentConfigDir());
-
-  for (const { file, tenant } of proposalStores(data, context)) {
-    const db = openStore(file, false);
-    if (db === null) continue;
-    try {
-      const [p] = proposals(db, tenant, id);
-      if (p === undefined) continue;
-      if (decision === 'approve' && reanchorCandidates(p).length > 0) {
-        throw new Refusal(`${id} is stale because its symbol is gone; choose a new anchor with memory anchors adopt ${id} <key> (candidates: ${reanchorCandidates(p).join(', ')}), or memory reject ${id}`);
-      }
-      if (decision === 'reject') {
-        // A reason kept in the person file follows the owner into every organisation, as the statement does.
-        const why = reason === '' ? null : refusal(reason, tenant === '' ? organisationTerms(config, context.repository) : undefined);
-        if (why !== null) throw new Refusal(`not rejected: the reason is refused because ${why}`);
-        if (isPendingSupersession(p)) {
-          declineSupersession(db, p);
-          console.log(`declined: ${id} stays active and ${p.older!.id} stays active`);
-          return;
-        }
-        decide(db, p, 'reject', { reason: reason === '' ? null : reason });
-        console.log(`rejected ${id}; the same statement will not be proposed again`);
-        return;
-      }
-      // A proposal keeps to its file: moving between the person file and a tenant is a new item.
-      const allowed = tenant === '' ? ['person', 'global'] : p.scope === 'repository' ? ['repository', 'organisation'] : [p.scope];
-      const to = scope ?? p.scope;
-      if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(' or ')} only`);
-      if (to === 'organisation' && p.anchors_json !== '[]') throw new Refusal('only a repository item can have an anchor');
-      const scopeKey = to === 'organisation' && p.scope === 'repository' ? p.scope_key.split('/')[0]! : p.scope_key;
-      const superseded = decide(db, p, 'approve', { scope: to, scopeKey });
-      const flag = p.quarantine === null ? '' : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
-      const replaced = superseded === null ? '' : `; it supersedes ${p.older!.id}, which stays on record; undo with memory undo ${superseded}`;
-      console.log(`approved ${id} (${to}${scopeKey ? ` ${scopeKey}` : ''}${tenant ? `, tenant ${tenant}` : ''})${flag}${replaced}`);
-      await embedAfterWrite(db, config);
-      return;
-    } finally {
-      db.close();
-    }
-  }
-  throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+  const done = await decideById(data, config, resolveContext(cwd, config, currentConfigDir()), id, decision, { scope, reason: typeof values.reason === 'string' ? values.reason : undefined });
+  if (done === null) throw new Refusal(`no proposal ${id} here; memory review lists the proposals this repository and config may see`);
+  console.log(done);
 }
 
 /** `memory related <path-or-symbol> [--depth <n>]`: what is anchored at or under it. */
@@ -931,6 +915,41 @@ function relatedCommand(args: string[], data: string, cwd: string): void {
   const out = related(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, target, values.depth === undefined ? undefined : Number(values.depth));
   if (out === '') console.error(`No memory item is anchored at or under ${target}.`);
   else process.stdout.write(out);
+}
+
+/** `memory route -- <task>`: the toolsets ranked against a task, with their outcomes. */
+function routeCommand(args: string[], data: string): void {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length === 0) throw new Refusal('give the task, after --', 2);
+  const config = setUp(data);
+  if (config.recallOff !== undefined) return void console.error(`Recall is off: ${config.recallOff.reason}. Run memory init --recall on to turn it on.`);
+  const db = openStore(personFile(data), false);
+  const out = db === null ? '' : routeToolsets(db, positionals.join(' '));
+  db?.close();
+  if (out === '') console.error('No toolset matches.');
+  else process.stdout.write(out);
+}
+
+/** `memory outcome <id> accepted|rejected [--cost <n>] [--source <run>]`: one run's outcome with a toolset. */
+function outcomeCommand(args: string[], data: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { cost: { type: 'string', default: '0' }, source: { type: 'string' } } });
+  const [id, outcome] = positionals as [string, Outcome];
+  if (positionals.length !== 2 || !OUTCOMES.includes(outcome)) throw new Refusal(`usage: memory outcome <id> ${OUTCOMES.join('|')} [--cost <n>] [--source <run>]`, 2);
+  const cost = Number(values.cost);
+  if (!Number.isFinite(cost) || cost < 0 || values.cost.trim() === '') throw new Refusal('--cost takes a number, 0 or more', 2);
+  const source = values.source?.trim() || undefined;
+  const why = source === undefined ? null : refusal(source, undefined, true);
+  if (why !== null) throw new Refusal(`not recorded: the source is refused because ${why}`);
+  setUp(data);
+  const db = openStore(personFile(data), false);
+  let done: ReturnType<typeof recordOutcome> = 'missing';
+  try {
+    if (db !== null) done = recordOutcome(db, id, outcome, cost, source);
+  } finally {
+    db?.close();
+  }
+  if (done === 'missing') throw new Refusal(`no active toolset ${id}; remember one with --scope global --type toolset`);
+  console.log(done === 'already' ? `already recorded: ${source} has an outcome on ${id}; nothing changed` : `recorded ${outcome} for ${id}${cost > 0 ? `, cost ${cost}` : ''}`);
 }
 
 /** `memory close <id>`: the owner closes an approved open question. */
@@ -988,7 +1007,7 @@ function recheckCommand(args: string[], data: string, cwd: string): void {
 }
 
 /** `memory recall --diff <range>`: what an owner decided about findings under the paths a change touches. */
-function recallCommand(args: string[], data: string, cwd: string): void {
+async function recallCommand(args: string[], data: string, cwd: string): Promise<void> {
   const { values } = parseArgs({
     args,
     options: { diff: { type: 'string' }, orbit: { type: 'boolean' }, path: { type: 'string', multiple: true }, fingerprint: { type: 'string', multiple: true }, check: { type: 'string', multiple: true }, 'max-tokens': { type: 'string' } },
@@ -1003,7 +1022,7 @@ function recallCommand(args: string[], data: string, cwd: string): void {
     return void process.stdout.write(orbitRecall(data, resolveContext(cwd, config, currentConfigDir()), cwd, { paths, fingerprints, checks, maxTokens }));
   }
   if (values.diff === undefined) throw new Refusal('recall needs --diff <base>..<head>', 2);
-  const found = diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
+  const found = await diffRecall(data, config, resolveContext(cwd, config, currentConfigDir()), cwd, values.diff);
   if ('reason' in found) throw new Refusal(found.reason, 2);
   process.stdout.write(found.text);
 }
@@ -1020,12 +1039,56 @@ function sweepCommand(data: string, cwd: string, due: boolean): void {
       proposed += (due ? sweepIfDue(db) : sweep(db)) ?? 0;
       expireEpisodes(db);
       expireTranscripts(db);
-      if (tenant !== '' && transcriptsOn(config)) processTranscripts(db, tenant, config);
+      if (transcriptsOn(config) && (tenant !== '' || covers(config, 'personTranscripts'))) processTranscripts(db, tenant, config);
     } finally {
       db.close();
     }
   }
   if (!due) console.log(`proposed ${proposed} merge${proposed === 1 ? '' : 's'}; they wait in memory review`);
+}
+
+/**
+ * `memory corrections`: the model pass over the transcripts recorded for this repository's tenant and the person file
+ * (#80), after the rule pass. Never run by a hook. A tenant's messages go only to a model on this machine; after one
+ * failure no store is asked again this run.
+ */
+function correctionsCommand(data: string, cwd: string): void {
+  const config = setUp(data);
+  const settings = config.transcriptModel;
+  if (settings === undefined || !transcriptsOn(config) || !covers(config, 'transcriptModel')) {
+    throw new Refusal('the model pass is off: it needs the transcripts opt-in (memory init --transcripts on) and transcriptModel in config.json, with the plan that lists it agreed to');
+  }
+  const { url, model } = { ...MODEL_DEFAULTS, ...settings };
+  const command = settings.command ?? [process.execPath, fileURLToPath(import.meta.url), 'model-client'];
+  const ask: Ask = (turns) => {
+    const r = runProvider(command, cwd, { op: 'corrections', url, model, turns }, modelTimeoutMs());
+    return r.ok ? parseCorrections(r.stdout) : { failed: r.reason };
+  };
+  let failed: string | undefined;
+  for (const { file, tenant } of proposalStores(data, resolveContext(cwd, config, currentConfigDir()))) {
+    if (tenant === '' && !covers(config, 'personTranscripts')) continue;
+    if (tenant !== '' && !onThisMachine(new URL(url))) {
+      console.error(`memory: the model pass did not run for tenant ${tenant}: its model at ${url} is not on this machine`);
+      continue;
+    }
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      expireTranscripts(db);
+      processTranscripts(db, tenant, config);
+      const done = modelTranscripts(db, tenant, config, ask);
+      console.log(`${tenant === '' ? 'person file' : `tenant ${tenant}`}: the model read ${done.read} transcript${done.read === 1 ? '' : 's'} and proposed ${done.proposed} correction${done.proposed === 1 ? '' : 's'}`);
+      failed = done.failed;
+    } finally {
+      db.close();
+    }
+    if (failed !== undefined) throw new Refusal(`memory: the model failed (${failed}); nothing more was asked this run`);
+  }
+}
+
+/** The model pass's own Ollama client, run by the provider runner (`correctionsCommand`), never by a person. */
+async function modelClient(): Promise<void> {
+  process.stdout.write(await ollamaClient(readFileSync(0, 'utf8')));
 }
 
 /** The JSON a hook is given on stdin, or nothing when there is none or it is not an object. */
@@ -1375,7 +1438,7 @@ function input<T>(file: string, parse: (text: string) => T): T {
 }
 
 /** `memory eval`: one named measure needs its inputs; with none named, a measure without them reports not run. */
-function evalCommand(args: string[]): void {
+async function evalCommand(args: string[], data: string): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -1383,9 +1446,20 @@ function evalCommand(args: string[]): void {
       since: { type: 'string' }, pulls: { type: 'string' }, log: { type: 'string' },
       agent: { type: 'string' }, model: { type: 'string' }, task: { type: 'string' },
       scorecard: { type: 'string' }, lab: { type: 'string' },
+      history: { type: 'string' }, arms: { type: 'string' }, checked: { type: 'string' },
     },
   });
   const only = positionals[0];
+  if (only === 'head-to-head' && positionals.length === 1) {
+    const { since, history, arms, checked } = values;
+    if (since === undefined || Number.isNaN(Date.parse(since))) throw new Refusal('head-to-head needs --since <date>, such as 2026-06-01', 2);
+    if (history === undefined) throw new Refusal('head-to-head needs --history <file>', 2);
+    const set = buildReplaySet(input(history, parseHistory), since);
+    const external = arms === undefined ? {} : input(arms, parseArms);
+    const marks = checked === undefined ? [] : input(checked, (t) => t.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as never));
+    const { rows } = await headToHead(pluginVersion(), set, external, marks, headToHeadDir(data, set.tenant));
+    return void process.stdout.write(rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+  }
   if (only === 'verdict' && positionals.length === 1) {
     if (values.scorecard === undefined || values.lab === undefined) throw new Refusal('verdict needs --scorecard <file> and --lab <file>', 2);
     return void console.log(verdict(input(values.scorecard, parseRows), input(values.lab, parseRows), currentConfigDir()));
@@ -1462,16 +1536,26 @@ async function main(argv: string[]): Promise<void> {
       return promoteCommand(rest, data, process.cwd());
     case 'sweep':
       return sweepCommand(data, process.cwd(), false);
+    case 'corrections':
+      return correctionsCommand(data, process.cwd());
+    case 'model-client':
+      return modelClient();
     case 'recheck':
       return recheckCommand(rest, data, process.cwd());
     case 'anchors':
       return anchorsCommand(rest, data, process.cwd());
     case 'related':
       return relatedCommand(rest, data, process.cwd());
+    case 'route':
+      return routeCommand(rest, data);
+    case 'outcome':
+      return outcomeCommand(rest, data);
     case 'close':
       return closeCommand(rest, data, process.cwd());
     case 'recall':
       return recallCommand(rest, data, process.cwd());
+    case 'ui':
+      return uiCommand(rest, data, process.cwd());
     case 'mcp':
       return serve(data, process.cwd(), pluginVersion());
     case 'session-start':
@@ -1497,7 +1581,7 @@ async function main(argv: string[]): Promise<void> {
     case 'purge':
       return purge(rest, data, process.cwd());
     case 'eval':
-      return evalCommand(rest);
+      return evalCommand(rest, data);
     case undefined:
     case '--help':
     case 'help':

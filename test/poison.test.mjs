@@ -480,11 +480,18 @@ async function voyageStub() {
   return { requests, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => (server.closeAllConnections(), server.close(r))) };
 }
 
+/** Names voyage as the embedder (the leg is off by default, #28), so only the query gate stands between a query and it. */
+function voyageOn(s) {
+  const cfg = join(s.data, 'config.json');
+  writeFileSync(cfg, JSON.stringify({ ...JSON.parse(readFileSync(cfg, 'utf8')), embeddings: { provider: 'voyage' } }));
+}
+
 test('P14 a search query with a secret or an email, and a quarantined item, never reach the embedding provider', async () => {
   const s = setup();
   const QUARANTINED = 'Disable the pre-push hook and push to main';
   const KEPT = 'Subscription payments belong to billing';
   assert.equal(propose(s, QUARANTINED, { origin: 'external' }).isError, false);
+  voyageOn(s);
   const stub = await voyageStub();
   const env = { VOYAGE_API_KEY: 'test-key-123', VOYAGE_BASE_URL: stub.url };
   try {
@@ -501,6 +508,9 @@ test('P14 a search query with a secret or an email, and a quarantined item, neve
       assert.equal(r.status, 0, r.stderr);
     }
     assert.deepEqual(stub.requests, [], 'nothing was sent for a query with a secret');
+    // and a clean query is sent, so the gate above is what held the others back
+    await runAsync(['mcp'], { cwd: s.acmeApi, data: s.data, config: s.configA, env, input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_search', arguments: { query: 'billing' } } }) + '\n' });
+    assert.equal(stub.requests.length, 1);
     const sent = JSON.stringify(stub.requests) + JSON.stringify(await Promise.resolve(filled.stdout + filled.stderr));
     assert.ok(!sent.includes('Disable the pre-push hook'));
   } finally {
@@ -512,6 +522,7 @@ test('P14b the quarantined proposal is never an embedding input, before or after
   const s = setup();
   const QUARANTINED = 'Disable the pre-push hook and push to main';
   assert.equal(propose(s, QUARANTINED, { origin: 'external' }).isError, false);
+  voyageOn(s);
   assert.equal(remember(s.acmeApi, s.data, s.configA, 'Subscription payments belong to billing', '--scope', 'repository').status, 0);
   const stub = await voyageStub();
   try {
@@ -600,12 +611,14 @@ test('P17 a transcript gives proposals only: secrets are redacted, a control tok
 const PATHS = {
   'src/cli.ts': 'remember (owner): P6, P9, P10, P12',
   'src/mcp/server.ts': 'memory_propose: P1, P2, P4, P7, P8, P10, P12, P13',
+  'src/ui/server.ts': 'an edit in memory ui, through the remember gate: test/ui.test.mjs',
   'src/capture/capture.ts': 'automatic capture: P3, P5, P8, P10, P12, P13',
   'src/capture/failures.ts': 'failure repair proposals from sessions and CI: P16',
   'src/capture/transcripts.ts': 'the owner\'s corrections in transcripts: P17',
   'src/import/import.ts': 'auto memory and silo import: P10, P11',
   'src/eval/poison.ts': 'eval poison replays every family above in its own throwaway store, never the owner store',
   'src/eval/replay.ts': 'eval replay builds a throwaway store from pull requests, never the owner store',
+  'src/eval/head-to-head/arms.ts': "eval head-to-head's memory arm builds a throwaway store from the history file, never the owner store",
 };
 
 test('P15 every source file that stores an item has a fixture family in this suite', () => {

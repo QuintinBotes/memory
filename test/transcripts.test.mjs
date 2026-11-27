@@ -89,7 +89,7 @@ test('FR-001 the opt-in is its own consent category: under plan version 9 nothin
   const s = setup();
   optIn(s);
   const plan = JSON.parse(run(['init'], { cwd: s.base, data: s.data, config: s.configA }).stdout);
-  assert.equal(plan.version, 11);
+  assert.equal(plan.version, 13);
   assert.equal(plan.optIns.transcripts, true);
   assert.ok(plan.dataCategories.some((t) => /transcript/.test(t) && /30 days/.test(t) && /verbatim/.test(t)));
   const file = join(s.data, 'config.json');
@@ -134,12 +134,14 @@ test('records older than 30 days are deleted unread, and purge removes records a
   assert.equal(sql(s, 'SELECT count(*) AS n FROM transcripts')[0].n, 0);
 });
 
-test('a session outside every tenant records nothing; a record is read only into the tenant it was recorded for', () => {
+test('a session outside every tenant records in the person file only (#80); a record is read only into the tenant it was recorded for', () => {
   const s = setup();
   optIn(s);
   assert.equal(end(s, fixture(s, 'correction'), 'sess-1', s.loose).status, 0);
-  assert.equal(end(s, fixture(s, 'correction'), 'sess-1', s.noRemote).status, 0);
-  assert.equal(existsSync(join(s.data, 'person.sqlite')) ? new DatabaseSync(join(s.data, 'person.sqlite')).prepare('SELECT count(*) AS n FROM transcripts').get().n : 0, 0);
+  assert.equal(end(s, fixture(s, 'correction'), 'sess-2', s.noRemote).status, 0);
+  const person = new DatabaseSync(join(s.data, 'person.sqlite'));
+  assert.deepEqual(person.prepare('SELECT repository FROM transcripts ORDER BY session').all().map((r) => r.repository), ['loose/tool', '']);
+  person.close();
   assert.equal(sql(s, 'SELECT count(*) AS n FROM transcripts')[0].n, 0);
   // Recorded for acme, then a session of another tenant starts: acme's record stays unread.
   end(s, fixture(s, 'correction'), 'sess-acme');

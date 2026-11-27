@@ -95,11 +95,18 @@ no tenant, or in a Claude Code config not bound to that tenant.
   tool call or grants a permission.
 - **Local store.** Nothing else is uploaded. Files are created with mode 0600 in a 0700
   directory.
-- **Embeddings send text out.** With the default
-  provider (Voyage AI, `voyage-4`) and `VOYAGE_API_KEY` set, memory sends to
+- **Embeddings stay on this machine for a tenant.** No embedder is configured
+  by default. A local Ollama (`"provider": "ollama"`, at a loopback address)
+  keeps the text on this machine. A tenant's text is sent only to an embedder
+  at `127.0.0.1`, `localhost` or `[::1]`; any other address, Voyage's
+  included, is refused for it and gets the person file's text only (#28). The
+  optional reranker (`rerank` in `config.json`, off by default) sends the
+  query and the found rows' statements to a generative model under the same
+  rule: loopback only for a tenant.
+  With Voyage AI (`voyage-4`) named and `VOYAGE_API_KEY` set, memory sends to
   `api.voyageai.com` over HTTPS: the statement of each active item when you
-  `remember` or `approve` it or run `memory embed --backfill`, and the words of
-  each `memory_search` query. It sends no paths, evidence, source references or
+  `remember` or `approve` it or run `memory embed --backfill`, for the person
+  file only. It sends no paths, evidence, source references or
   proposals, and never the text of an item flagged as reading like an
   instruction. The statements have passed the same refusal check as every
   stored item, which cannot recognise a credential that does not look like one.
@@ -122,3 +129,14 @@ no tenant, or in a Claude Code config not bound to that tenant.
   items with agent trust; text that reads as an instruction is quarantined.
   A model's output is data, never a command: it is refused if it carries a
   credential, an email or a handle, and it is shown as a cited fact in the fence.
+- **SCF export sends proposals out.** `memory export --to scf` sends a tenant's
+  proposed repository and organisation items to the SCF address configured for
+  that tenant (`memory init --scf <tenant>=<url>`, https only, or http to this
+  machine), with `SCF_API_KEY` as a bearer token: each item's statement, type,
+  scope, repository name, rationale, anchored paths and symbols, and each
+  evidence's source reference, role and time. An item holding text redaction
+  would change is not sent. Person-file items and other tenants' items never
+  leave. `memory import --scf` reads decisions and run outcomes back from the
+  same address. Redirects are refused, so the key reaches no other host, and
+  answers are read up to 5 MB. Nothing is sent without an address, a key and
+  your consent to the plan's scf category.

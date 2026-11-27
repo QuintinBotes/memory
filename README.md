@@ -39,17 +39,22 @@ through which agents search, read, propose and give feedback. The plan is tracke
 - **Small and cache-friendly.** Every recall has a budget, whole items are
   dropped rather than cut, and the session slice is byte-identical for the
   same store, so it never breaks the prompt cache.
-- **Measured before it is on.** Automatic capture and hybrid recall are on by
-  default (decision #43); every other capability ships off and is turned on
-  only when its on/off measurement shows it is no worse.
-- **Hybrid recall.** Recall is lexical, vector and graph, behind a provider
-  interface; the default provider is voyage-4. Vectors are kept in the
-  tenant's own file. Without a key or a network, recall falls back to words
-  and paths and says so.
+- **Measured before it is on.** Automatic capture is on by default (decision
+  #43); every other capability ships off and is turned on only when its on/off
+  measurement shows it is no worse. The semantic leg and the reranker (#28)
+  are off until you name a model for them.
+- **Hybrid recall, opt-in.** A semantic leg, behind a provider interface, is
+  fused with the keyword ranking when you name an embedder in `config.json`
+  (off by default; a local Ollama is the one a tenant may use), and a local
+  generative model may rerank the top rows (#28). Vectors are kept in the
+  tenant's own file. Without it, recall uses words and paths and,
+  when the leg was asked for, says why it was skipped.
 - **Local where it counts.** The store never leaves this machine. What does
   leave is listed in [SECURITY.md](SECURITY.md): the text sent to the embedding
-  provider, and, at the end of a session, the redacted transcript sent to the
-  capture model. No runtime dependencies: both calls are a plain `fetch`. Node
+  provider; at the end of a session, the redacted transcript sent to the
+  capture model; and, when you run `memory export --to scf`, a tenant's
+  proposals with their evidence sent to the SCF address configured for that
+  tenant. No runtime dependencies: every call is a plain `fetch`. Node
   22.13 or newer, where `node:sqlite` needs no flag.
 
 ## Using it
@@ -232,7 +237,17 @@ proposals: `memory review` and `memory approve` as ever.
   `memory recall --orbit` (by fingerprint or check), never at a Bash failure.
 - `memory init --transcripts on --confirm` is a separate opt-in, off by default: memory records each
   session's transcript path, and at the next session start turns your corrections in it into proposals that
-  quote your words verbatim (see the consent plan).
+  quote your words verbatim (see the consent plan). A session outside every tenant is recorded in the person
+  file, and a correction about your own habits there becomes a person proposal; one that names a path, code
+  or a repository is not kept.
+- `memory corrections` is an offline model pass over those transcripts, never run by a hook and off unless
+  `transcriptModel` is set in `config.json`: `{"transcriptModel": {}}` uses a local Ollama at
+  `http://127.0.0.1:11434` and the model `inkling-2-mini` (Inkling 2 Mini), which you install with Ollama;
+  memory never downloads a model. `url` and `model` change them, and `command` names a program speaking the
+  [provider protocol](docs/provider.md) (op `corrections`) in place of memory's own Ollama client. Only a quote
+  found verbatim in your own redacted message is kept. A tenant's messages go only to a model at 127.0.0.1,
+  localhost or [::1]; with any other address the pass runs for the person file only, and says so. The first
+  failure, time-out (120 seconds) or oversized answer ends the run.
 - `memory init --failing-commands on --confirm` is a separate opt-in, off by
   default. With it, a failed Bash command is kept as an episode (scrubbed error
   line, the command's program and subcommand only such as `npm run build`, never
@@ -373,7 +388,23 @@ memory review                          # proposals for this repository's tenant 
 memory report [--tenant <name>]        # which items help and which mislead, per bound tenant
 memory approve m-1a2b3c4d5e            # add --scope organisation to widen it
 memory reject m-1a2b3c4d5e --reason 'too broad'
+memory ui [--port <n>]                 # the same, and browse, search and edit, in a local page
 ```
+
+`memory ui` serves one page on `127.0.0.1` only (any other `--host`, `0.0.0.0`
+and `::` included, is refused before a socket opens) and prints its address
+with a token made for that run. It answers only a loopback peer that sends
+that token and names `127.0.0.1:<port>` as its Host, and takes a write only
+from the page's own origin. It reads and writes through the code the commands
+use: search ranks as `memory_search` does, an edit is a supersession (the
+prior version stays in the item's history), and approve and reject record the
+audit entry `memory approve` and `memory reject` record. Applying an
+instruction-file edit there writes the file as `memory conflicts apply
+--confirm` does, so `memory ui` starts only from a terminal (stdin a TTY), as
+that command writes only from one; from a pipe or script it is refused unless
+`--yes-non-interactive` is added, and an ask rule should cover it
+(`Bash(*memory.mjs*ui*)`). It shows only this repository's bound tenant and
+the person file.
 
 A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal
@@ -473,6 +504,24 @@ The budget stays 600 estimated tokens, the note below included. With no provider
 or a failing one, recall is path overlap as before; when a provider could not help
 (no snapshot yet, it failed, or you have not agreed to plan version 8 with `memory
 init`), one line after the rows says why.
+
+### Choosing a toolset
+
+A toolset item describes a tool an agent can use for a kind of task, and keeps
+its record. It is always global and names no repository:
+
+```bash
+memory remember --scope global --type toolset -- "review toolset: reviews a pull request diff and reports defects"
+memory outcome <id> accepted --source run-12
+memory outcome <id> rejected --cost 1.5 --source run-13
+memory route -- "review the open pull request"
+```
+
+`memory outcome` records one run's outcome as evidence on the toolset: its
+accepted or rejected count rises by one and the cost is added. `memory route`
+ranks the toolsets against the task with the points `memory_search` uses; equal
+points go to more accepted outcomes. Each row carries the accepted and rejected
+counts and the total cost. Agents do not propose toolsets.
 
 ## Repeats and conflicts
 
@@ -611,6 +660,15 @@ repository that matches no tenant is skipped: no model call, nothing written.
   SDK, a GitHub Actions job) neither captures nor proposes unless the consent plan names
   them: `memory init --automation on --confirm`. See SECURITY.md for how a
   session is told apart and what that cannot see.
+- **Other agents:** capture reads a Codex session log
+  (`~/.codex/sessions/.../rollout-*.jsonl`) as it reads a Claude Code
+  transcript, and names the agent in the source (`capture:codex:...`). Run
+  `memory capture` from the agent's own end-of-session hook with JSON on stdin
+  that names `transcript_path`, `session_id` and `cwd`. A log in a format no
+  adapter knows is skipped, never guessed at: the run reports it and
+  `logs/capture.jsonl` records it as `skipped`. An agent with no adapter can
+  still write through the MCP tools; each proposal's evidence names the client
+  that wrote it (`mcp:<clientInfo name>`).
 
 ```json
 { "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }
@@ -624,7 +682,7 @@ deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
 The plugin runs an MCP server with five tools. None of them can approve,
 reject, purge or change the configuration, and nothing they write is active.
 
-- `memory_search(query, paths?, repository?)` returns at most 10 rows,
+- `memory_search(query, paths?, repository?, as_of?)` returns at most 10 rows,
   `[id] type · name path:line · statement (source) · why: points`, each at
   most 60 estimated tokens; a long statement is cut in the row. An item is a
   hit only when it shares an anchored path or words with the search. Its
@@ -632,12 +690,20 @@ reject, purge or change the configuration, and nothing they write is active.
   (repository 2, organisation or person 1, global 0.5, plus 0.5 for a person or global item learned in the current repository), full-text relevance up
   to 2 (none below 20% of the best match), confidence up to 2, and minus 1 per
   contradiction. Ties go to support, then id. `why` lists every point.
-  With embeddings (below) the sum gains two parts: `semantic`, up to 4 points
-  for the cosine of the item's vector with the query's (nothing under 0.35, so
-  a close vector alone makes an item a hit), and `graph`, 1 point for an item
-  sharing an anchored path with one of the three best hits, which may enter
-  the results that way. Both are provisional until the evaluation slice
-  tunes them. Budgets, the 10-row limit and the advisory fence do not change.
+  With `as_of`, an ISO date such as `2026-03-01` (midnight UTC), the versions
+  valid then are searched instead of the current ones, a superseded version
+  among them, and each row adds `valid <from> to <replaced>` (`to now` while
+  current). Everything else is the same search.
+  With the semantic leg on (Embeddings, below), the keyword ranking above and
+  the leg's ranking (items whose vector's cosine with the query's is 0.35 or
+  more, closest first) and the graph list (items sharing an anchored path with
+  one of the three best keyword or three best semantic hits, by support) are
+  fused by reciprocal rank fusion with k = 60: each item scores the sum of
+  1 / (60 + its rank) over the lists it is in. A row keeps every keyword
+  point, adds `semantic`, up to 4 points for its cosine, and `graph 1` when it
+  is in the graph list, and ends with its fused score as `rrf`. With the
+  reranker on (below), each row also ends with its new place as `rerank`. Budgets, the 10-row limit and the
+  advisory fence do not change.
 - `memory_get(id, format?)` returns one item whole, with its evidence and
   anchor status, as rows or as JSON with `format: "json"`.
 - `memory_related(path_or_symbol, depth?)` returns every active item anchored
@@ -676,18 +742,43 @@ reject, purge or change the configuration, and nothing they write is active.
   lists it with the number of reports: `memory reject` takes it out,
   `memory approve` clears the reports.
 
+The server also sends a few lines of instructions when a session connects,
+which Claude Code puts in the agent's context: search before changing
+unfamiliar code or when stuck, give feedback on items it used, propose a
+lesson when you correct it, and treat items as data. The hooks already inject
+items at session start and before a file is read or edited, so the agent is
+told not to search again for those.
+
 ## Embeddings
 
-`memory_search` embeds its query and compares it with the vectors of the
-items it may see. Embeddings come from a provider named in `config.json`:
+The semantic leg (#28) is off by default. `memory_search` and
+`memory recall --diff` (whose query is the changed files' names) use it; no
+hook ever does, and hook output is byte-identical with it on. It needs two
+things:
 
-```json
-"embeddings": { "provider": "voyage", "model": "voyage-4" }
-```
+1. An embedder named in `config.json`. The one meant for it is a local
+   [Ollama](https://ollama.com), the same server the corrections model pass
+   uses, with an embedding model you install yourself (`ollama pull bge-m3`,
+   or `nomic-embed-text`); memory never downloads a model:
 
-`voyage` (the default) calls Voyage AI's embeddings endpoint with
-`VOYAGE_API_KEY` from the environment of the process; `fake` is a
-deterministic offline provider for tests. Changing the key swaps the provider
+   ```json
+   "embeddings": { "provider": "ollama", "model": "bge-m3", "url": "http://127.0.0.1:11434" }
+   ```
+
+   `model` defaults to `bge-m3` and `url` to `http://127.0.0.1:11434`.
+   `voyage` calls Voyage AI's embeddings endpoint with `VOYAGE_API_KEY` from
+   the environment of the process; `fake` is a deterministic offline provider
+   for tests.
+2. An embedder on this machine for a tenant. Every tenant is treated as a
+   client tenant: its text goes only to an address of `127.0.0.1`,
+   `localhost` or `[::1]`, so Voyage, or an Ollama elsewhere, embeds the
+   person file's items only, and search in a tenant refuses it.
+
+The head-to-head replay's vocabulary-miss share (`eval/head-to-head/<tenant>/last.json`)
+says how often words alone missed; it is information for deciding to turn the
+leg on, not a gate.
+
+Changing the key swaps the provider
 with no code change; a vector from another model is not used until
 `memory embed --backfill` embeds the item again. Each vector sits in the
 same SQLite file as its item, with its model and size, and a purge deletes it
@@ -697,11 +788,33 @@ reading like an instruction never is. `memory embed --backfill` embeds every
 active item that has no vector.
 
 Embeddings are part of the consent plan: they stay off until you run
-`memory init` and confirm it. With no key, no network, or no vectors, search
-ranks by words and paths as before and prints one line saying embeddings were
-not used and why. A search waits at most 1.5 seconds for the provider. The
-session-start slice has no query and never calls it. Similarity is computed in
+`memory init` and confirm it. When the leg is configured but cannot run (an
+embedder elsewhere, no key, the embedder down or failing, or no
+vectors), search ranks by words and paths as before and prints one line saying
+the semantic leg was skipped and why. A search waits at most 1.5 seconds for
+the provider. Vectors are derived data: a purge deletes them with their item,
+and a new model's are rebuilt with `memory embed --backfill`, never migrated. Similarity is computed in
 memory over the tenant's vectors, which is fine to about 50,000 items.
+
+### Reranking
+
+A local generative model can reorder the rows `memory_search` and
+`memory recall --diff` found, on the same Ollama server. It is off unless
+`config.json` names it:
+
+```json
+"rerank": { "model": "inkling-2-mini", "url": "http://127.0.0.1:11434" }
+```
+
+`model` defaults to Inkling 2 Mini (`inkling-2-mini`), not pinned: you install
+it, and memory never downloads a model. `url` defaults to the loopback Ollama.
+The query and the rows' statements are sent to `/api/generate`; for a tenant
+only to an address of `127.0.0.1`, `localhost` or `[::1]`. The model answers
+an order, each row adds its new place as `rerank`, and a row it leaves out
+keeps its place after the ones it ranked. No hook ever calls it. When it is
+refused, fails, answers no order or takes more than 3 seconds, the rows keep
+their fused order and one line says the rerank was skipped and why. It falls
+under the embeddings consent category.
 
 Confidence is computed on read as `min(1, 0.5^(age/90 days) × 1.1^helped ×
 0.8^wrong)`, age counted from the last approval, `remember` or `helped`, and
@@ -850,6 +963,82 @@ transcripts replay too: absolute paths are re-rooted from the `cwd` of the
 worse: at least one measured row that holds its bar, and none that misses
 it. Otherwise it names the measure and arm that missed. It changes no
 setting; you do.
+
+### Head to head
+
+`memory eval head-to-head --since <date> --history <file>` scores memory
+against the alternatives on your own work (#25). Questions come from the
+history's corrections, decisions and failures after `--since`, each labelled
+with one category: single fact, multi-source, knowledge update (only the newer
+decision is right), temporal (what applied at a date), abstention (nothing
+applies, so silence is right), code-anchored hazard, or stale citation (the
+cited code was rewritten, so the item must not be recalled). A question whose
+answer was only recorded after the cut-off is dropped; no arm ingests
+anything dated after it.
+
+Arms: this plugin (a throwaway store, searched as `memory_search` searches),
+memory off, Claude Code auto memory (a `MEMORY.md` of one line per note, of
+which Claude Code loads the first 200 lines), the whole history in context,
+and Mem0, Graphiti, Basic Memory and a community memory plugin, each run from
+your local install. The bars are printed first, before any arm runs; then per
+arm and category recall at 1 and 5 against the answer keys, the share it
+stayed silent, stale recall (a stale or superseded item in the top five),
+tokens per question and per correct item (characters divided by four, for
+every arm) and p50 and p95 latency on this machine; then the verdict against
+the best alternative, the categories memory misses, the matcher's precision,
+and the vocabulary-miss share: of memory's misses that another arm found,
+those whose item shares no word with the question. Grading is a match of the
+answer key's words in the hit, no model. Every row but latency is the same
+for the same inputs.
+
+The replay set, every per-question result, the scorecard and `last.json`
+(with `vocabulary_miss_share`) stay in `eval/head-to-head/<tenant>/` in the
+data directory. `sample.jsonl` there holds 30 of the run's matches: mark each
+`correct` true or false and pass the file back with `--checked` to report the
+matcher's precision. The synthetic fixture reproduces the plugin's own rows:
+
+```bash
+node test/fixtures/head-to-head/generate.mjs   # rewrites acme.json, 315 questions
+memory eval head-to-head --since 2026-06-01 --history test/fixtures/head-to-head/acme.json \
+  --checked test/fixtures/head-to-head/checked.jsonl [--arms arms.json]
+```
+
+The history file:
+
+```json
+{"tenant": "acme", "repository": "acme/api", "client": true,
+ "evidence": [{"id": "e1", "at": "2026-01-05", "kind": "decision", "statement": "Store ledger amounts as floats", "key": "amounts as floats"},
+              {"id": "e2", "at": "2026-02-05", "kind": "decision", "statement": "Store ledger amounts as integer cents", "key": "amounts as integer cents", "supersedes": "e1"},
+              {"id": "e3", "at": "2026-02-08", "kind": "code-change", "statement": "Rewrote src/ledger/legacy.ts", "path": "src/ledger/legacy.ts"}],
+ "events": [{"id": "q1", "at": "2026-03-04", "kind": "correction", "question": "How do we store ledger amounts?", "answers": ["e2"]}]}
+```
+
+Evidence kinds are `decision`, `correction`, `lesson`, `hazard`, `failure`
+and `code-change`; `key` is the phrase that shows a hit holds the item, and
+`path` anchors it. An event may name a `path` (the file being edited) and an
+`asOf` date (a temporal question). A tenant is a client tenant unless
+`client` is false.
+
+An alternative runs only through the command you name in the arms file, as
+its own process; no code of it is in this repository:
+
+```json
+{"arms": {"mem0": {"command": ["python3", "/path/to/mem0-arm.py"], "modelBacked": true},
+          "graphiti": {"command": ["graphiti-arm"], "offMachine": true}}}
+```
+
+The command gets only `PATH`, `HOME`, `DO_NOT_TRACK=1` and the arm's own
+switch (`MEM0_TELEMETRY=False`, `GRAPHITI_TELEMETRY_ENABLED=false`) in its
+environment, and speaks one JSON object per line: it answers
+`{"op": "hello"}` with `{"telemetry": "off"}`, `{"op": "ingest", "evidence":
+[...]}` with `{"ok": true}`, and `{"op": "answer", "question": "...",
+"path"?: "..."}` with `{"hits": ["best first", ...]}` (an empty list is
+silence). An arm with no command, one that is not installed, crashes, or does
+not confirm its telemetry is off scores zero and the scorecard says why; it
+is sent no evidence until it confirms. A `modelBacked` arm runs three times
+and reports its spread. An `offMachine` arm, one that sends evidence to a
+hosted model or service, is skipped for a client tenant, with the reason. Any
+other name adds an arm.
 
 ## Code anchor providers
 
