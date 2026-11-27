@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
+
 ### Added
 
 - Capture honours the owner's markers (#143): text between `<private>` and `</private>` (and any sentence touching it) is never sent to the filter model, tracked across the whole transcript as the transcripts path tracks it; a session in which the owner typed `DO NOT INDEX THIS CHAT` makes no model call and logs a `skipped` line at every Stop and SessionEnd. Both work for Codex logs. `"capture": { "skipTainted": true }` (off by default) skips a session that read the web or another MCP server instead of labelling what it keeps.
+
 ## [0.9.2] - 2026-11-27
 
 ### Fixed

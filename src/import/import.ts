@@ -13,7 +13,7 @@ import { personFile, tenantFile } from '../store/paths.ts';
 import { covers } from '../consent/plan.ts';
 import { reviewVoiceDecisions } from './review-voice.ts';
 import { orbitFindings, type OrbitFinding } from './orbit.ts';
-import { inside, markdown, notes, policy, rejections, symbolPath, type Parsed } from './silos.ts';
+import { inside, markdown, notes, ownerReviewer, policy, rejections, symbolPath, type Parsed } from './silos.ts';
 
 export interface ImportReport {
   dryRun: boolean;
@@ -236,7 +236,8 @@ export function importSilos(config: Config, data: string, configDir: string, dry
           report.skippedFiles.push({ path, reason: 'your consent does not cover reading a Review Voice store yet; run memory init and confirm' });
           continue;
         }
-        const found = reviewVoiceDecisions(path);
+        const rvConfig = join(checkout, '.review-voice', 'config.yaml');
+        const found = reviewVoiceDecisions(path, existsSync(rvConfig) ? ownerReviewer(readFileSync(rvConfig, 'utf8')) : null);
         if ('reason' in found) {
           report.skippedFiles.push({ path, reason: found.reason });
           continue;

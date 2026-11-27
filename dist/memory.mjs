@@ -4966,6 +4966,16 @@ function policy(text5) {
   });
   return parsed(statements);
 }
+function ownerReviewer(text5) {
+  let key2 = "";
+  for (const line of lines(text5)) {
+    const top = /^([A-Za-z_][\w-]*):/.exec(line);
+    if (top) key2 = top[1];
+    const m = key2 === "identity" ? /^\s+owner_reviewer:\s*(\S.*?)\s*(?:#.*)?$/.exec(line) : null;
+    if (m) return unquote(m[1]) || null;
+  }
+  return null;
+}
 function jsonLines(text5, each) {
   const unreadable = [];
   lines(text5).forEach((raw, i) => {
@@ -5027,7 +5037,7 @@ var OWNER_STATEMENTS = {
   never_flag: (text5) => `Owner declined this finding: ${text5}`,
   rewrite: (_text, replacement) => replacement === null ? null : `Owner reworded a finding to: ${replacement}`
 };
-function reviewVoiceDecisions(path) {
+function reviewVoiceDecisions(path, owner = null) {
   let db;
   try {
     db = new DatabaseSync2(path, { readOnly: true });
@@ -5081,8 +5091,10 @@ ${f.finding_id}`);
       if (statement !== void 0) add(f.review_run_id, f.finding_id, "owner", (text5) => statement(text5, f.replacement_text?.trim() || null));
     }
     for (const o of outcomes2) {
-      if (!decided.has(`${o.review_run_id}
-${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "agent" : "team", (text5) => `Declined in review by ${o.decided_by == null ? "someone unnamed" : "a team member"}: ${text5}`);
+      if (decided.has(`${o.review_run_id}
+${o.finding_id}`)) continue;
+      if (owner !== null && o.decided_by?.toLowerCase() === owner.toLowerCase()) add(o.review_run_id, o.finding_id, "owner", (text5) => `Owner declined this finding: ${text5}`);
+      else add(o.review_run_id, o.finding_id, o.decided_by == null ? "agent" : "team", (text5) => `Declined in review by ${o.decided_by == null ? "someone unnamed" : "a team member"}: ${text5}`);
     }
     return { decisions, unreadable };
   } catch (error) {
@@ -5370,7 +5382,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
           report.skippedFiles.push({ path, reason: "your consent does not cover reading a Review Voice store yet; run memory init and confirm" });
           continue;
         }
-        const found = reviewVoiceDecisions(path);
+        const rvConfig = join9(checkout, ".review-voice", "config.yaml");
+        const found = reviewVoiceDecisions(path, existsSync9(rvConfig) ? ownerReviewer(readFileSync10(rvConfig, "utf8")) : null);
         if ("reason" in found) {
           report.skippedFiles.push({ path, reason: found.reason });
           continue;
