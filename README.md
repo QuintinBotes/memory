@@ -1100,11 +1100,13 @@ the Action's review run stays in the runner's store, so locally
 `/review-voice:sync` keeps your reply only as a sample of your voice and
 `review-voice outcomes` tracks none of the Action's findings
 ([review-voice#529](https://github.com/QuintinBotes/review-voice/issues/529)).
-What reaches memory today is a review you run locally (`/review-voice:review`,
-posted with `/review-voice:draft-review`): its findings' outcomes, and what you
-record with `/review-voice:feedback`, are decisions in Review Voice's store,
-and with that store named as `decisions` under `imports` (above),
-`memory import` turns them into memory proposals.
+What reaches memory today comes from a review you run locally
+(`/review-voice:review`): a finding you keep, dismiss or reword with
+`/review-voice:feedback`, and a finding someone dismissed on the pull request
+(a strong dismissal in `review-voice outcomes`). With Review Voice's store named
+as `decisions` under `imports` (above), `memory import` turns those into
+precedent proposals. Accepting, fixing or resolving a finding on GitHub records
+nothing memory reads.
 
 ## Licence
 
