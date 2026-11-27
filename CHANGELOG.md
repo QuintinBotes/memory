@@ -10,13 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `memory list` with nothing visible says so on stderr, naming the tenant this directory resolves to, instead of printing nothing (#122). Stdout is unchanged.
+- The README no longer says answers to findings the Review Voice Action posts reach memory (#118): they stay in the runner's store until review-voice#529; findings from a review run locally do.
 - An owner decision on a long Review Voice finding is no longer dropped by `memory import` (#120): the statement is cut between words to 300 characters with an ellipsis, where before it was refused as too long; the pull request link holds the whole finding.
 - The Review Voice workflow posts again (#116): pinned to review-voice main at 98ad060, unreleased, which carries the fixes for its #508 (a clean review exited 4 without posting, the action's own job counted as pending CI), #520 (a failed post names its reason) and #525 (the post's thread re-check failed with 403 under the Actions token). Moves to a release tag once one exists.
 
 ### Added
 
 - `npm run e2e` (#112): real Claude Code sessions with the checkout loaded by `--plugin-dir` check the session-start slice (#114), point-of-action recall, `memory_search` and `memory_propose` over MCP (refused for automation until `--automation on`), and that the plugin validates and the review pane's tests pass. Not run in CI.
-- Review Voice reviews this repository's pull requests (#110): a pinned workflow posts its verified findings, and the owner's answers flow back through `/review-voice:sync` into `memory import` as proposals. Not a required check; it skips without an `ANTHROPIC_API_KEY` secret.
+- Review Voice reviews this repository's pull requests (#110): a pinned workflow posts its verified findings. Not a required check; it skips without an `ANTHROPIC_API_KEY` secret. Which answers to its findings reach memory is in the README (#118).
 
 ## [0.9.0] - 2026-11-27
 
