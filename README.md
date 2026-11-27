@@ -1085,6 +1085,7 @@ most `MEMORY_TESTS_PER_RUN` lookups (50 by default) and the next run continues; 
 ```bash
 npm install     # dev tooling only; the plugin ships with zero dependencies
 npm run verify  # typecheck, bundle drift, tests, identity guard, action pins
+npm run e2e     # real Claude Code sessions with this checkout (needs a signed-in claude)
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

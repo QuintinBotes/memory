@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `npm run e2e` (#112): real Claude Code sessions with the checkout loaded by `--plugin-dir` check point-of-action recall, `memory_search` and `memory_propose` over MCP (refused for automation until `--automation on`), and that the plugin validates and the review pane's tests pass. Not run in CI.
 - Review Voice reviews this repository's pull requests (#110): a pinned workflow posts its verified findings, and the owner's answers flow back through `/review-voice:sync` into `memory import` as proposals. Not a required check; it skips without an `ANTHROPIC_API_KEY` secret.
 
 ## [0.9.0] - 2026-11-27
