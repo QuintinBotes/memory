@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory list` with nothing visible says so on stderr, naming the tenant this directory resolves to, instead of printing nothing (#122). Stdout is unchanged.
 - The README no longer says answers to findings the Review Voice Action posts reach memory (#118): they stay in the runner's store until review-voice#529; findings from a review run locally do.
 - An owner decision on a long Review Voice finding is no longer dropped by `memory import` (#120): the statement is cut between words to 300 characters with an ellipsis, where before it was refused as too long; the pull request link holds the whole finding.
-- The Review Voice workflow posts again (#116): pinned to review-voice main at 98ad060, unreleased, which carries the fixes for its #508 (a clean review exited 4 without posting, the action's own job counted as pending CI), #520 (a failed post names its reason) and #525 (the post's thread re-check failed with 403 under the Actions token). Moves to a release tag once one exists.
+- The Review Voice workflow posts again (#116, #124): pinned to review-voice main at edd8a45, unreleased, which carries the fixes for its #508 (a clean review exited 4 without posting, the action's own job counted as pending CI), #520 (a failed post names its reason), #525 (the post's thread re-check failed with 403 under the Actions token) and #529/#531 (`outcomes --recover` follows the Action's reviews). Moves to a release tag once one exists.
 
 ### Added
 
