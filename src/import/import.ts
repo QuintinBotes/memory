@@ -13,7 +13,7 @@ import { personFile, tenantFile } from '../store/paths.ts';
 import { covers } from '../consent/plan.ts';
 import { reviewVoiceDecisions } from './review-voice.ts';
 import { orbitFindings, type OrbitFinding } from './orbit.ts';
-import { inside, markdown, notes, policy, rejections, symbolPath, type Parsed } from './silos.ts';
+import { inside, markdown, notes, ownerReviewer, policy, rejections, symbolPath, type Parsed } from './silos.ts';
 
 export interface ImportReport {
   dryRun: boolean;
@@ -75,6 +75,35 @@ function namedRepositories(config: Config, text: string): Map<string, string> {
  * as a proposal (a rejection as a tombstone). Nothing imported is active. With `orbit`, only each listed checkout's Orbit
  * knowledge store is read; without it, that store is not.
  */
+/**
+ * The checkout a Claude Code project folder name stands for, or null. Claude Code writes the path with every '/' and '.'
+ * as '-', so the name is read back against the filesystem: each directory is the first run of parts, joined by '-' or '.',
+ * that exists. A part left empty by '--' starts a dot name (`.claude`).
+ */
+export function checkoutOf(project: string, root = sep): string | null {
+  const parts = project.split('-').slice(1);
+  const walk = (dir: string, rest: string[]): string | null => {
+    if (rest.length === 0) return existsSync(join(dir, '.git')) ? dir : null;
+    for (let n = 1; n <= Math.min(rest.length, 8); n++) {
+      for (const name of joins(rest.slice(0, n))) {
+        const path = join(dir, name);
+        if (!existsSync(path) || !statSync(path).isDirectory()) continue;
+        const found = walk(path, rest.slice(n));
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  };
+  return parts.length === 0 ? null : walk(root, parts);
+}
+
+/** Every name `parts` can spell with '-' or '.' between them. A leading empty part is a dot name: ['', 'claude'] is '.claude'. */
+function joins(parts: string[]): string[] {
+  if (parts[0] === '') return parts.length < 2 ? [] : joins(parts.slice(1)).map((n) => `.${n}`);
+  if (parts.includes('')) return [];
+  return parts.slice(1).reduce((names, part) => names.flatMap((n) => [`${n}-${part}`, `${n}.${part}`]), [parts[0]!]);
+}
+
 export function importSilos(config: Config, data: string, configDir: string, dryRun: boolean, orbit = false): ImportReport {
   const report: ImportReport = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
   const candidates: Candidate[] = [];
@@ -105,6 +134,9 @@ export function importSilos(config: Config, data: string, configDir: string, dry
     for (const project of readdirSync(projects).sort()) {
       const folder = join(projects, project, 'memory');
       if (!existsSync(folder) || !statSync(folder).isDirectory()) continue;
+      const checkout = checkoutOf(project);
+      const context = checkout === null ? null : resolveContext(checkout, config, dir);
+      const home = context?.tenant != null && context.repository !== null ? { repository: context.repository, tenant: context.tenant } : null;
       for (const name of readdirSync(folder).filter((f) => f.endsWith('.md')).sort()) {
         const path = join(folder, name);
         const parsed = read(path, folder, markdown);
@@ -119,8 +151,9 @@ export function importSilos(config: Config, data: string, configDir: string, dry
           const base = { statement: text, rationale: null, anchors: [], status: 'proposed' as const, trust: 'agent' as const };
           if (named.size > 1) {
             refused(source, 'it names more than one repository');
-          } else if (named.size === 1) {
-            const [repository, tenant] = [...named][0]!;
+          } else if (named.size === 1 || home !== null) {
+            // A named repository wins; otherwise the checkout whose auto memory this is (#134).
+            const [repository, tenant] = named.size === 1 ? [...named][0]! : [home!.repository, home!.tenant];
             if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
             const own = new Set((config.tenants[tenant] ?? []).map((p) => p.split('/')[0]!.toLowerCase()));
             const others = Object.entries(config.tenants)
@@ -203,7 +236,8 @@ export function importSilos(config: Config, data: string, configDir: string, dry
           report.skippedFiles.push({ path, reason: 'your consent does not cover reading a Review Voice store yet; run memory init and confirm' });
           continue;
         }
-        const found = reviewVoiceDecisions(path);
+        const rvConfig = join(checkout, '.review-voice', 'config.yaml');
+        const found = reviewVoiceDecisions(path, existsSync(rvConfig) ? ownerReviewer(readFileSync(rvConfig, 'utf8')) : null);
         if ('reason' in found) {
           report.skippedFiles.push({ path, reason: found.reason });
           continue;

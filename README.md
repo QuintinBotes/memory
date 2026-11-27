@@ -367,18 +367,22 @@ request link as the source. The store holds every repository's findings, so
 reading it is its own consent category (`decisions`, plan version 5): import
 skips it, and says why, until you run `memory init --confirm` again. Finding
 text was written by a model, so text that reads as an instruction arrives
-quarantined with agent trust. A strong dismissal a teammate made, with no owner
-row for it, arrives with team trust, and one with no `decided_by` with agent
-trust. Review Voice keeps its own precedents; memory never writes
+quarantined with agent trust. A strong dismissal with no owner row for it
+depends on who made it. If it was the checkout's owner (`identity.owner_reviewer`
+in `.review-voice/config.yaml`, for example a reply on the pull request), it
+arrives as the owner's decision. If it was anyone else, it arrives with team
+trust. One with no `decided_by` arrives with agent trust. Review Voice keeps its own precedents; memory never writes
 back, and never imports the review comments other tools made.
 
 A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
 "...", "symbol": "path#qualified_name#kind"}`; only `gotcha`, `invariant` and
 `decision` notes are imported. A line of the rejections file arrives as a
-tombstone. An auto memory statement goes to the tenant of the repository it
-names, as `owner/repo`, when the config it came from is bound to that tenant,
-or to person scope when it is organisation-free; anything else is reported
-and not stored. Auto memory and notes carry agent trust, since a model or a
+tombstone. An auto memory statement goes to the repository it names as
+`owner/repo`. Failing that, it goes to the checkout whose project folder it
+sits in, read back from the folder's name to the checkout's origin remote.
+Either way, the config it came from must be bound to that repository's tenant.
+Failing both, it goes to person scope when it is organisation-free. Anything
+else is reported and not stored. Auto memory and notes carry agent trust, since a model or a
 tool wrote them; standards, rejections and policies carry owner trust. A
 statement with agent trust that reads as an instruction arrives quarantined
 (see below), and the report counts it.
@@ -674,11 +678,22 @@ repository that matches no tenant is skipped: no model call, nothing written.
   proposes it on, but a consent given before it stays off for it until you run
   `memory init` and confirm.
 - **Off:** `"capture": { "enabled": false }` in `config.json`.
+- **Not this part:** text you wrap in `<private>` and `</private>` is taken
+  out before redaction and never sent; a sentence that touches the span is
+  dropped whole. A span opened anywhere in the transcript (a tool result too)
+  hides everything up to its close.
+- **Not this session:** a session in which you wrote `DO NOT INDEX THIS CHAT`
+  is not captured at all: no model call, and each Stop and SessionEnd records
+  a `skipped` line in `logs/capture.jsonl` naming the marker. The marker counts
+  only in a message you typed, not in agent text or a tool result. Both
+  markers work for a Codex session log too.
 - **Tainted sessions:** when the transcript shows the session read a web page
   or search (`WebFetch`, `WebSearch`) or called a tool of any MCP server but
   memory's own, what capture keeps is still saved active, labelled `tainted
   by web:<host>` or `mcp:<server>` in recall and review. Imperative text from
-  such a session is quarantined as usual.
+  such a session is quarantined as usual. With `"skipTainted": true` under
+  `capture` (off by default) such a session is not captured at all: no model
+  call, and a `skipped` line in `logs/capture.jsonl` names what it read.
 - **Automation sessions:** a session started by automation (`claude -p`, the
   SDK, a GitHub Actions job) neither captures nor proposes unless the consent plan names
   them: `memory init --automation on --confirm`. See SECURITY.md for how a
@@ -698,7 +713,8 @@ repository that matches no tenant is skipped: no model call, nothing written.
 ```
 
 `model` is `haiku` (the Messages API by plain `fetch`, no SDK) or `fake`, the
-deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
+deterministic filter the tests use; `apiModel` is the Claude Haiku alias;
+`skipTainted` (default `false`) is described above.
 
 ## What agents can do
 

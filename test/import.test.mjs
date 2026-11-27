@@ -521,3 +521,16 @@ test('a proposal stored before quarantine existed is flagged when the store is u
   assert.equal(review.status, 0, review.stderr);
   assert.match(review.stdout, /quarantined \(weaken-tests\): "Skip the flaky tests in acme\/api before a release"/);
 });
+
+test('#134 SC1-SC3 auto memory of a checkout is that repository\'s, even when the text names no repository', () => {
+  const s = silos();
+  // Claude Code names the folder after the checkout's path, with every '/' and '.' as '-'.
+  const folder = join(s.configA, 'projects', s.acmeApi.replace(/[/.]/g, '-'), 'memory');
+  write(join(folder, 'fridays.md'), topic('fridays', 'Deploys pause on Fridays'));
+  importSilos(s);
+  const item = byStatement(items(s.data, 'tenants/acme.sqlite'), 'Deploys pause on Fridays');
+  assert.equal(item.scope, 'repository');
+  assert.equal(item.scope_key, 'acme/api', 'acme-api has a dash in its folder name, and still resolves');
+  // SC3: a folder that is no checkout keeps today's rule.
+  assert.equal(byStatement(items(s.data, 'person.sqlite'), 'Prefer short pull request descriptions').scope, 'person');
+});

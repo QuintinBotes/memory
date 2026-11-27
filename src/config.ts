@@ -66,8 +66,10 @@ export interface CaptureConfig {
   /** Past either cap in a local calendar day, counted from logs/capture.jsonl, capture makes no model call (#140). */
   maxCallsPerDay?: number;
   maxTokensPerDay?: number;
+  /** Skip a session that read the web or another MCP server instead of labelling what it keeps (#143). */
+  skipTainted?: boolean;
 }
-export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-5-5', maxCallsPerDay: 100, maxTokensPerDay: 2_000_000 };
+export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-5-5', maxCallsPerDay: 100, maxTokensPerDay: 2_000_000, skipTainted: false };
 export const captureSettings = (config: Config): typeof DEFAULT_CAPTURE => ({ ...DEFAULT_CAPTURE, ...config.capture });
 
 /** `decisions` names a Review Voice store and `orbit` an Orbit knowledge store (default `.orbit/knowledge.sqlite`), SQLite files, absolute or relative to the checkout; the others are text files inside it. */
@@ -202,18 +204,19 @@ export function loadConfig(data: string): Config | null {
   const capture = c.capture;
   if (capture !== undefined) {
     const ok = typeof capture === 'object' && capture !== null && !Array.isArray(capture);
-    const { enabled, model, maxCandidates, apiModel, maxCallsPerDay, maxTokensPerDay } = ok ? capture : ({} as CaptureConfig);
+    const { enabled, model, maxCandidates, apiModel, maxCallsPerDay, maxTokensPerDay, skipTainted } = ok ? capture : ({} as CaptureConfig);
     const cap = (n: unknown): boolean => n === undefined || (Number.isInteger(n) && (n as number) >= 1);
     if (
       !ok ||
       (enabled !== undefined && typeof enabled !== 'boolean') ||
       (model !== undefined && typeof model !== 'string') ||
       (apiModel !== undefined && typeof apiModel !== 'string') ||
+      (skipTainted !== undefined && typeof skipTainted !== 'boolean') ||
       (maxCandidates !== undefined && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) ||
       !cap(maxCallsPerDay) ||
       !cap(maxTokensPerDay)
     ) {
-      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, maxCallsPerDay and maxTokensPerDay: whole numbers of 1 or more }');
+      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, maxCallsPerDay and maxTokensPerDay: whole numbers of 1 or more, skipTainted: true|false }');
     }
   }
   if (c.automation !== undefined && typeof c.automation !== 'boolean') throw new ConfigError('automation must be true or false');
