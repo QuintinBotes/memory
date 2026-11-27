@@ -29,6 +29,16 @@ npm install
 npm run verify
 ```
 
+`npm run verify` drives the CLI and the MCP server directly. `npm run e2e` runs
+real Claude Code sessions with this checkout loaded by `--plugin-dir`, against
+a throwaway data folder and a synthetic `acme/api` repository: it checks that an
+anchored item reaches an agent reading the file, that `memory_search` and
+`memory_propose` work over MCP (an automation session's proposal refused until
+`--automation on`), and that the plugin validates and the review pane's tests
+pass. It needs a signed-in `claude` and spends a few small requests, so CI does
+not run it; run it before any change to hooks, MCP or the mod, and before a
+release.
+
 Try your working copy in Claude Code:
 
 ```
