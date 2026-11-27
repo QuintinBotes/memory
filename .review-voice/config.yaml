@@ -1,0 +1,11 @@
+# Review Voice on this repository's own pull requests (#110). Read from the pull request's base commit, never its head.
+identity:
+  owner_reviewer: QuintinBotes
+repositories:
+  include:
+    - QuintinBotes/memory
+review:
+  mode: auto
+  linked_issues: false
+writes:
+  github_posting_enabled: true
