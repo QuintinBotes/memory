@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
 - A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
 
 ### Added
@@ -17,10 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A daily cap on capture spend (#140): `capture.maxCallsPerDay` (100) and `capture.maxTokensPerDay` (2,000,000) per local day, counted from `logs/capture.jsonl`. Past either, capture makes no model call, logs a `daily cap` skip, says so once per session and leaves the transcript unread for the next day. `memory capture --cost [--since <date>]` prints per day the runs (API key or Claude Code login), skips by reason and tokens, from the log alone.
 
 ## [0.9.2] - 2026-11-27
-
-### Fixed
-
-- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
 
 ### Fixed
 
