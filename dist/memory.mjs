@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync8 } from "node:fs";
 import { basename as basename4, isAbsolute as isAbsolute9, join as join18, normalize as normalize4 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs } from "node:util";
@@ -132,6 +132,7 @@ function loadConfig(data) {
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
   if (c.pointOfAction !== void 0 && typeof c.pointOfAction !== "boolean") throw new ConfigError("pointOfAction must be true or false");
+  if (c.promptRecall !== void 0 && typeof c.promptRecall !== "boolean") throw new ConfigError("promptRecall must be true or false");
   const impact2 = c.impactProvider;
   if (impact2 !== void 0 && !(typeof impact2 === "object" && impact2 !== null && !Array.isArray(impact2) && isList(impact2.command) && impact2.command.length > 0 && impact2.command.every((a) => a !== ""))) {
     throw new ConfigError('impactProvider must be {"command": [absolute program path, arguments...]}');
@@ -171,6 +172,7 @@ function loadConfig(data) {
     ...capture2 !== void 0 ? { capture: capture2 } : {},
     ...c.automation !== void 0 ? { automation: c.automation } : {},
     ...c.pointOfAction !== void 0 ? { pointOfAction: c.pointOfAction } : {},
+    ...c.promptRecall !== void 0 ? { promptRecall: c.promptRecall } : {},
     ...impact2 !== void 0 ? { impactProvider: impact2 } : {},
     ...scf !== void 0 ? { scf } : {},
     ...tm !== void 0 ? { transcriptModel: tm } : {},
@@ -1208,6 +1210,11 @@ function chooseSlice(items, budget, anchored2 = 0) {
   if (chosen.length === 0 && anchored2 === 0 || estimate(text5) > budget) return { text: "", shown: [] };
   return { text: text5, shown: chosen.map((j) => ranked[j]) };
 }
+function sessionSlice(items, budget, pointOfAction2) {
+  if (!pointOfAction2) return chooseSlice(items, budget);
+  const unanchored = items.filter((i) => i.anchors.length === 0);
+  return chooseSlice(unanchored, budget, items.length - unanchored.length);
+}
 function renderAll(items) {
   return items.length === 0 ? "" : compose(rank2(items).map(row), 0, 0);
 }
@@ -1433,7 +1440,7 @@ var DATA_CATEGORIES = [
   { id: "statements", since: 1, text: "Statements you ask memory to remember, each with its scope, type and an optional source reference" },
   { id: "anchors", since: 1, text: "For an anchored statement: the file path, line range, commit and a hash of the cited lines, not the lines themselves" },
   { id: "origin", since: 1, text: "The working directory's git origin remote, read at session start, after a compaction and at a subagent's start to find its tenant" },
-  { id: "injections", since: 2, text: "Which items a subagent was shown, and with pointOfAction on which an agent was shown when it read or edited anchored code, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
+  { id: "injections", since: 2, text: "Which items a subagent was shown, and with pointOfAction on which an agent was shown when it read or edited anchored code, and with promptRecall on which items matched your prompt (the prompt is read on this machine and never kept), by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
   { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
   { id: "embeddings", since: 13, text: "Embeddings, only when embeddings in config.json names a provider (off by default; a local Ollama with an embedding model you install, or voyage-4, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query and the changed files' names of memory recall --diff, are sent to that provider and the vectors that come back are kept in the item's own file. A tenant's text is sent only to a provider on this machine (an address of 127.0.0.1, localhost or [::1]); one elsewhere gets the person file's text only. When rerank in config.json names a generative model (off by default; Inkling 2 Mini on the same local Ollama unless set, which you install), each memory_search query or memory recall --diff file list and the statements of the rows it found are sent to it to reorder them, under the same rule for a tenant's text. Quarantined text is never sent, and no hook uses either. Without a provider, a key or a network, nothing is sent and recall uses words and paths only" },
   { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
@@ -6423,10 +6430,11 @@ var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
 var str4 = (v) => typeof v === "string" && v !== "" ? v : void 0;
 var num = (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : void 0;
-function enabled(data) {
+function enabled(data, switches = ["pointOfAction"]) {
   const config = loadConfig(data);
-  return recallOn(config) && config.pointOfAction === true && covers(config, "injections") ? config : null;
+  return recallOn(config) && switches.some((s) => config[s] === true) && covers(config, "injections") ? config : null;
 }
+var LEDGER_SWITCHES = ["pointOfAction", "promptRecall"];
 function locate(abs) {
   let dir = dirname11(abs);
   while (!existsSync12(dir) && dirname11(dir) !== dir) dir = dirname11(dir);
@@ -6535,7 +6543,7 @@ function pointOfAction(data, input2, log) {
   }
 }
 function preCompact(data, input2) {
-  const config = enabled(data);
+  const config = enabled(data, LEDGER_SWITCHES);
   const session = str4(input2["session_id"]);
   if (config === null || session === void 0) return "";
   const context = resolveContext(str4(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
@@ -6558,7 +6566,7 @@ function preCompact(data, input2) {
   }
 }
 function afterCompaction(data, input2) {
-  const config = enabled(data);
+  const config = enabled(data, LEDGER_SWITCHES);
   const session = str4(input2["session_id"]);
   if (config === null || session === void 0) return;
   const context = resolveContext(str4(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
@@ -6569,6 +6577,69 @@ function afterCompaction(data, input2) {
     resetMain(db, session);
   } finally {
     db.close();
+  }
+}
+
+// src/hooks/prompt.ts
+var MIN_PROMPT_WORDS = 4;
+var MIN_SHARED_TERMS = 2;
+var FILLER = /* @__PURE__ */ new Set(["how", "what", "why", "where", "who", "can", "could", "would", "should", "we", "you", "your", "me", "my", "our", "us", "please", "here", "there", "let", "just", "about"]);
+var str5 = (v) => typeof v === "string" && v !== "" ? v : void 0;
+function promptTerms(prompt) {
+  const text5 = prompt.trim();
+  if (text5.startsWith("/") || text5.split(/\s+/).length < MIN_PROMPT_WORDS) return [];
+  return searchTerms(text5).filter((t) => !FILLER.has(t));
+}
+function promptRecall(data, input2, log) {
+  const config = enabled(data, ["promptRecall"]);
+  const agentType = str5(input2["agent_type"]);
+  const prompt = str5(input2["prompt"]);
+  if (config === null || prompt === void 0 || agentType !== void 0 && neverSubagent(agentType)) return "";
+  const terms = promptTerms(prompt);
+  if (terms.length < MIN_SHARED_TERMS) return "";
+  const cwd = str5(input2["cwd"]) ?? process.cwd();
+  const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.tenant === null || context.repository === null || context.owner === null) return "";
+  const session = str5(input2["session_id"]) ?? "unknown";
+  const agent = str5(input2["agent_id"]) ?? MAIN_AGENT;
+  const base2 = { session, agent, via: "prompt", at: (/* @__PURE__ */ new Date()).toISOString() };
+  try {
+    const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
+    if (db === null) return "";
+    try {
+      const shared = /* @__PURE__ */ new Map();
+      for (const t of terms) for (const id of textMatches(db, [t]).keys()) shared.set(id, (shared.get(id) ?? 0) + 1);
+      const over = new Set([...shared].filter(([, n]) => n >= MIN_SHARED_TERMS).map(([id]) => id));
+      if (over.size === 0) return "";
+      const items = visibleItems(data, context, cwd, terms, HOOK_BUSY_MS, []);
+      const inSlice = new Set(sessionSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, config.pointOfAction === true).shown.map((i) => i.id));
+      const eligible2 = items.filter((i) => over.has(i.id) && i.anchors.length === 0 && !inSlice.has(i.id) && (i.scope === "repository" || i.scope === "organisation"));
+      const hits = rank(eligible2, [], Date.now(), void 0, void 0, [], context.repository).map((h) => h.item);
+      if (hits.length === 0) return "";
+      const byId3 = new Map(hits.map((i) => [i.id, i]));
+      const result = claim(db, session, agent, hits.map((i) => i.id), (unseen, left) => {
+        const budget = Math.min(INJECTION_BUDGET, left);
+        const rows = [];
+        const shown = [];
+        for (const id of unseen) {
+          const r = row(byId3.get(id));
+          if (estimate(fence(ITEMS_LABEL, [...rows, r].join(""))) > budget) continue;
+          rows.push(r);
+          shown.push({ id, tokens: estimate(r) });
+        }
+        const text5 = rows.length === 0 ? "" : fence(ITEMS_LABEL, rows.join(""));
+        if (shown.length > 0) shown[0].tokens += estimate(text5) - shown.reduce((sum, s) => sum + s.tokens, 0);
+        return { text: text5, shown };
+      });
+      if (result.text === "") return "";
+      log(result.shown.map((s) => ({ event: "injected", ...base2, item: s.id, anchors: [], tokens: s.tokens })));
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: result.text } });
+    } finally {
+      db.close();
+    }
+  } catch {
+    log([{ event: "skipped", ...base2 }]);
+    return "";
   }
 }
 
@@ -6950,7 +7021,7 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync4 } from "node:child_process";
-import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync14, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync14, readdirSync as readdirSync2, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { dirname as dirname12, join as join15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -6981,6 +7052,10 @@ function fixtureRepository(task, repo) {
 function seed(task, t, repo, data) {
   const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
+  if (t.config !== void 0) {
+    const path = join15(data, "config.json");
+    writeFileSync6(path, JSON.stringify({ ...JSON.parse(readFileSync14(path, "utf8")), ...t.config }));
+  }
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
 }
 var jsonLines2 = (text5) => text5.split("\n").flatMap((l) => {
@@ -7178,7 +7253,7 @@ function buildReplaySet(h, since) {
 }
 
 // src/eval/head-to-head/scorecard.ts
-import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
+import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join17 } from "node:path";
 import { performance } from "node:perf_hooks";
 
@@ -7578,7 +7653,7 @@ async function headToHead(version, set, external, checked, out) {
   };
   rows.push(...latency, verdict2);
   mkdirSync10(out, { recursive: true, mode: 448 });
-  const write = (file, text5) => writeFileSync6(join17(out, file), text5, { mode: 384 });
+  const write = (file, text5) => writeFileSync7(join17(out, file), text5, { mode: 384 });
   const lines2 = (xs) => xs.map((x) => `${JSON.stringify(x)}
 `).join("");
   write("replay-set.json", `${JSON.stringify(set, null, 1)}
@@ -7705,6 +7780,11 @@ var USAGE = `usage: memory <command>
   point-of-action
       the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
       agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
+  prompt-recall
+      the UserPromptSubmit hook: active unanchored items of the tenant sharing at least two of the prompt's words, ranked
+      as memory_search ranks, not in the session slice and not shown to the agent before, within 120 tokens per prompt
+      and 600 per agent per session. Nothing for a slash command or a prompt under four words. Never stores or logs the
+      prompt. Off unless promptRecall is true in config.json
   failure-recall
       the PostToolUseFailure hook on Bash: the failure patterns and repair recipes whose signature (the statement up to ' => ') the error carries, once
       per agent and fingerprint, within 120 tokens. A repeat after that counts as a contradiction. Needs no opt-in; stores no error text
@@ -8533,9 +8613,7 @@ function hookInput() {
 function hookSlice(data, config, input2, budget, withheld = []) {
   const cwd = typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd();
   const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld);
-  if (config.pointOfAction !== true) return chooseSlice(items, budget);
-  const unanchored = items.filter((i) => i.anchors.length === 0);
-  return chooseSlice(unanchored, budget, items.length - unanchored.length);
+  return sessionSlice(items, budget, config.pointOfAction === true);
 }
 function sessionStart(data) {
   try {
@@ -8601,6 +8679,13 @@ function subagentStart(data) {
 function pointOfActionHook(data) {
   try {
     process.stdout.write(pointOfAction(data, hookInput(), (lines2) => appendInjections(data, lines2.map((l) => `${JSON.stringify(l)}
+`))));
+  } catch {
+  }
+}
+function promptRecallHook(data) {
+  try {
+    process.stdout.write(promptRecall(data, hookInput(), (lines2) => appendInjections(data, lines2.map((l) => `${JSON.stringify(l)}
 `))));
   } catch {
   }
@@ -8701,7 +8786,7 @@ function pruneLog(data, files, before) {
         }
       });
       const tmp = `${file}.${process.pid}.tmp`;
-      writeFileSync7(tmp, kept.map((l) => `${l}
+      writeFileSync8(tmp, kept.map((l) => `${l}
 `).join(""), { mode: 384 });
       renameSync4(tmp, file);
       return true;
@@ -8937,6 +9022,8 @@ async function main(argv) {
       return subagentStart(data);
     case "point-of-action":
       return pointOfActionHook(data);
+    case "prompt-recall":
+      return promptRecallHook(data);
     case "failure-recall":
       return failureRecallHook(data);
     case "command-passed":

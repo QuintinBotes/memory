@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Recall at the prompt, off by default behind `"promptRecall": true` in `config.json` (#136). A `UserPromptSubmit` hook shows the active, unanchored repository and organisation items that share at least two of the prompt's words, ranked as `memory_search` ranks them, leaving out the session slice and what the agent was already shown, within 120 tokens per prompt and 600 per agent per session. A prompt that matches nothing, a short prompt, a slash command and an `Explore`, `Plan` or Review Voice session get zero bytes. Each item shown is logged with `via: "prompt"`; the prompt is never stored or logged. A new session-lab task, `prompt-decision`, measures it, and a lab task may now set `config` for its on arm.
+
 ### Fixed
 
 - Capture works without `ANTHROPIC_API_KEY`: the filter falls back to the Claude Code login through `claude -p`, with no tools, hooks, settings or saved session. Subscription users had no capture at all (#130).
