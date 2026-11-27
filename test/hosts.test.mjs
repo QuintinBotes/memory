@@ -105,6 +105,23 @@ test('patterns: a host holds a dot and takes groups below it; the plan lists the
   assert.deepEqual(cfg.tenants, { acme: ['gitlab.com/acme/*'] }, 'a plan without --confirm saves nothing');
 });
 
+test('SC6: a GitHub-only consent saved by 0.9.2 still holds; the plan hash covers no hosts', () => {
+  const s = sandbox();
+  // The configs key is fixed so the hash is too; the hash is what origin/main's dist (0.9.2) saved for this config.
+  const configDir = '/memory-hash-fixture/claude';
+  mkdirSync(s.data, { recursive: true });
+  writeFileSync(join(s.data, 'config.json'), JSON.stringify({
+    tenants: { acme: ['acme/*'], beta: ['beta/*', 'beta2/api'] },
+    configs: { [configDir]: ['acme', 'beta'] },
+    optIns: { transcripts: false, failingCommands: false },
+    consent: { planHash: '55a85f45ce31e0d7449166e720f1a29027c5fbdbeb922148195e72a1cf675f3a', grantedAt: '2026-11-27T22:58:52.934Z', version: 13 },
+  }));
+  const github = repo(s.base, 'acme/api', 'https://github.com/acme/api.git');
+  const r = remember(github, s.data, configDir, ITEM, '--scope', 'repository');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(sessionStart(github, s.data, configDir).stdout, new RegExp(ITEM));
+});
+
 test('SC7: memory ci off github.com says why in one line, runs no gh and opens no store', () => {
   const s = hosts('gitlab.com/acme/*');
   const dir = join(s.base, 'gh');
