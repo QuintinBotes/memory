@@ -51,6 +51,7 @@ import { importSilos } from './import/import.ts';
 import { SYMBOL_KEY } from './import/silos.ts';
 import { renderReport, tenantReport, testCoverage } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
+import { share } from './export/shared.ts';
 import { ScfError, exportToScf, heldInScf, importFromScf, remoteProposals, scfClient, type Remote, type ScfClient } from './export/scf.ts';
 import { withFileLockAsync } from './store/refresh-lock.ts';
 import { diffRecall } from './recall/diff.ts';
@@ -112,11 +113,18 @@ const USAGE = `usage: memory <command>
   report [--tenant <name>]
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
-  import [--dry-run] [--orbit]
+  import [--dry-run] [--orbit | --shared]
       read the silos (each bound config's auto memory, and the files under "imports" in config.json)
       and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
       read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
-      read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals
+      read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals. With
+      --shared, read only this repository's .memory/shared.jsonl as committed at HEAD (never the working copy), each
+      line a proposal with team trust and the taint shared:<owner/repo>; refused in a repository of no tenant here
+  share [--dry-run] [--yes-non-interactive]
+      write this repository's active, unquarantined repository items to .memory/shared.jsonl, one line each, the
+      same bytes for the same store, for memory import --shared on another machine. Person, organisation and global
+      items are never written; an item that redaction would change, or that names a committer, is withheld and
+      counted. From a terminal, as promote --apply; --dry-run writes nothing. Nothing is committed or pushed
   review
       the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
   approve <id> [--scope repository|organisation|person|global]
@@ -697,13 +705,23 @@ function reportCommand(args: string[], data: string): void {
 }
 
 async function importCommand(args: string[], data: string): Promise<void> {
-  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' }, scf: { type: 'boolean' } } });
+  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' }, scf: { type: 'boolean' }, shared: { type: 'boolean' } } });
   if (values.scf === true) {
-    if (values['dry-run'] === true || values.orbit === true) throw new Refusal('usage: memory import --scf', 2);
+    if (values['dry-run'] === true || values.orbit === true || values.shared === true) throw new Refusal('usage: memory import --scf', 2);
     return scfImport(setUp(data), data, process.cwd());
   }
+  if (values.orbit === true && values.shared === true) throw new Refusal('usage: memory import [--dry-run] [--orbit | --shared]', 2);
   const dryRun = values['dry-run'] === true;
-  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun, values.orbit === true), null, 2));
+  const config = setUp(data);
+  let shared: { top: string; tenant: string; repository: string } | undefined;
+  if (values.shared === true) {
+    // Before any store is opened: a file of another tenant's repository, or of none, is not read.
+    const context = resolveContext(process.cwd(), config, currentConfigDir());
+    const top = git(process.cwd(), 'rev-parse', '--show-toplevel')?.trim();
+    if (context.tenant === null || context.repository === null || top === undefined) throw new Refusal(`not imported: ${context.reason}`);
+    shared = { top, tenant: context.tenant, repository: context.repository };
+  }
+  console.log(JSON.stringify(importSilos(config, data, currentConfigDir(), dryRun, values.orbit === true, shared), null, 2));
   if (dryRun) console.error('Nothing was written. Run memory import without --dry-run to store these as proposals.');
 }
 
@@ -869,6 +887,27 @@ function promoteCommand(args: string[], data: string, cwd: string): void {
   } finally {
     db.close();
   }
+}
+
+/** `memory share [--dry-run] [--yes-non-interactive]`: this repository's approved items into .memory/shared.jsonl, never committed. */
+function shareCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { 'dry-run': { type: 'boolean' }, 'yes-non-interactive': { type: 'boolean' } } });
+  if (positionals.length > 0) throw new Refusal('usage: memory share [--dry-run] [--yes-non-interactive]', 2);
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const top = git(cwd, 'rev-parse', '--show-toplevel')?.trim();
+  if (context.tenant === null || context.repository === null || top === undefined) throw new Refusal(`not shared: ${context.reason}`);
+  const dryRun = values['dry-run'] === true;
+  if (!dryRun) ownerTerminal(values['yes-non-interactive'], 'nothing was written: share is');
+  const db = openStore(tenantFile(data, context.tenant), false);
+  try {
+    console.log(JSON.stringify(share(db, context.tenant, context.repository, top, dryRun), null, 2));
+  } catch (error) {
+    throw new Refusal((error as Error).message);
+  } finally {
+    db?.close();
+  }
+  console.error(dryRun ? 'Nothing was written. Run memory share without --dry-run to write the file.' : 'Nothing was committed: review .memory/shared.jsonl and commit it yourself.');
 }
 
 const realpathOrSelf = (path: string): string => {
@@ -1540,6 +1579,8 @@ async function main(argv: string[]): Promise<void> {
       return conflictsCommand(rest, data, process.cwd());
     case 'promote':
       return promoteCommand(rest, data, process.cwd());
+    case 'share':
+      return shareCommand(rest, data, process.cwd());
     case 'sweep':
       return sweepCommand(data, process.cwd(), false);
     case 'corrections':

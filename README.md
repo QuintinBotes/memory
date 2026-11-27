@@ -314,6 +314,33 @@ are not exported. The folder is read only: nothing reads it back, and editing
 it changes nothing in memory. Export needs confirmed consent, and refuses a
 folder inside a git repository that belongs to another tenant.
 
+## Sharing a repository's items through git
+
+`memory share` writes this repository's active, unquarantined repository items
+to `.memory/shared.jsonl` in the repository, one JSON line per item: its id,
+type, statement, anchors, validity dates, the id it supersedes and its evidence
+source references. The same store gives the same bytes. Person, organisation
+and global items are never written; an item whose text redaction would change,
+that holds an email or a handle, or that names a committer of the last 500
+commits is withheld and counted by reason (`memory share --dry-run` shows the
+counts and writes nothing). It runs from a terminal, as `memory promote
+--apply` does, or with `--yes-non-interactive` under an ask rule. Nothing is
+committed or pushed: you review the file and commit it.
+
+On another machine, or a teammate's, `memory import --shared` in the same
+repository reads the file as committed at HEAD through git, never the working
+copy, so an uncommitted edit is not read. Each line becomes a proposal with
+`team` trust and the taint `shared:<owner/repo>`, which `memory review` shows;
+nothing is active or recalled until you approve it. Text that reads as an
+instruction is quarantined. A repeat of an item you have merges into it as
+evidence and raises no support, a second import adds nothing, and a statement
+you rejected is not proposed again. A line that supersedes an item you took
+from an earlier version of the file arrives as a supersession proposal of it.
+`memory import --shared --dry-run` lists the file and its statement count. A
+repository of another tenant, or of none, is refused before any store is
+opened, and until you confirm the plan's `shared` category (plan version 14) the file is not
+read. No server and no network call is involved: git is the transport.
+
 ## Moving proposals to SCF and back
 
 Memory's items are shaped like Swarm Code Factory's world facts, so SCF can later

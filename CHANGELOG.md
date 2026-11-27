@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory share` writes this repository's approved repository items to `.memory/shared.jsonl`, and `memory import --shared` on another machine reads that file as committed at HEAD into team-trust proposals tainted `shared:<owner/repo>`, waiting for approval (#137). Git is the transport; nothing is committed, pushed or sent anywhere. Reading the file is a new consent category, `shared`: run `memory init --confirm` to agree to it.
+
 ## [0.9.2] - 2026-11-27
 
 ### Fixed
