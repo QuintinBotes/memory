@@ -31,7 +31,8 @@ npm run verify
 
 `npm run verify` drives the CLI and the MCP server directly. `npm run e2e` runs
 real Claude Code sessions with this checkout loaded by `--plugin-dir`, against
-a throwaway data folder and a synthetic `acme/api` repository: it checks that an
+a throwaway data folder and a synthetic `acme/api` repository: it checks the
+session-start slice, that an
 anchored item reaches an agent reading the file, that `memory_search` and
 `memory_propose` work over MCP (an automation session's proposal refused until
 `--automation on`), and that the plugin validates and the review pane's tests
