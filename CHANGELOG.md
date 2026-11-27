@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
+
+### Fixed
+
 - Capture works without `ANTHROPIC_API_KEY`: the filter falls back to the Claude Code login through `claude -p`, with no tools, hooks, settings or saved session. Subscription users had no capture at all (#130).
 
 ## [0.9.1] - 2026-11-27

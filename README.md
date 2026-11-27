@@ -367,9 +367,11 @@ request link as the source. The store holds every repository's findings, so
 reading it is its own consent category (`decisions`, plan version 5): import
 skips it, and says why, until you run `memory init --confirm` again. Finding
 text was written by a model, so text that reads as an instruction arrives
-quarantined with agent trust. A strong dismissal a teammate made, with no owner
-row for it, arrives with team trust, and one with no `decided_by` with agent
-trust. Review Voice keeps its own precedents; memory never writes
+quarantined with agent trust. A strong dismissal with no owner row for it
+depends on who made it. If it was the checkout's owner (`identity.owner_reviewer`
+in `.review-voice/config.yaml`, for example a reply on the pull request), it
+arrives as the owner's decision. If it was anyone else, it arrives with team
+trust. One with no `decided_by` arrives with agent trust. Review Voice keeps its own precedents; memory never writes
 back, and never imports the review comments other tools made.
 
 A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
