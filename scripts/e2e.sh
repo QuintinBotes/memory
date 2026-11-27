@@ -27,6 +27,10 @@ node "$CLI" init --tenant 'acme=acme/*' --bind acme --confirm > /dev/null
 ID=$(node "$CLI" remember --anchor src/ledger.ts:1-3 -- 'consume() must stay idempotent: a retried call must not charge twice' | grep -o 'm-[0-9a-f]*' | head -1)
 [ -n "$ID" ] || fail "remember printed no id"
 
+echo "== SC5 the session-start slice lists the item before any tool call (#114)"
+out=$(ask "Without using any tools: print the id of every memory item you were given at the start of this session, or NONE." Read)
+grep -q "$ID" <<< "$out" || fail "SC5 $ID not shown at session start: $out"
+
 echo "== SC1 the item anchored to src/ledger.ts reaches an agent that reads it"
 out=$(ask "Read src/ledger.ts. Then print the id of every memory item you were shown about it, or NONE." Read)
 grep -q "$ID" <<< "$out" || fail "SC1 $ID not shown: $out"
