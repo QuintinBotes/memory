@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Stop on a session still under 4,000 characters says `waiting for more: <n> of 4000 characters` and records the skip in `logs/capture.jsonl`, instead of claiming `nothing new to read` and leaving no trace (#126). A test now pins codex-cli 0.172's rollout format (`world_state`, `turn_context`, `token_usage_record`), which capture reads as Codex.
 - `memory list` with nothing visible says so on stderr, naming the tenant this directory resolves to, instead of printing nothing (#122). Stdout is unchanged.
 - The README says exactly which Review Voice decisions reach memory (#118, #124): what `/review-voice:feedback` records and strong dismissals, from a local review or, through `review-voice outcomes --recover` (review-voice after 1.30.0), from the Action's reviews. Accepting or resolving a finding on GitHub records nothing memory reads.
 - An owner decision on a long Review Voice finding is no longer dropped by `memory import` (#120): the statement is cut between words to 300 characters with an ellipsis, where before it was refused as too long; the pull request link holds the whole finding.

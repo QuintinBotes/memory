@@ -275,7 +275,12 @@ async function captureLocked(
   const seen = readState(data)[session] ?? 0;
   let text = lines.slice(seen).filter((l) => l !== '').join('\n');
   if (text.length > MAX_TRANSCRIPT_CHARS) text = text.slice(text.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, '');
-  if (text === '' || (input['hook_event_name'] === 'Stop' && text.length < STOP_MIN_CHARS)) return 'nothing new to read';
+  if (text === '') return 'nothing new to read';
+  // A Stop waits for enough to be worth a model call; the session's end reads it whatever its length (#126).
+  if (input['hook_event_name'] === 'Stop' && text.length < STOP_MIN_CHARS) {
+    summarise(data, { session, agent, skipped: `shorter than ${STOP_MIN_CHARS} characters`, saved: 0 });
+    return `waiting for more: ${text.length} of ${STOP_MIN_CHARS} characters; the session's end reads it whatever its length`;
+  }
 
   const settings = captureSettings(config);
   const model = filterModel(settings);
