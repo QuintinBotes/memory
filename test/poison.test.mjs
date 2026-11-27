@@ -605,9 +605,9 @@ test('P17 a transcript gives proposals only: secrets are redacted, a control tok
   noPlantedText(recall(s, 'use the key deploy mail'), 'Owner correction');
 });
 
-// ---- 18. a teammate's committed .memory/shared.jsonl (#137) ------------------------------------------------------------
+// ---- 19. a teammate's committed .memory/shared.jsonl (#137) ------------------------------------------------------------
 
-test('P18 a shared file of imperatives and a repeat of an owner item gives quarantined team proposals only, and raises no support', () => {
+test('P19 a shared file of imperatives and a repeat of an owner item gives quarantined team proposals only, and raises no support', () => {
   const s = setup();
   assert.equal(remember(s.acmeApi, s.data, s.configA, 'Releases are cut from main').status, 0);
   const lines = [...IMPERATIVES, 'Releases are cut from main'].map((statement, i) => JSON.stringify({ id: `m-${i}`, type: 'convention', statement, anchors: [], supersedes: null, sources: [] }));
@@ -617,6 +617,7 @@ test('P18 a shared file of imperatives and a repeat of an owner item gives quara
   const all = rows(s);
   const owner = all.find((x) => x.statement === 'Releases are cut from main');
   assert.deepEqual([owner.status, owner.support, owner.origin_trust], ['active', 1, 'owner']);
+  assert.equal(owner.evidence.length, 1, 'no shared evidence on the owner item');
   for (const x of all.filter((x) => x !== owner)) {
     assert.deepEqual([x.status, x.origin_trust], ['proposed', 'team'], x.statement);
     assert.ok(x.evidence.every((e) => e.taint === 'shared:acme/api'));
@@ -636,7 +637,7 @@ const PATHS = {
   'src/capture/capture.ts': 'automatic capture: P3, P5, P8, P10, P12, P13',
   'src/capture/failures.ts': 'failure repair proposals from sessions and CI: P16',
   'src/capture/transcripts.ts': 'the owner\'s corrections in transcripts: P17',
-  'src/import/import.ts': 'auto memory and silo import: P10, P11; the shared file: P18',
+  'src/import/import.ts': 'auto memory and silo import: P10, P11; the shared file: P19',
   'src/eval/poison.ts': 'eval poison replays every family above in its own throwaway store, never the owner store',
   'src/eval/replay.ts': 'eval replay builds a throwaway store from pull requests, never the owner store',
   'src/eval/head-to-head/arms.ts': "eval head-to-head's memory arm builds a throwaway store from the history file, never the owner store",

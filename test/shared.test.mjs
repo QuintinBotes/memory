@@ -105,12 +105,24 @@ test('SC2 SC3 on machine B the file becomes three team proposals tainted shared:
   const again = JSON.parse(ok(importShared(s)).stdout);
   assert.equal(again.proposed, 0);
   assert.equal(sql(s.dataB, "SELECT count(*) AS n FROM items WHERE statement != ''")[0].n, 3);
-  // On A, each line is its own item: evidence merges, support stays.
+  // On A, each line is its own item: already known, no evidence, no taint, support stays.
   const before = sql(s.data, 'SELECT id, support FROM items ORDER BY id');
+  const evidence = sql(s.data, 'SELECT * FROM evidence ORDER BY id');
   const onA = JSON.parse(ok(importShared(s, s.data, s.configA)).stdout);
-  assert.deepEqual([onA.proposed, onA.merged], [0, 3]);
+  assert.deepEqual([onA.proposed, onA.merged, onA.alreadyKnown], [0, 0, 3]);
   assert.deepEqual(sql(s.data, 'SELECT id, support FROM items ORDER BY id'), before);
-  assert.equal(sql(s.data, "SELECT count(*) AS n FROM evidence WHERE source_ref LIKE '.memory/shared.jsonl#%' AND author_role = 'team'")[0].n, 3);
+  assert.deepEqual(sql(s.data, 'SELECT * FROM evidence ORDER BY id'), evidence);
+});
+
+test('importing your own shared file leaves your items untainted, so promotion still proposes them', () => {
+  const s = machines();
+  shareAndCommit(s);
+  ok(importShared(s, s.data, s.configA));
+  assert.equal(sql(s.data, 'SELECT count(*) AS n FROM evidence WHERE taint IS NOT NULL')[0].n, 0);
+  assert.equal(run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA }).stdout.includes('tainted'), false);
+  sql(s.data, "UPDATE items SET type = 'convention', support = 3 WHERE statement = ?", ITEMS[0]);
+  const r = ok(run(['promote', '--propose'], { cwd: s.acmeApi, data: s.data, config: s.configA }));
+  assert.match(r.stderr, /1 new promotion proposal\./);
 });
 
 test('a line whose item was superseded on the sharing machine arrives as a supersession proposal of the item it became', () => {

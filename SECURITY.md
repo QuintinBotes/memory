@@ -142,7 +142,8 @@ no tenant, or in a Claude Code config not bound to that tenant.
   repository that resolves to a tenant bound here; any other is refused before
   a store is opened. Every line passes the strict gate, is stored as a
   `team`-trust proposal tainted `shared:<owner/repo>`, and is quarantined when it
-  reads as an instruction; a repeat of an owner item never raises its support.
+  reads as an instruction; a line that repeats an item already held adds no
+  evidence to it, so it neither taints nor raises support.
   `memory share` writes only active, unquarantined repository items, withholds
   any whose text or source redaction would change or that names a committer,
   refuses a symbolic link at the file's path, and never commits or pushes.

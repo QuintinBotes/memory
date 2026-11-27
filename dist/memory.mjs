@@ -5432,6 +5432,13 @@ function importSilos(config, data, configDir, dryRun, orbit = false, shared) {
           });
           continue;
         }
+        if (shared !== void 0) {
+          const held2 = db.prepare("SELECT statement FROM items WHERE tenant = ? AND status IN ('active', 'proposed') AND statement != '' AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))").all(c.tenant, c.scopeKey, c.scopeKey.split("/")[0]);
+          if (held2.some((r) => repeats(r.statement, c.statement))) {
+            counts.alreadyKnown++;
+            continue;
+          }
+        }
         if (c.sharedSupersedes !== void 0) {
           const older = db.prepare("SELECT i.id FROM items i JOIN evidence e ON e.item_id = i.id WHERE e.source_ref = ? AND i.tenant = ? AND i.status = 'active'").get(sharedSource(c.sharedSupersedes), c.tenant);
           if (older !== void 0) c.supersedes = older.id;

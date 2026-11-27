@@ -332,8 +332,9 @@ repository reads the file as committed at HEAD through git, never the working
 copy, so an uncommitted edit is not read. Each line becomes a proposal with
 `team` trust and the taint `shared:<owner/repo>`, which `memory review` shows;
 nothing is active or recalled until you approve it. Text that reads as an
-instruction is quarantined. A repeat of an item you have merges into it as
-evidence and raises no support, a second import adds nothing, and a statement
+instruction is quarantined. A line that repeats an item you already have counts as
+already known and adds no evidence, so importing your own file leaves your
+items untainted and still promotable; a second import adds nothing, and a statement
 you rejected is not proposed again. A line that supersedes an item you took
 from an earlier version of the file arrives as a supersession proposal of it.
 `memory import --shared --dry-run` lists the file and its statement count. A

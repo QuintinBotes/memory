@@ -4,7 +4,7 @@ import { isAbsolute, join, sep } from 'node:path';
 import { SILOS, organisationTerms, type Config } from '../config.ts';
 import { git, matchingTenants, resolveContext } from '../context.ts';
 import { namesOrganisation, refusal } from '../gate.ts';
-import { addItem } from '../consolidate.ts';
+import { addItem, repeats } from '../consolidate.ts';
 import { inTransaction } from '../store/transaction.ts';
 import { insertItem, knownItem, quarantineOf, reduceTombstones, type Anchor, type NewItem } from '../items.ts';
 import { openStore } from '../store/db.ts';
@@ -324,6 +324,16 @@ export function importSilos(config: Config, data: string, configDir: string, dry
             }
           });
           continue;
+        }
+        if (shared !== undefined) {
+          // A line this store already holds adds no evidence: a shared copy must not taint your own item (#137).
+          const held = db
+            .prepare("SELECT statement FROM items WHERE tenant = ? AND status IN ('active', 'proposed') AND statement != '' AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))")
+            .all(c.tenant, c.scopeKey, c.scopeKey.split('/')[0]!) as { statement: string }[];
+          if (held.some((r) => repeats(r.statement, c.statement))) {
+            counts.alreadyKnown++;
+            continue;
+          }
         }
         if (c.sharedSupersedes !== undefined) {
           // The file names the item it replaces by its id on the sharing machine; here it is the item that line became.
