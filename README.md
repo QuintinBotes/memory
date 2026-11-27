@@ -375,10 +375,12 @@ back, and never imports the review comments other tools made.
 A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
 "...", "symbol": "path#qualified_name#kind"}`; only `gotcha`, `invariant` and
 `decision` notes are imported. A line of the rejections file arrives as a
-tombstone. An auto memory statement goes to the tenant of the repository it
-names, as `owner/repo`, when the config it came from is bound to that tenant,
-or to person scope when it is organisation-free; anything else is reported
-and not stored. Auto memory and notes carry agent trust, since a model or a
+tombstone. An auto memory statement goes to the repository it names as
+`owner/repo`. Failing that, it goes to the checkout whose project folder it
+sits in, read back from the folder's name to the checkout's origin remote.
+Either way, the config it came from must be bound to that repository's tenant.
+Failing both, it goes to person scope when it is organisation-free. Anything
+else is reported and not stored. Auto memory and notes carry agent trust, since a model or a
 tool wrote them; standards, rejections and policies carry owner trust. A
 statement with agent trust that reads as an instruction arrives quarantined
 (see below), and the report counts it.

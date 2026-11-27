@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
+
+### Fixed
+
 - Capture works without `ANTHROPIC_API_KEY`: the filter falls back to the Claude Code login through `claude -p`, with no tools, hooks, settings or saved session. Subscription users had no capture at all (#130).
 
 ## [0.9.1] - 2026-11-27

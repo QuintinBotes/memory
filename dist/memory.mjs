@@ -4976,6 +4976,27 @@ function namedRepositories(config, text5) {
   }
   return named;
 }
+function checkoutOf(project, root = sep3) {
+  const parts2 = project.split("-").slice(1);
+  const walk = (dir, rest) => {
+    if (rest.length === 0) return existsSync8(join9(dir, ".git")) ? dir : null;
+    for (let n = 1; n <= Math.min(rest.length, 8); n++) {
+      for (const name of joins(rest.slice(0, n))) {
+        const path = join9(dir, name);
+        if (!existsSync8(path) || !statSync4(path).isDirectory()) continue;
+        const found = walk(path, rest.slice(n));
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  };
+  return parts2.length === 0 ? null : walk(root, parts2);
+}
+function joins(parts2) {
+  if (parts2[0] === "") return parts2.length < 2 ? [] : joins(parts2.slice(1)).map((n) => `.${n}`);
+  if (parts2.includes("")) return [];
+  return parts2.slice(1).reduce((names, part) => names.flatMap((n) => [`${n}-${part}`, `${n}.${part}`]), [parts2[0]]);
+}
 function importSilos(config, data, configDir, dryRun, orbit = false) {
   const report = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
   const candidates = [];
@@ -5002,6 +5023,9 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     for (const project of readdirSync(projects).sort()) {
       const folder = join9(projects, project, "memory");
       if (!existsSync8(folder) || !statSync4(folder).isDirectory()) continue;
+      const checkout = checkoutOf(project);
+      const context = checkout === null ? null : resolveContext(checkout, config, dir);
+      const home = context?.tenant != null && context.repository !== null ? { repository: context.repository, tenant: context.tenant } : null;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
         const path = join9(folder, name);
         const parsed2 = read2(path, folder, markdown);
@@ -5015,8 +5039,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
           const base2 = { statement: text5, rationale: null, anchors: [], status: "proposed", trust: "agent" };
           if (named.size > 1) {
             refused(source, "it names more than one repository");
-          } else if (named.size === 1) {
-            const [repository, tenant] = [...named][0];
+          } else if (named.size === 1 || home !== null) {
+            const [repository, tenant] = named.size === 1 ? [...named][0] : [home.repository, home.tenant];
             if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
             const own = new Set((config.tenants[tenant] ?? []).map((p) => p.split("/")[0].toLowerCase()));
             const others = Object.entries(config.tenants).filter(([t]) => t !== tenant).flatMap(([, patterns]) => patterns.map((p) => p.split("/")[0].toLowerCase())).filter((o) => !own.has(o));
