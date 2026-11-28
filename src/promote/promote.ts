@@ -69,13 +69,12 @@ export const insidePath = (rel: string): string | null => {
 /**
  * The committers' names of the last 500 commits, which a line must not carry.
  * shortcut: full names only, from the last 500 commits; a shallow clone sees fewer. Upgrade to the whole history if a name slips through. */
-const committers = (top: string): string[] => [...new Set((git(top, 'log', '-n', '500', '--format=%an%n%cn') ?? '').split('\n').map((n) => n.trim()).filter((n) => n.length >= 3))];
+export const committers = (top: string): string[] => [...new Set((git(top, 'log', '-n', '500', '--format=%an%n%cn') ?? '').split('\n').map((n) => n.trim()).filter((n) => n.length >= 3))];
 
 /** Why this line must not be written to a repository file, or null. Names the kind, never the text. */
-export function lineRefusal(statement: string, top: string): string | null {
+export function lineRefusal(statement: string, top: string, names = committers(top)): string | null {
   const why = refusal(statement);
   if (why !== null) return why;
-  const names = committers(top);
   return names.some((n) => new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_])`, 'u').test(statement)) ? 'it names a committer' : null;
 }
 
@@ -135,7 +134,7 @@ const exists = (path: string): boolean => {
 };
 
 /** The path to write, or throws: a symbolic link (dangling too), or a place that resolves outside the repository, is refused. */
-function writable(top: string, rel: string): string {
+export function writable(top: string, rel: string): string {
   const clean = insidePath(rel);
   if (clean === null) throw new Error(`${rel} is outside the repository or not a place for a standards file; nothing was written`);
   const target = resolve(top, clean);

@@ -89,6 +89,18 @@ export function policy(text: string): Parsed {
   return parsed(statements);
 }
 
+/** `identity.owner_reviewer` of a Review Voice config: the GitHub login whose replies are the owner's, or null. */
+export function ownerReviewer(text: string): string | null {
+  let key = '';
+  for (const line of lines(text)) {
+    const top = /^([A-Za-z_][\w-]*):/.exec(line);
+    if (top) key = top[1]!;
+    const m = key === 'identity' ? /^\s+owner_reviewer:\s*(\S.*?)\s*(?:#.*)?$/.exec(line) : null;
+    if (m) return unquote(m[1]!) || null;
+  }
+  return null;
+}
+
 /** One JSON object per line; blank lines are skipped. */
 function jsonLines(text: string, each: (entry: Record<string, unknown>, line: number) => boolean): number[] {
   const unreadable: number[] = [];

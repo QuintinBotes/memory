@@ -1,5 +1,5 @@
 {
-  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget. With pointOfAction on in config, items anchored to code appear when an agent reads or edits that code instead. When a Bash command fails with an error a failure pattern or repair recipe names, it appears beside the error. After a Bash command passes, it links commits to the items shown, counts reverts of such commits, and with the failing-commands opt-in turns a fixed failure into a repair proposal. With the transcripts opt-in, SessionEnd records the transcript's path and PostCompact the compaction summary; the next session start turns the owner's corrections into quoted proposals. At Stop and SessionEnd it captures lessons and decisions from the session, in a detached process.",
+  "description": "Prints memory's session slice at session start, again after a compaction, and at the start of an allowed subagent: the active items this repository and config may see, within budget. With pointOfAction on in config, items anchored to code appear when an agent reads or edits that code instead. With promptRecall on, unanchored items that share the words of the owner's prompt appear beside it. When a Bash command fails with an error a failure pattern or repair recipe names, it appears beside the error. After a Bash command passes, it links commits to the items shown, counts reverts of such commits, and with the failing-commands opt-in turns a fixed failure into a repair proposal. With the transcripts opt-in, SessionEnd records the transcript's path and PostCompact the compaction summary; the next session start turns the owner's corrections into quoted proposals. At Stop and SessionEnd it captures lessons and decisions from the session, in a detached process.",
   "modules": [
     "./panel.tsx"
   ],
@@ -23,6 +23,17 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" subagent-start",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/memory.mjs\" prompt-recall",
+            "timeout": 2
           }
         ]
       }

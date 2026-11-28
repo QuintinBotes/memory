@@ -2,7 +2,7 @@ import { recheck } from '../anchors.ts';
 import { managedBy } from '../anchors/refresh.ts';
 import { withRefreshLock } from '../store/refresh-lock.ts';
 import { narrowerWins } from '../consolidate.ts';
-import type { Context, Reach } from '../context.ts';
+import { ownerOf, type Context, type Reach } from '../context.ts';
 import { allTenantItems, personItems, tenantItems, textMatches, type Visible } from '../items.ts';
 import { openStore, WRITE_BUSY_MS } from '../store/db.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
@@ -45,7 +45,7 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
         // A refresh already running elsewhere does the work; this hook goes on without waiting for it.
         if (!other) withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { managed: managedBy(data, context.repository) }));
         const named = reach !== undefined && reach !== 'all' ? reach.repository : undefined;
-        const items = reach === 'all' ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === undefined ? context.owner : named.split('/')[0]!, asOf);
+        const items = reach === 'all' ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === undefined ? context.owner : ownerOf(named), asOf);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld!), textMatches(db, terms));
       } finally {
         db.close();

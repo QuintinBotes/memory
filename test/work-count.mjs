@@ -21,9 +21,16 @@ if (process.env.FILE_LOCK_LOG) {
 
 const stats = { statements: 0, rows: 0, busyTimeouts: [] };
 
+// OPEN_LOG: each SQLite file the process reads or writes, once, so a test can name every store a command touched.
+// Needs database.location() (Node 23.11 and later); on an older Node nothing is written.
+const opened = new WeakSet();
 const prepare = DatabaseSync.prototype.prepare;
 DatabaseSync.prototype.prepare = function (...args) {
   stats.statements++;
+  if (process.env.OPEN_LOG && typeof this.location === 'function' && !opened.has(this)) {
+    opened.add(this);
+    appendFileSync(process.env.OPEN_LOG, `${this.location()}\n`);
+  }
   return prepare.apply(this, args);
 };
 const exec = DatabaseSync.prototype.exec;

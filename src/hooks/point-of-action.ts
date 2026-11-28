@@ -30,11 +30,13 @@ interface Touch {
   replaced: string[];
 }
 
-/** The hook's on switch: the capability is configured on, and the owner's consent covers the injection log. */
-export function enabled(data: string): Config | null {
+/** The hook's on switch: one of `switches` is configured on, and the owner's consent covers the injection log. */
+export function enabled(data: string, switches: ('pointOfAction' | 'promptRecall')[] = ['pointOfAction']): Config | null {
   const config = loadConfig(data);
-  return recallOn(config) && config.pointOfAction === true && covers(config, 'injections') ? config : null;
+  return recallOn(config) && switches.some((s) => config[s] === true) && covers(config, 'injections') ? config : null;
 }
+/** The switches whose items the ledger holds: a compaction treats either alike. */
+const LEDGER_SWITCHES: ('pointOfAction' | 'promptRecall')[] = ['pointOfAction', 'promptRecall'];
 
 /** The root of the repository holding `abs`, and its path there; null outside one. The deepest existing directory is asked, so a new file works. */
 function locate(abs: string): { root: string; path: string } | null {
@@ -160,9 +162,9 @@ export function pointOfAction(data: string, input: Input, log: Log): string {
   }
 }
 
-/** The PreCompact hook: the ids and statements shown at the point of action this session, at most 1,000 characters. */
+/** The PreCompact hook: the ids and statements shown at the point of action or the prompt this session, at most 1,000 characters. */
 export function preCompact(data: string, input: Input): string {
-  const config = enabled(data);
+  const config = enabled(data, LEDGER_SWITCHES);
   const session = str(input['session_id']);
   if (config === null || session === undefined) return '';
   const context = resolveContext(str(input['cwd']) ?? process.cwd(), config, currentConfigDir());
@@ -186,7 +188,7 @@ export function preCompact(data: string, input: Input): string {
 
 /** A `compact` session start: the main agent may be shown its items again. */
 export function afterCompaction(data: string, input: Input): void {
-  const config = enabled(data);
+  const config = enabled(data, LEDGER_SWITCHES);
   const session = str(input['session_id']);
   if (config === null || session === undefined) return;
   const context = resolveContext(str(input['cwd']) ?? process.cwd(), config, currentConfigDir());
@@ -194,7 +196,7 @@ export function afterCompaction(data: string, input: Input): void {
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return;
   try {
-    resetMain(db, session);
+    resetMain(db, session, str(input['agent_id']));
   } finally {
     db.close();
   }

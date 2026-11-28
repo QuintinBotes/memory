@@ -25,9 +25,12 @@ through which agents search, read, propose and give feedback. The plan is tracke
   cites code, re-checks it and expires.
 - **Isolated by tenant, failing closed.** The tenant comes from the git
   remote's owner through an allowlist you write, for example
-  `{"personal": ["your-login/*"], "acme": ["acme/*"]}`. A repository that
-  matches no tenant gets your person-scope items only, and nothing is captured
-  from it. Each Claude Code config is bound to the tenants it may open.
+  `{"personal": ["your-login/*"], "acme": ["acme/*"]}`. A pattern with no host
+  is on github.com; one that starts with a host, such as `gitlab.com/acme/*` or
+  `git.example.com/platform/*`, names that host, nested groups included. A
+  repository that matches no tenant, or whose host no pattern names, gets your
+  person-scope items only, and nothing is captured from it. Each Claude Code
+  config is bound to the tenants it may open.
 - **Advisory only.** Items are shown as cited facts inside a fence their text
   cannot close. Memory never blocks a tool call, grants a permission or skips
   a check.
@@ -76,8 +79,8 @@ memory init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind perso
 memory init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme --confirm
 ```
 
-The first command prints the plan: tenants, bindings, what is stored, where,
-and for how long. The second saves it. Changing tenants, bindings or opt-ins
+The first command prints the plan: tenants, the hosts they name, bindings,
+what is stored, where, and for how long. The second saves it. Changing tenants, bindings or opt-ins
 later makes memory inert until you confirm the new plan. A release that adds
 a kind of data keeps it off until you run `memory init` again, which lists
 what is new, and confirm; what you agreed to before keeps working.
@@ -92,6 +95,7 @@ only`, or from a terminal:
 ```bash
 memory remember --scope repository --type convention -- 'Releases are cut from the main branch only'
 memory remember --scope person --type preference -- 'Explain changes in plain English'
+memory doctor                           # why memory does or does not recall and capture here
 memory list
 memory list --repo acme/web             # that repository's items, its owner's organisation items, and person/global items learned in it
 memory list --all-repos                 # every item of the tenant bound here, and the person file
@@ -152,6 +156,27 @@ file paths, the session and agent ids, its estimated tokens and the time,
 never its text. A purge removes the lines of the items it deletes;
 `--older-than` removes lines older than its cut-off, and `--all` the file.
 
+### When memory does nothing
+
+Memory fails closed and stays quiet, so when nothing is recalled or captured
+run `memory doctor` (or `/memory:doctor` in a session) from that directory.
+It prints one line per check, each `ok`, `off` (by your choice) or `fail` with
+the command that fixes it: the Node version, the data directory and its file
+system, the installed plugin version against the marketplace's checkout, the
+consent plan and each category not yet agreed, the repository's remote and
+the tenant it resolves to, whether this Claude Code config is bound to it, an
+automation session, the hooks the plugin registers, whether the MCP server
+answers, capture (enabled, a key or `claude` on PATH, and the last run from
+`logs/capture.jsonl`), recall (on, or off after two reverts),
+`pointOfAction`, the embedder and reranker when configured, the code anchor
+provider, and how many items this repository and the person file hold, by
+status. `--json` prints one object per check with `id`, `status`, `detail`
+and `fix`.
+
+It is read only: it writes no file, opens no store but the tenant bound here
+and the person file, and never prints an item's text. It exits 1 when any
+check fails.
+
 ### Recall at the point of action
 
 Off by default. With `"pointOfAction": true` in `config.json`, a `PreToolUse`
@@ -176,6 +201,29 @@ unanchored ones and a count of the anchored. `PreCompact` prints at most 1,000
 characters of the items shown this session, and a session start after a
 compaction lets the main agent be shown its items again. Edits made through
 Bash bypass the hook; diff recall still sees them at review.
+
+### Recall at the prompt
+
+Off by default, and not yet recommended: the session lab's `prompt-decision`
+task measures it first. With `"promptRecall": true` in `config.json`, a
+`UserPromptSubmit` hook adds, as context beside the owner's prompt, the active
+items of the repository's tenant (repository and organisation scope) that
+carry no anchor and share at least two of the prompt's words. The prompt's
+words are the query, ranked by `memory_search`'s keyword ranking alone: no
+model, no network, no embeddings. Words that only make a question ("how",
+"what", "we", "here") count toward nothing. An item already in the session
+slice, or already shown to this agent in this session (at the prompt or at the
+point of action, the same ledger), is not shown again. Rows are whole, best
+first, within 120 tokens per prompt and the ledger's 600 per agent per
+session, inside the advisory fence. A prompt of fewer than four words, a slash
+command, and a session of `Explore`, `Plan` or a Review Voice agent get
+nothing; so does a prompt that clears the bar for no item, which prints zero
+bytes. If the store is busy past 250 ms, the hook prints nothing and logs a
+`skipped` line. Each item shown is logged in `logs/injections.jsonl` with
+`via: "prompt"`, so `memory eval false-recall` judges it. The prompt itself is
+never stored or logged. Person and global items are left out: the ledger that
+keeps an item to once per agent lives in the tenant's file. A compaction lets
+the main agent be shown its items again, and `PreCompact` lists them.
 
 ### Recall at a failing command
 
@@ -210,6 +258,35 @@ count a contradiction. The ledger holds the fingerprint's hash and item ids,
 never the error, and goes with an item on a purge. Shown items are logged by
 id as for point-of-action recall.
 
+### Recall in Codex
+
+Codex CLI runs the same hooks. Print the fragment and paste it into
+`~/.codex/hooks.json` (or a trusted repository's `.codex/hooks.json`), then
+trust it with `/hooks` in Codex:
+
+```bash
+memory hooks --agent codex
+```
+
+It writes nothing. It runs `session-start`, `point-of-action` (on
+`apply_patch`) and `failure-recall` (on Bash's `PostToolUse`, as Codex has no
+`PostToolUseFailure`) with `--agent codex`, and `capture` at `Stop`, by this
+bundle's absolute path: print it again after the plugin updates. With
+`--agent codex` a hook reads Codex's payload: an `apply_patch` update is read
+as an edit of each hunk's old lines (only the patch's first file), an added or
+deleted file as a Write, and a shell command that did not exit 0 as the error.
+codex-cli 0.172 sends no exit code for Bash, so its output is read as the error
+and the signature decides whether a recipe shows (once per fingerprint); as the
+command may have passed, a repeat never counts as a contradiction and no
+failing-command episode is recorded. The slice is plain stdout, which Codex adds as
+developer context; the other hooks answer with `additionalContext` and never a
+permission decision. Budgets, the fence, tenants, consent and the automation
+check are the same. Injections and the shown-once ledger name the agent
+`codex`, so a Codex session and a Claude Code session each see an item once,
+and a session start after a Codex compaction shows its items again. A payload
+the adapter does not know prints nothing and logs a `skipped` line. Codex's
+`PreCompact` cannot add context, so it is not wired.
+
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your
 Claude Code permissions.
@@ -230,7 +307,8 @@ proposals: `memory review` and `memory approve` as ever.
   runs (`passed-after:<sha>`). Its signature is one line of the failed log,
   scrubbed of credentials, emails, handles and the repository's committers'
   names, and normalised; no line fit to recall by means no proposal. A failure
-  with no later pass gives nothing.
+  with no later pass gives nothing. Off github.com, where `gh` has no runs to
+  read, it says so in one line and opens no store.
 - `memory import --orbit` proposes the same for a check Orbit's observations
   show failing and then passing. Orbit stores a fingerprint hash, not error
   text, so these are keyed by it: they are recalled only through
@@ -279,15 +357,17 @@ with an open episode, and takes the write lock only to write.
 ## Filtering by repository
 
 Every item records the repository it was learned in (`origin_repository`,
-`owner/repo`, empty when unknown). `remember`, `capture`, `memory_propose` and
+`owner/repo` on github.com, `host/group/repo` on any other host, so `acme/api`
+and `gitlab.com/acme/api` are never the same repository; empty when unknown). `remember`, `capture`, `memory_propose` and
 `memory import` fill it from the repository they ran in; a person or global
-item remembered outside a github.com checkout has none, a person or global
+item remembered outside a checkout on a host some pattern names has none, a person or global
 statement taken in by `memory import` from a silo has none (a silo names no
 repository), and items stored before schema 14 keep none, except repository
 items, which take it from their scope. An item with no origin is never reached
 by `--repo` or `purge --repo`; `--all-repos` lists it.
 
-`memory list` and `memory export --markdown` take `--repo <owner/repo>` for that
+`memory list` and `memory export --markdown` take `--repo <owner/repo>` (or
+`host/group/repo` off github.com, as do `purge --repo` and `export --to scf`) for that
 repository's items, its owner's organisation items and the person and global
 items learned in it, or `--all-repos` for everything in the tenant bound here
 plus the person file. They exclude each other; without either, behaviour is as
@@ -313,6 +393,34 @@ quarantined item is withheld, a tombstone shows its hash and type, and vectors
 are not exported. The folder is read only: nothing reads it back, and editing
 it changes nothing in memory. Export needs confirmed consent, and refuses a
 folder inside a git repository that belongs to another tenant.
+
+## Sharing a repository's items through git
+
+`memory share` writes this repository's active, unquarantined repository items
+to `.memory/shared.jsonl` in the repository, one JSON line per item: its id,
+type, statement, anchors, validity dates, the id it supersedes and its evidence
+source references. The same store gives the same bytes. Person, organisation
+and global items are never written; an item whose text redaction would change,
+that holds an email or a handle, or that names a committer of the last 500
+commits is withheld and counted by reason (`memory share --dry-run` shows the
+counts and writes nothing). It runs from a terminal, as `memory promote
+--apply` does, or with `--yes-non-interactive` under an ask rule. Nothing is
+committed or pushed: you review the file and commit it.
+
+On another machine, or a teammate's, `memory import --shared` in the same
+repository reads the file as committed at HEAD through git, never the working
+copy, so an uncommitted edit is not read. Each line becomes a proposal with
+`team` trust and the taint `shared:<owner/repo>`, which `memory review` shows;
+nothing is active or recalled until you approve it. Text that reads as an
+instruction is quarantined. A line that repeats an item you already have counts as
+already known and adds no evidence, so importing your own file leaves your
+items untainted and still promotable; a second import adds nothing, and a statement
+you rejected is not proposed again. A line that supersedes an item you took
+from an earlier version of the file arrives as a supersession proposal of it.
+`memory import --shared --dry-run` lists the file and its statement count. A
+repository of another tenant, or of none, is refused before any store is
+opened, and until you confirm the plan's `shared` category (plan version 14) the file is not
+read. No server and no network call is involved: git is the transport.
 
 ## Moving proposals to SCF and back
 
@@ -367,9 +475,11 @@ request link as the source. The store holds every repository's findings, so
 reading it is its own consent category (`decisions`, plan version 5): import
 skips it, and says why, until you run `memory init --confirm` again. Finding
 text was written by a model, so text that reads as an instruction arrives
-quarantined with agent trust. A strong dismissal a teammate made, with no owner
-row for it, arrives with team trust, and one with no `decided_by` with agent
-trust. Review Voice keeps its own precedents; memory never writes
+quarantined with agent trust. A strong dismissal with no owner row for it
+depends on who made it. If it was the checkout's owner (`identity.owner_reviewer`
+in `.review-voice/config.yaml`, for example a reply on the pull request), it
+arrives as the owner's decision. If it was anyone else, it arrives with team
+trust. One with no `decided_by` arrives with agent trust. Review Voice keeps its own precedents; memory never writes
 back, and never imports the review comments other tools made.
 
 A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
@@ -439,7 +549,8 @@ A rejected statement is kept as a tombstone and never proposed again; after
 30 days only its hash, type and scope remain. Approve and reject are terminal
 commands. To be asked before an agent runs one, add ask rules such as
 `Bash(*memory.mjs*approve*)`, `Bash(*memory.mjs*reject*)` and
-`Bash(*memory.mjs*close*)` (an agent's shell can run `memory close`).
+`Bash(*memory.mjs*close*)` (an agent's shell can run `memory close`), and
+the same for `renew` and `pin`, which keep an item from expiring.
 
 ### Orbit, both ways
 
@@ -694,17 +805,36 @@ repository that matches no tenant is skipped: no model call, nothing written.
   on only PATH, HOME, USER, TMPDIR and CLAUDE_CONFIG_DIR. With neither the key
   nor a `claude` on PATH, capture reports it and does nothing.
 - **Cost:** one call per SessionEnd and per Stop with enough new text; each
-  run's tokens go to `logs/capture.jsonl` in the data directory (never the
-  transcript). Read it to see what capture costs you.
+  run's tokens, and whether it used the key or the Claude Code login, go to
+  `logs/capture.jsonl` in the data directory (never the transcript).
+  `memory capture --cost [--since <YYYY-MM-DD>]` prints, per local day, the
+  runs, the skips by reason and the input and output tokens; it reads only that
+  log.
+- **Daily cap:** at most `maxCallsPerDay` (100) model calls and
+  `maxTokensPerDay` (2,000,000) tokens a local calendar day, counted from
+  `logs/capture.jsonl`. Past either, capture makes no call, logs a `daily cap`
+  skip and says so once per session; the transcript is not marked read, so the
+  next day's first run reads that text.
 - **Consent:** capture is a data category of the consent plan. `memory init`
   proposes it on, but a consent given before it stays off for it until you run
   `memory init` and confirm.
 - **Off:** `"capture": { "enabled": false }` in `config.json`.
+- **Not this part:** text you wrap in `<private>` and `</private>` is taken
+  out before redaction and never sent; a sentence that touches the span is
+  dropped whole. A span opened anywhere in the transcript (a tool result too)
+  hides everything up to its close.
+- **Not this session:** a session in which you wrote `DO NOT INDEX THIS CHAT`
+  is not captured at all: no model call, and each Stop and SessionEnd records
+  a `skipped` line in `logs/capture.jsonl` naming the marker. The marker counts
+  only in a message you typed, not in agent text or a tool result. Both
+  markers work for a Codex session log too.
 - **Tainted sessions:** when the transcript shows the session read a web page
   or search (`WebFetch`, `WebSearch`) or called a tool of any MCP server but
   memory's own, what capture keeps is still saved active, labelled `tainted
   by web:<host>` or `mcp:<server>` in recall and review. Imperative text from
-  such a session is quarantined as usual.
+  such a session is quarantined as usual. With `"skipTainted": true` under
+  `capture` (off by default) such a session is not captured at all: no model
+  call, and a `skipped` line in `logs/capture.jsonl` names what it read.
 - **Automation sessions:** a session started by automation (`claude -p`, the
   SDK, a GitHub Actions job) neither captures nor proposes unless the consent plan names
   them: `memory init --automation on --confirm`. See SECURITY.md for how a
@@ -715,16 +845,18 @@ repository that matches no tenant is skipped: no model call, nothing written.
   `memory capture` from the agent's own end-of-session hook with JSON on stdin
   that names `transcript_path`, `session_id` and `cwd`. A log in a format no
   adapter knows is skipped, never guessed at: the run reports it and
-  `logs/capture.jsonl` records it as `skipped`. An agent with no adapter can
+  `logs/capture.jsonl` records it as `skipped`. `memory hooks --agent codex`
+  wires it for Codex with the recall hooks (Recall in Codex). An agent with no adapter can
   still write through the MCP tools; each proposal's evidence names the client
   that wrote it (`mcp:<clientInfo name>`).
 
 ```json
-{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }
+{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5", "maxCallsPerDay": 100, "maxTokensPerDay": 2000000 } }
 ```
 
 `model` is `haiku` (the Messages API by plain `fetch`, no SDK) or `fake`, the
-deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
+deterministic filter the tests use; `apiModel` is the Claude Haiku alias;
+`skipTainted` (default `false`) is described above.
 
 ## What agents can do
 
@@ -871,6 +1003,25 @@ shown as low (below 0.4), medium or high (0.7 or more). These constants are
 provisional until the evaluation slice
 ([#8](https://github.com/QuintinBotes/memory/issues/8)) tunes them. An item
 with no reinforcement for 90 days reads as expired and leaves every recall.
+Being shown is not reinforcement, so you are told before it happens:
+
+```bash
+memory review                  # "Expiring soon": expires within 14 days, or expired in the last 30
+memory list --expired          # every active item that reads as expired
+memory renew <id>...           # its 90 days start again; support is unchanged; memory undo <audit-id> takes it back
+memory pin <id>                # never expires; memory unpin <id> takes the pin back
+memory remember --pin -- <statement>
+```
+
+`memory review --json` lists them under `expiring`, with `days_left`
+(0 or less once expired), and the band above the prompt counts them apart
+from proposals. Only an item you stated or approved can be pinned; one with
+only agent trust is refused. A pinned item still goes stale when its citation
+fails, can still be superseded, contradicted or rejected, and still counts
+against the recall budgets. No MCP tool can renew or pin, but an agent's
+shell can run the commands: add ask rules such as `Bash(*memory.mjs*renew*)`
+and `Bash(*memory.mjs*pin*)`, as for `approve`. Renew, pin and unpin are
+each recorded in the audit log.
 
 `memory report [--tenant <name>]` ranks the active items of each tenant bound to
 this Claude Code config by net score (`helped` minus `wrong` minus agents'
@@ -893,12 +1044,13 @@ each proposal's statement in quotes.
 | Session start, and after a compaction | 300 tokens |
 | Start of an allowed subagent | 300 tokens |
 | Reading or editing anchored code | 120 tokens per injection, 600 per agent per session |
+| The owner's prompt, with `promptRecall` on | 120 tokens per prompt, within the same 600 per agent per session |
 | A failing command that matches a known failure | 120 tokens |
 | A diff, at review or commit | 600 tokens |
 
 A hook with nothing to say prints nothing. The slice at session start, after
 a compaction and at a subagent's start, a diff at review, a failing
-command and, with `pointOfAction` on, reading or editing anchored code exist so far; the other
+command, with `pointOfAction` on, reading or editing anchored code and, with `promptRecall` on, the owner's prompt exist so far; the other
 moments arrive with later slices.
 
 ## Measuring memory
@@ -969,11 +1121,22 @@ never given to the agent: not in its directory, its environment or its
 plugin copy. Each run gets a temporary copy of
 the task's repository and its own empty data directory; on the on arm that
 directory is consented and holds the task's items, so no run reads or writes
-your store. The six tasks: a seeded hazard on a symbol the task must change
+your store. The seven tasks: a seeded hazard on a symbol the task must change
 (`hazard-change`) and on one it must not (`hazard-keep`), the
 [orbit#133](https://github.com/QuintinBotes/orbit/issues/133) environment
 (`failure-env`), a task long enough to compact (`compaction`), one that
-spawns a subagent (`subagent`), and a change-reach task (`change-reach`).
+spawns a subagent (`subagent`), a change-reach task (`change-reach`), and an
+unanchored decision the task depends on with a session slice too small to
+hold it (`prompt-decision`, which turns `promptRecall` on in its on arm). A
+task's `config` in `task.json` is merged into the on arm's `config.json`.
+To judge false recall over a real run's injection log, keep each run's log
+with a wrapper, since the lab removes the run's data directory:
+
+```bash
+memory eval lab --task prompt-decision --model claude-sonnet-5 \
+  --agent "node $PWD/lab/claude-agent.mjs; s=\$?; cat \"\$MEMORY_DATA_DIR/logs/injections.jsonl\" >> $PWD/lab-injections.jsonl 2>/dev/null; exit \$s"
+memory eval false-recall --log lab-injections.jsonl
+```
 
 ```bash
 # Run from a memory checkout. The agent runs in each run's copy, so its paths are absolute: $PWD expands here.

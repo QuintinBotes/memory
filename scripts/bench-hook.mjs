@@ -1,11 +1,13 @@
 /**
  * On-demand benchmark for the hook latency bar (#24): p95 at most 150 ms and p99 at most 300 ms per hook run, process
  * start included, at 10,000 items with eight writers. Not part of `npm run verify`: a wall-time bar flakes on a
- * loaded machine, so the tests assert the work done instead (test/scale.test.mjs).
+ * loaded machine, so the tests assert the work done instead (test/scale.test.mjs). prompt-recall is timed on a prompt
+ * that shares no item's words, whose bar (#136) is p95 under 100 ms.
  *
  *   node scripts/bench-hook.mjs [runs=200] [items=10000] [writers=8]
  */
 import { spawn } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { remember, run, runAsync, setup } from '../test/helpers.mjs';
 import { fillStore } from '../test/big-store.mjs';
@@ -16,6 +18,8 @@ const writerCount = Number(process.argv[4] ?? 8);
 const s = setup();
 if (remember(s.acmeApi, s.data, s.configA, 'Seed lesson one', '--scope', 'repository', '--type', 'hazard').status !== 0) throw new Error('seed failed');
 fillStore(join(s.data, 'tenants/acme.sqlite'), 'acme', 'acme/api', 'acme', items);
+const configFile = join(s.data, 'config.json');
+writeFileSync(configFile, JSON.stringify({ ...JSON.parse(readFileSync(configFile, 'utf8')), promptRecall: true }));
 
 // The writers, each proposing and giving feedback until the measurement ends.
 let stop = false;
@@ -32,6 +36,7 @@ const writers = Array.from({ length: writerCount }, (_, w) => writer(w));
 const hooks = {
   'session-start': JSON.stringify({ session_id: 's1', hook_event_name: 'SessionStart', source: 'startup', cwd: s.acmeApi }),
   'subagent-start': JSON.stringify({ session_id: 's1', hook_event_name: 'SubagentStart', agent_id: 'bench', agent_type: 'general-purpose', cwd: s.acmeApi }),
+  'prompt-recall': JSON.stringify({ session_id: 's1', hook_event_name: 'UserPromptSubmit', prompt: 'Please rename the logger module to log', cwd: s.acmeApi }),
 };
 for (const [name, input] of Object.entries(hooks)) {
   const times = [];

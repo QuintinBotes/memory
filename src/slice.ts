@@ -51,6 +51,13 @@ export function chooseSlice(items: Visible[], budget: number, anchored = 0): { t
   return { text, shown: chosen.map((j) => ranked[j]!) };
 }
 
+/** The session-start slice: with recall at the point of action on, anchored items wait for their code and are only counted. */
+export function sessionSlice(items: Visible[], budget: number, pointOfAction: boolean): { text: string; shown: Visible[] } {
+  if (!pointOfAction) return chooseSlice(items, budget);
+  const unanchored = items.filter((i) => i.anchors.length === 0);
+  return chooseSlice(unanchored, budget, items.length - unanchored.length);
+}
+
 /** Every visible item, no budget, for `memory list`. */
 export function renderAll(items: Visible[]): string {
   return items.length === 0 ? '' : compose(rank(items).map(row), 0, 0);

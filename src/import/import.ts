@@ -3,9 +3,9 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir } from 'node:os';
 import { isAbsolute, join, sep } from 'node:path';
 import { SILOS, organisationTerms, type Config } from '../config.ts';
-import { matchingTenants, resolveContext } from '../context.ts';
+import { git, matchingTenants, ownerOf, resolveContext } from '../context.ts';
 import { namesOrganisation, refusal } from '../gate.ts';
-import { addItem } from '../consolidate.ts';
+import { addItem, repeats } from '../consolidate.ts';
 import { inTransaction } from '../store/transaction.ts';
 import { insertItem, knownItem, quarantineOf, reduceTombstones, type Anchor, type NewItem } from '../items.ts';
 import { openStore } from '../store/db.ts';
@@ -14,7 +14,9 @@ import { personFile, tenantFile } from '../store/paths.ts';
 import { covers } from '../consent/plan.ts';
 import { reviewVoiceDecisions } from './review-voice.ts';
 import { orbitFindings, type OrbitFinding } from './orbit.ts';
-import { codexMemory, inside, markdown, notes, policy, rejections, symbolPath, type Parsed } from './silos.ts';
+import { codexMemory, inside, markdown, notes, ownerReviewer, policy, rejections, symbolPath, type Parsed } from './silos.ts';
+import { SHARED_FILE } from '../export/shared.ts';
+import { sharedCandidates, sharedSource } from './shared.ts';
 
 export interface ImportReport {
   dryRun: boolean;
@@ -39,7 +41,14 @@ export interface ImportReport {
 /** Where Orbit keeps a repository's lessons, relative to the checkout. */
 const ORBIT_STORE = '.orbit/knowledge.sqlite';
 
-type Candidate = NewItem & { status: 'proposed' | 'rejected'; orbit?: OrbitFinding };
+type Candidate = NewItem & { status: 'proposed' | 'rejected'; orbit?: OrbitFinding; sharedSupersedes?: string };
+
+/** The checkout `memory import --shared` reads `.memory/shared.jsonl` from, and the tenant and repository it resolved to. */
+export interface SharedCheckout {
+  top: string;
+  tenant: string;
+  repository: string;
+}
 
 /**
  * The file at `path`, read only when it is a regular file whose real path
@@ -65,7 +74,7 @@ function namedRepositories(config: Config, text: string): Map<string, string> {
   const plain = text.replace(/https?:\/\/github\.com\//gi, ' ');
   for (const m of plain.matchAll(/(?<![\w./-])([a-z0-9][a-z0-9-]*)\/([a-z0-9._-]*[a-z0-9_-])/gi)) {
     const [owner, repo] = [m[1]!.toLowerCase(), m[2]!.toLowerCase().replace(/\.git$/, '')];
-    const tenants = matchingTenants(config, owner, repo);
+    const tenants = matchingTenants(config, `${owner}/${repo}`);
     if (tenants.length === 1) named.set(`${owner}/${repo}`, tenants[0]!);
   }
   return named;
@@ -105,7 +114,7 @@ function joins(parts: string[]): string[] {
   return parts.slice(1).reduce((names, part) => names.flatMap((n) => [`${n}-${part}`, `${n}.${part}`]), [parts[0]!]);
 }
 
-export function importSilos(config: Config, data: string, configDir: string, dryRun: boolean, orbit = false): ImportReport {
+export function importSilos(config: Config, data: string, configDir: string, dryRun: boolean, orbit = false, shared?: SharedCheckout): ImportReport {
   const report: ImportReport = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
   const candidates: Candidate[] = [];
   const terms = organisationTerms(config, null);
@@ -150,10 +159,12 @@ export function importSilos(config: Config, data: string, configDir: string, dry
       // A named repository wins; otherwise the checkout whose memory this is (#134).
       const [repository, tenant] = named.size === 1 ? [...named][0]! : [home!.repository, home!.tenant];
       if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and ${unbound}`)) return;
-      const own = new Set((config.tenants[tenant] ?? []).map((p) => p.split('/')[0]!.toLowerCase()));
+      // A pattern's groups, without its host: `acme` of `acme/*`, `acme` and `platform` of `gitlab.com/acme/platform/*`.
+      const groups = (p: string): string[] => p.toLowerCase().split('/').slice(p.split('/').length > 2 ? 1 : 0, -1);
+      const own = new Set((config.tenants[tenant] ?? []).flatMap(groups));
       const others = Object.entries(config.tenants)
         .filter(([t]) => t !== tenant)
-        .flatMap(([, patterns]) => patterns.map((p) => p.split('/')[0]!.toLowerCase()))
+        .flatMap(([, patterns]) => patterns.flatMap(groups))
         .filter((o) => !own.has(o));
       if (refused(source, namesOrganisation(text, others) ? 'it also names an owner of another tenant' : null)) return;
       candidates.push({ ...base, tenant, scope: 'repository', scopeKey: repository, type: 'convention', source: stored });
@@ -166,7 +177,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   };
 
   // Auto memory: written by a model with no approval step, so agent trust.
-  for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
+  for (const dir of orbit || shared !== undefined ? [] : Object.keys(config.configs).sort()) {
     const projects = join(dir, 'projects');
     if (!existsSync(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
@@ -253,7 +264,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
   // Repository silos, in the tenant the checkout resolves to. Standards, rejections and policies
   // carry owner trust; a notes file carries agent trust, because tools write it.
   const parsers = { rejections, standards: markdown, policy, notes } as const;
-  for (const [checkout, silos] of Object.entries(config.imports ?? {}).sort()) {
+  for (const [checkout, silos] of Object.entries(shared !== undefined ? {} : (config.imports ?? {})).sort()) {
     const context = resolveContext(checkout, config, configDir);
     if (orbit) {
       readOrbit(checkout, silos.orbit ?? ORBIT_STORE, context);
@@ -277,7 +288,8 @@ export function importSilos(config: Config, data: string, configDir: string, dry
           report.skippedFiles.push({ path, reason: 'your consent does not cover reading a Review Voice store yet; run memory init and confirm' });
           continue;
         }
-        const found = reviewVoiceDecisions(path);
+        const rvConfig = join(checkout, '.review-voice', 'config.yaml');
+        const found = reviewVoiceDecisions(path, existsSync(rvConfig) ? ownerReviewer(readFileSync(rvConfig, 'utf8')) : null);
         if ('reason' in found) {
           report.skippedFiles.push({ path, reason: found.reason });
           continue;
@@ -312,6 +324,20 @@ export function importSilos(config: Config, data: string, configDir: string, dry
     }
   }
 
+  // The file as committed at HEAD, never the working copy: an uncommitted edit is not read (#137).
+  if (shared !== undefined) {
+    const path = `${SHARED_FILE} at HEAD`;
+    const text = covers(config, 'shared') ? git(shared.top, 'show', `HEAD:${SHARED_FILE}`) : undefined;
+    if (text === undefined) report.skippedFiles.push({ path, reason: 'your consent does not cover reading .memory/shared.jsonl yet; run memory init and confirm' });
+    else if (text === null) report.skippedFiles.push({ path, reason: 'not committed at HEAD' });
+    else {
+      const found = sharedCandidates(text, shared.tenant, shared.repository);
+      report.files.push({ path, statements: found.statements });
+      report.refused.push(...found.refused);
+      candidates.push(...found.candidates);
+    }
+  }
+
   if (dryRun) return report;
   const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0, merged: 0, supersessions: 0 };
   // Tombstones first, so a statement rejected in one silo is not proposed from another.
@@ -343,6 +369,21 @@ export function importSilos(config: Config, data: string, configDir: string, dry
           });
           continue;
         }
+        if (shared !== undefined) {
+          // A line this store already holds adds no evidence: a shared copy must not taint your own item (#137).
+          const held = db
+            .prepare("SELECT statement FROM items WHERE tenant = ? AND status IN ('active', 'proposed') AND statement != '' AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))")
+            .all(c.tenant, c.scopeKey, ownerOf(c.scopeKey)) as { statement: string }[];
+          if (held.some((r) => repeats(r.statement, c.statement))) {
+            counts.alreadyKnown++;
+            continue;
+          }
+        }
+        if (c.sharedSupersedes !== undefined) {
+          // The file names the item it replaces by its id on the sharing machine; here it is the item that line became.
+          const older = db.prepare("SELECT i.id FROM items i JOIN evidence e ON e.item_id = i.id WHERE e.source_ref = ? AND i.tenant = ? AND i.status = 'active'").get(sharedSource(c.sharedSupersedes), c.tenant) as { id: string } | undefined;
+          if (older !== undefined) c.supersedes = older.id;
+        }
         const stored = addItem(db, c);
         if (c.orbit !== undefined && stored.kind !== 'rejected') keepOrbit(db, stored.id, c.orbit);
         if (stored.kind === 'rejected') counts.rejectedBefore++;
@@ -350,7 +391,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
         else if (stored.kind === 'merged') counts.merged++;
         else {
           if (stored.kind === 'inserted') added.proposed++;
-          if (stored.kind === 'inserted' && stored.supersedes !== undefined) counts.supersessions++;
+          if (stored.kind === 'inserted' && (stored.supersedes ?? c.supersedes) !== undefined) counts.supersessions++;
           if (quarantineOf(c) !== null) counts.quarantined++;
         }
       }
