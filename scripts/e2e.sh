@@ -50,4 +50,15 @@ node "$CLI" review --json | node -e '
   const p = proposals.find((x) => x.statement === "Ledger amounts are integers in cents");
   if (!p || !p.evidence.some((e) => e.agent)) { console.error("FAIL SC3 proposal missing or names no agent: " + JSON.stringify(proposals)); process.exit(1); }
 '
+echo "== #136 recall at the prompt: an unanchored decision outside the slice reaches the prompt that asks about it"
+DECISION='Releases are cut by tagging vX.Y.Z on main; the publish workflow builds and uploads the rest'
+RID=$(node "$CLI" remember --type decision -- "$DECISION" | grep -o 'm-[0-9a-f]*' | head -1)
+[ -n "$RID" ] || fail "remember printed no id for the decision"
+node -e 'const f = process.argv[1], fs = require("fs"); fs.writeFileSync(f, JSON.stringify({ ...JSON.parse(fs.readFileSync(f, "utf8")), promptRecall: true, sessionBudget: 0 }))' "$MEMORY_DATA_DIR/config.json"
+out=$(ask "Without using any tools: how do we cut a release here? Then print the id of every memory item you were given, or NONE." Read)
+grep -q "$RID" <<< "$out" || fail "#136 $RID not shown at the prompt: $out"
+grep -q "\"via\":\"prompt\".*\"item\":\"$RID\"\|\"item\":\"$RID\".*\"via\":\"prompt\"" "$MEMORY_DATA_DIR/logs/injections.jsonl" || fail "#136 no injected line with via prompt"
+grep -q "how do we cut" -r "$MEMORY_DATA_DIR" && fail "#136 the prompt was written to the data directory"
+out=$(ask "Without using any tools: what is the capital of France? Then print the id of every memory item you were given, or NONE." Read)
+grep -q "$RID" <<< "$out" && fail "#136 an unrelated prompt was shown $RID: $out"
 echo "PASS end to end"

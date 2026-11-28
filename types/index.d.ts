@@ -16,6 +16,8 @@ declare module 'claude-code' {
       problem: string;
       /** The proposal a decision is running for, so a second press does nothing. */
       busy: string;
+      /** How many items `memory review --json` listed as expiring soon (#142). */
+      expiring: number;
     };
   }
 }

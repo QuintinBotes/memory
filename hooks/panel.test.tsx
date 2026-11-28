@@ -52,6 +52,25 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
+test('#142 the band counts items expiring soon apart from proposals, and shows with no proposal waiting', async ($, on) => {
+  on('command.register', () => ({ value: { command: 'memory-review' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const soon = { id: 'm-cccc', scope: 'person', scope_key: '', type: 'preference', statement: 'Explain changes in plain English', days_left: 10 }
+  let waiting = [proposal('m-aaaa')]
+  on('process.run', () => ({ value: { exitCode: 0, stdout: JSON.stringify({ proposals: waiting, edits: [], expiring: [soon] }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run(OPEN)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await band.find({ type: 'Text', text: /expiring/ }))?.text).toContain('1 proposal waiting · 1 expiring soon')
+  await band.unmount()
+  waiting = []
+  await $.command.run(OPEN)
+  const alone = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await alone.find({ type: 'Text', text: /expiring/ }))?.text).toContain('memory · 1 expiring soon')
+  await alone.unmount()
+})
+
 test('#104 SC3 Reject in the pane runs memory reject on that proposal only', async ($, on) => {
   const calls = cli(on, [proposal('m-aaaa'), proposal('m-bbbb')])
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
