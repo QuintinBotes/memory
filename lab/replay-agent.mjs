@@ -8,7 +8,8 @@
  * A transcript is one JSON object per line, in the shapes Claude Code writes:
  *
  *   - session records, `{"type": "attachment", "attachment": {"type": "hook_success", "hookEvent": ..., "command": ...,
- *     "durationMs": ...}}`, as in the session transcript Claude Code keeps, are appended to $MEMORY_LAB_OUT/session.jsonl;
+ *     "durationMs": ...}}` and `{"type": "system", "subtype": "stop_hook_summary", "hookInfos": [{"command": ...,
+ *     "durationMs": ...}]}`, as in the session transcript Claude Code keeps, are appended to $MEMORY_LAB_OUT/session.jsonl;
  *   - every other line is a `--output-format stream-json` event, printed to stdout as Claude Code prints it. In an
  *     `assistant` event, each `Write` (`file_path`, `content`) and `Edit` (`file_path`, `old_string`, `new_string`,
  *     `replace_all`) tool call is applied to the working directory; other tools are printed and not run.
@@ -40,7 +41,7 @@ const inside = (path) => {
 };
 
 for (const line of lines) {
-  if (line.type === 'attachment') {
+  if (line.type === 'attachment' || line.subtype === 'stop_hook_summary') {
     appendFileSync(join(out, 'session.jsonl'), `${JSON.stringify(line)}\n`);
     continue;
   }

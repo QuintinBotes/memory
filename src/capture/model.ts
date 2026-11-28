@@ -10,10 +10,11 @@ export interface Candidate {
   evidence: string;
 }
 
-/** `usage` is set by `extract` when the model reports tokens, for the cost log. */
+/** `usage` is set by `extract` when the model reports tokens, and `via` how the call was paid for, for the cost log. */
 export interface FilterModel {
   extract(transcriptText: string): Promise<Candidate[]>;
   usage?: { input: number; output: number };
+  via?: 'api' | 'login' | 'fake';
 }
 
 const PROMPT = `You read a redacted coding-session transcript. Each line is "L<number> <role>: <text>".
@@ -47,6 +48,7 @@ export function haiku(apiModel: string, env: NodeJS.ProcessEnv = process.env): F
     async extract(text) {
       const key = env['ANTHROPIC_API_KEY'];
       if (key === undefined || key === '') return viaCli(model, apiModel, text, env);
+      model.via = 'api';
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -82,6 +84,7 @@ function viaCli(model: FilterModel, apiModel: string, text: string, env: NodeJS.
   const u = body.usage ?? {};
   // The CLI caches the system prompt, so most input is reported in the cache fields.
   model.usage = { input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), output: u.output_tokens ?? 0 };
+  model.via = 'login';
   return parseCandidates(body.result);
 }
 
@@ -90,6 +93,7 @@ export function fake(): FilterModel {
   const model: FilterModel = {
     async extract(text) {
       model.usage = { input: Math.ceil(text.length / 4), output: 0 };
+      model.via = 'fake';
       return [...text.matchAll(/^L(\d+) \w+: (LESSON|DECISION): (.+)$/gm)].map((m) => ({
         kind: m[2] === 'LESSON' ? 'lesson' : 'decision',
         statement: m[3]!,

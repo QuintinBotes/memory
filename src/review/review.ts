@@ -4,9 +4,11 @@ import { ownerOf, type Context } from '../context.ts';
 import { embedAfterWrite } from '../embed/vectors.ts';
 import { Refusal, refusal } from '../gate.ts';
 import { taintList, type Scope } from '../items.ts';
+import { EXPIRY_DAYS } from '../recall/rank.ts';
 import { safe } from '../render/rows.ts';
 import { applySupersession } from '../consolidate.ts';
 import { recordAudit } from '../store/audit.ts';
+import { inTransaction } from '../store/transaction.ts';
 import { openStore } from '../store/db.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
 
@@ -202,6 +204,84 @@ export async function decideById(
 
 /** Whether `p` is an active item whose only question is whether it replaces an older one. */
 export const isPendingSupersession = (p: Proposal): boolean => p.status === 'active' && p.stale_reports === 0 && p.older !== null;
+
+/** An active, unpinned item near or past its expiry, for the owner (#142). `days_left` is 0 or less once it has expired. */
+export interface Expiring {
+  id: string;
+  scope: string;
+  scope_key: string;
+  type: string;
+  statement: string;
+  days_left: number;
+}
+
+/** Days until an item reads as expired, as SQL on `items`: negative once it has. */
+const LEFT = `${EXPIRY_DAYS} - (julianday('now') - julianday(coalesce(reinforced_at, valid_from)))`;
+
+/**
+ * The active, unpinned items of `tenant` in one store that expire within 14 days or expired in the last 30, soonest
+ * first; with `expired`, every one that has expired.
+ */
+export function expiring(db: DatabaseSync, tenant: string, expired = false): Expiring[] {
+  const rows = db
+    .prepare(
+      `SELECT id, scope, scope_key, type, statement, ${LEFT} AS left FROM items
+       WHERE tenant = ? AND status = 'active' AND valid_to IS NULL AND pinned_at IS NULL AND ${LEFT} ${expired ? '< 0' : 'BETWEEN -30 AND 14'}
+       ORDER BY left, id`,
+    )
+    .all(tenant) as unknown as (Omit<Expiring, 'days_left'> & { left: number })[];
+  // + 0 turns the -0 of an item expired less than a day ago into 0.
+  return rows.map(({ left, ...r }) => ({ ...r, days_left: Math.ceil(left) + 0 }));
+}
+
+const days = (n: number): string => `${n} day${n === 1 ? '' : 's'}`;
+
+export function renderExpiring(list: Expiring[]): string {
+  return list
+    .map((e) => {
+      const when = e.days_left > 0 ? `${days(e.days_left)} left` : e.days_left === 0 ? 'expired today' : `expired ${days(-e.days_left)} ago`;
+      return `${safe(`- [${e.id}] ${e.type}, ${e.scope_key === '' ? e.scope : `${e.scope} ${e.scope_key}`}: ${JSON.stringify(safe(e.statement))}, ${when}`)}\n`;
+    })
+    .join('');
+}
+
+const ACTIVE = "id = ? AND status = 'active' AND valid_to IS NULL";
+
+/**
+ * The owner's `memory renew`: resets an active item's reinforcement date, so expiry counts from now. Support is
+ * unchanged. Returns the audit id `memory undo` takes, or null when no active item has that id here.
+ */
+export function renew(db: DatabaseSync, id: string): string | null {
+  return inTransaction(db, () => {
+    const row = db.prepare(`SELECT reinforced_at FROM items WHERE ${ACTIVE}`).get(id) as { reinforced_at: string | null } | undefined;
+    if (row === undefined) return null;
+    const at = new Date().toISOString();
+    db.prepare('UPDATE items SET reinforced_at = ? WHERE id = ?').run(at, id);
+    return recordAudit(db, 'item_renewed', { type: 'item', id }, { was: row.reinforced_at, at });
+  });
+}
+
+/**
+ * The owner's `memory pin` and `unpin`: a pinned item never reads as expired, and nothing else about it changes. Only an
+ * item the owner stated (owner evidence) or approved can be pinned; otherwise its trust is returned, for the refusal.
+ */
+export function setPin(db: DatabaseSync, id: string, pin: boolean): 'done' | 'already' | 'missing' | { trust: string } {
+  return inTransaction(db, () => {
+    const row = db
+      .prepare(
+        `SELECT pinned_at, origin_trust, EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id AND e.author_role = 'owner')
+           OR EXISTS (SELECT 1 FROM audit_events a WHERE a.subject_id = items.id AND a.action = 'proposal_approved') AS owned
+         FROM items WHERE ${ACTIVE}`,
+      )
+      .get(id) as { pinned_at: string | null; origin_trust: string; owned: number } | undefined;
+    if (row === undefined) return 'missing';
+    if ((row.pinned_at !== null) === pin) return 'already';
+    if (pin && row.owned === 0) return { trust: row.origin_trust };
+    db.prepare('UPDATE items SET pinned_at = ? WHERE id = ?').run(pin ? new Date().toISOString() : null, id);
+    recordAudit(db, pin ? 'item_pinned' : 'item_unpinned', { type: 'item', id });
+    return 'done';
+  });
+}
 
 /** The owner declined to replace the older item: both stay active, and the link is dropped. */
 export function declineSupersession(db: DatabaseSync, p: Proposal): void {

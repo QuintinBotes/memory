@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,8 @@ import { row, type Measure, type Row } from './scorecard.ts';
  * The session lab (#6): fixture tasks run by an agent command, memory's plugin off and on, three runs per arm, each
  * graded by hidden tests. Each task is a directory of `lab/tasks`:
  *
- *   task.json   {"about": "...", "prompt": "...", "memory": [{"scope", "type", "statement", "anchor"?}]}
+ *   task.json   {"about": "...", "prompt": "...", "memory": [{"scope", "type", "statement", "anchor"?}], "config"?: {...}}
+ *               (`config` is merged into the on arm's config.json, to turn a switch on or shrink a budget)
  *   repo/       the fixture repository, copied to a temporary directory for every run
  *   hidden/     *.test.mjs, run with node --test after the agent exits, with LAB_REPO naming the run's copy
  *
@@ -35,6 +36,7 @@ const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_
 interface Task {
   prompt: string;
   memory: { scope: string; type: string; statement: string; anchor?: string }[];
+  config?: Record<string, unknown>;
 }
 
 interface Run {
@@ -72,6 +74,10 @@ function seed(task: string, t: Task, repo: string, data: string): void {
   const memory = (args: string[]) =>
     check(`seed ${task}'s memory`, spawnSync(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: 'utf8' }));
   memory(['init', '--tenant', 'lab=acme/*', '--bind', 'lab', '--confirm']);
+  if (t.config !== undefined) {
+    const path = join(data, 'config.json');
+    writeFileSync(path, JSON.stringify({ ...(JSON.parse(readFileSync(path, 'utf8')) as object), ...t.config }));
+  }
   for (const m of t.memory) memory(['remember', '--scope', m.scope, '--type', m.type, ...(m.anchor === undefined ? [] : ['--anchor', m.anchor]), '--', m.statement]);
 }
 
@@ -129,11 +135,16 @@ function runOnce(task: string, t: Task, arm: 'off' | 'on', n: number, agent: str
     passed: grade?.status === 0,
     usage: agentFailed ? null : usage(jsonLines(r.stdout ?? '')),
     // Memory's own hooks only: Claude Code times every hook the session ran.
+    // Claude Code writes `hook_success` attachments for hooks that print something, and one `stop_hook_summary` record
+    // per Stop with every Stop hook's command and duration; a hook that prints nothing is not timed anywhere.
     hooks: readLines(join(out, 'session.jsonl')).flatMap((e) => {
       const a = e.attachment as Record<string, unknown> | undefined;
-      return typeof a?.hookEvent === 'string' && typeof a.durationMs === 'number' && String(a.command ?? '').includes('memory.mjs')
-        ? [{ event: a.hookEvent, ms: a.durationMs }]
-        : [];
+      const timed: Record<string, unknown>[] = e.subtype === 'stop_hook_summary'
+        ? (Array.isArray(e.hookInfos) ? (e.hookInfos as Record<string, unknown>[]) : []).map((h) => ({ ...h, hookEvent: 'Stop' }))
+        : a ? [a] : [];
+      return timed.flatMap((h) => typeof h.hookEvent === 'string' && typeof h.durationMs === 'number' && String(h.command ?? '').includes('memory.mjs')
+        ? [{ event: h.hookEvent, ms: h.durationMs }]
+        : []);
     }),
     injected: { items: injected.length, tokens: injected.reduce((s, e) => s + num(e.tokens), 0) },
   };

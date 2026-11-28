@@ -174,12 +174,16 @@ export function undo(db: DatabaseSync, auditId: string): string | false {
   const e = db.prepare('SELECT action, subject_id, metadata_json FROM audit_events WHERE audit_id = ?').get(auditId) as
     | { action: string; subject_id: string; metadata_json: string }
     | undefined;
-  if (e === undefined || (e.action !== 'evidence_merged' && e.action !== 'supersession_applied')) return false;
+  if (e === undefined || (e.action !== 'evidence_merged' && e.action !== 'supersession_applied' && e.action !== 'item_renewed')) return false;
   const m = JSON.parse(e.metadata_json) as Record<string, unknown>;
   db.exec('BEGIN IMMEDIATE');
   try {
     let what: string | false;
-    if (e.action === 'evidence_merged') {
+    if (e.action === 'item_renewed') {
+      // Only while nothing has reinforced it since, so an undo never takes back a later approval or helped report.
+      const back = db.prepare('UPDATE items SET reinforced_at = ? WHERE id = ? AND reinforced_at = ?').run(m['was'] as string | null, e.subject_id, m['at'] as string);
+      what = back.changes === 1 ? `${e.subject_id} has its reinforcement date before the renew again` : false;
+    } else if (e.action === 'evidence_merged') {
       const gone = db.prepare('DELETE FROM evidence WHERE id = ? AND item_id = ?').run(m['evidenceId'] as string, e.subject_id);
       if (gone.changes === 1) db.prepare('UPDATE items SET support = support - ? WHERE id = ?').run(m['supportDelta'] as number, e.subject_id);
       what = gone.changes === 1 ? `removed the merged evidence from ${e.subject_id}` : false;

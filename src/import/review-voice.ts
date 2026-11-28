@@ -53,10 +53,10 @@ const OWNER_STATEMENTS: Record<string, (text: string, replacement: string | null
 };
 
 /**
- * Every owner decision in the store at `path`, then each strong dismissal someone else made that no owner row covers,
- * with team trust. A store of another shape reads as the reason it cannot be read.
+ * Every owner decision in the store at `path`, then each strong dismissal no owner row covers: the `owner` login's
+ * (the checkout's `identity.owner_reviewer`) as the owner's, anyone else's with team trust. A store of another shape reads as the reason it cannot be read.
  */
-export function reviewVoiceDecisions(path: string): { decisions: Decision[]; unreadable: string[] } | { reason: string } {
+export function reviewVoiceDecisions(path: string, owner: string | null = null): { decisions: Decision[]; unreadable: string[] } | { reason: string } {
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(path, { readOnly: true });
@@ -115,7 +115,10 @@ export function reviewVoiceDecisions(path: string): { decisions: Decision[]; unr
       if (statement !== undefined) add(f.review_run_id, f.finding_id, 'owner', (text) => statement(text, f.replacement_text?.trim() || null));
     }
     for (const o of outcomes) {
-      if (!decided.has(`${o.review_run_id}\n${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? 'agent' : 'team', (text) => `Declined in review by ${o.decided_by == null ? 'someone unnamed' : 'a team member'}: ${text}`);
+      if (decided.has(`${o.review_run_id}\n${o.finding_id}`)) continue;
+      // A reply on the pull request is how an owner turns down a finding the Action posted (#132).
+      if (owner !== null && o.decided_by?.toLowerCase() === owner.toLowerCase()) add(o.review_run_id, o.finding_id, 'owner', (text) => `Owner declined this finding: ${text}`);
+      else add(o.review_run_id, o.finding_id, o.decided_by == null ? 'agent' : 'team', (text) => `Declined in review by ${o.decided_by == null ? 'someone unnamed' : 'a team member'}: ${text}`);
     }
     return { decisions, unreadable };
   } catch (error) {

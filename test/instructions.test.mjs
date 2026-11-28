@@ -314,7 +314,7 @@ test('40.9 a v9 store upgrades to v10, and a v8 store goes 8 to 9 to 10, with bo
     db.close();
     assert.match(run(['list'], { cwd: s.repo, data: s.data, config: s.configA }).stdout, /shared logger/);
     const after = new DatabaseSync(file, { readOnly: true });
-    assert.equal(after.prepare('PRAGMA user_version').get().user_version, 18, `from ${from}`);
+    assert.equal(after.prepare('PRAGMA user_version').get().user_version, 19, `from ${from}`);
     assert.deepEqual(tables(after), ['instruction_edits', 'item_anchors'], `from ${from}`);
     after.close();
   }
