@@ -6,7 +6,8 @@ import { isAbsolute, join, resolve } from 'node:path';
 /**
  * Memory's one configuration file, machine-wide, in the data directory.
  *
- * `tenants` maps a tenant name to GitHub `owner/*` or `owner/repo` patterns.
+ * `tenants` maps a tenant name to `owner/*` or `owner/repo` patterns, on github.com unless they start with a host
+ * (`gitlab.com/acme/*`).
  * `configs` binds a Claude Code config directory to the tenants it may open.
  * `consent` holds the hash of the plan the owner confirmed; any change to
  * tenants, bindings or opt-ins changes the hash, and memory is inert until the
@@ -120,7 +121,8 @@ export function scfUrl(text: string): URL | string {
 export const scfEndpoint = (u: URL): string => `${u.origin}${u.pathname.replace(/\/$/, '')}`;
 
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
-export const TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
+/** `owner/*` or `owner/repo` on github.com, or a host holding a dot, then groups, then `*` or a repository: `gitlab.com/acme/platform/*`. */
+export const TENANT_PATTERN = /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[a-z0-9_][a-z0-9_.-]*)+|[a-z0-9][a-z0-9-]*)\/(?:\*|[a-z0-9_.-]+)$/i;
 
 export class ConfigError extends Error {}
 

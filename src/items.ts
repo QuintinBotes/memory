@@ -5,6 +5,7 @@ import { visibleText } from './codefree.ts';
 import { EXPIRY_DAYS, READS_EXPIRED } from './recall/rank.ts';
 import { recordAudit } from './store/audit.ts';
 import { inTransaction } from './store/transaction.ts';
+import { ownerOf } from './context.ts';
 
 export const SCOPES = ['repository', 'organisation', 'person', 'global'] as const;
 export const TYPES = ['preference', 'convention', 'decision', 'hazard', 'precedent', 'failure-pattern', 'repair-recipe', 'open_question', 'toolset'] as const;
@@ -304,8 +305,11 @@ export function knownItem(db: DatabaseSync, c: Pick<NewItem, 'tenant' | 'stateme
          AND (status IN ('rejected', 'expired') OR tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
        ORDER BY status = 'rejected' DESC LIMIT 1`,
     )
-    .get(c.tenant, statementKey(c.statement), c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as { id: string; status: string } | undefined;
+    .get(c.tenant, statementKey(c.statement), c.scope, c.scopeKey, organisationKey(c)) as { id: string; status: string } | undefined;
 }
+
+/** The organisation key whose items cover an item of this scope: a repository's owner, else the key itself. */
+export const organisationKey = (c: Pick<NewItem, 'scope' | 'scopeKey'>): string => (c.scope === 'repository' ? ownerOf(c.scopeKey) : c.scopeKey);
 
 /** How long a rejected or expired item keeps its text, in days. */
 const TOMBSTONE_DAYS = 30;

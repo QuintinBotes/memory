@@ -25,9 +25,12 @@ through which agents search, read, propose and give feedback. The plan is tracke
   cites code, re-checks it and expires.
 - **Isolated by tenant, failing closed.** The tenant comes from the git
   remote's owner through an allowlist you write, for example
-  `{"personal": ["your-login/*"], "acme": ["acme/*"]}`. A repository that
-  matches no tenant gets your person-scope items only, and nothing is captured
-  from it. Each Claude Code config is bound to the tenants it may open.
+  `{"personal": ["your-login/*"], "acme": ["acme/*"]}`. A pattern with no host
+  is on github.com; one that starts with a host, such as `gitlab.com/acme/*` or
+  `git.example.com/platform/*`, names that host, nested groups included. A
+  repository that matches no tenant, or whose host no pattern names, gets your
+  person-scope items only, and nothing is captured from it. Each Claude Code
+  config is bound to the tenants it may open.
 - **Advisory only.** Items are shown as cited facts inside a fence their text
   cannot close. Memory never blocks a tool call, grants a permission or skips
   a check.
@@ -76,8 +79,8 @@ memory init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind perso
 memory init --tenant 'personal=your-login/*' --tenant 'acme=acme/*' --bind personal,acme --confirm
 ```
 
-The first command prints the plan: tenants, bindings, what is stored, where,
-and for how long. The second saves it. Changing tenants, bindings or opt-ins
+The first command prints the plan: tenants, the hosts they name, bindings,
+what is stored, where, and for how long. The second saves it. Changing tenants, bindings or opt-ins
 later makes memory inert until you confirm the new plan. A release that adds
 a kind of data keeps it off until you run `memory init` again, which lists
 what is new, and confirm; what you agreed to before keeps working.
@@ -304,7 +307,8 @@ proposals: `memory review` and `memory approve` as ever.
   runs (`passed-after:<sha>`). Its signature is one line of the failed log,
   scrubbed of credentials, emails, handles and the repository's committers'
   names, and normalised; no line fit to recall by means no proposal. A failure
-  with no later pass gives nothing.
+  with no later pass gives nothing. Off github.com, where `gh` has no runs to
+  read, it says so in one line and opens no store.
 - `memory import --orbit` proposes the same for a check Orbit's observations
   show failing and then passing. Orbit stores a fingerprint hash, not error
   text, so these are keyed by it: they are recalled only through
@@ -353,15 +357,17 @@ with an open episode, and takes the write lock only to write.
 ## Filtering by repository
 
 Every item records the repository it was learned in (`origin_repository`,
-`owner/repo`, empty when unknown). `remember`, `capture`, `memory_propose` and
+`owner/repo` on github.com, `host/group/repo` on any other host, so `acme/api`
+and `gitlab.com/acme/api` are never the same repository; empty when unknown). `remember`, `capture`, `memory_propose` and
 `memory import` fill it from the repository they ran in; a person or global
-item remembered outside a github.com checkout has none, a person or global
+item remembered outside a checkout on a host some pattern names has none, a person or global
 statement taken in by `memory import` from a silo has none (a silo names no
 repository), and items stored before schema 14 keep none, except repository
 items, which take it from their scope. An item with no origin is never reached
 by `--repo` or `purge --repo`; `--all-repos` lists it.
 
-`memory list` and `memory export --markdown` take `--repo <owner/repo>` for that
+`memory list` and `memory export --markdown` take `--repo <owner/repo>` (or
+`host/group/repo` off github.com, as do `purge --repo` and `export --to scf`) for that
 repository's items, its owner's organisation items and the person and global
 items learned in it, or `--all-repos` for everything in the tenant bound here
 plus the person file. They exclude each other; without either, behaviour is as

@@ -51,7 +51,7 @@ test('a config not bound to the tenant fails the binding line; no remote is off,
   assert.equal(fixOf(b.stdout, 'binding'), 'memory init --bind beta,acme --confirm');
   const n = doctor(s, s.noRemote);
   assert.equal(n.status, 0, n.stdout);
-  assert.match(line(n.stdout, 'tenant'), /^off .*no github\.com origin remote here/);
+  assert.match(line(n.stdout, 'tenant'), /^off .*no origin remote here that names a repository/);
 });
 
 test('SC3: a consent one plan version behind names each category not yet agreed and memory init --confirm', () => {

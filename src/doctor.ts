@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { automationReason } from './automation.ts';
 import { ConfigError, TENANT_NAME, captureSettings, consented, configPath, emptyConfig, loadConfig, type Config } from './config.ts';
 import { PLAN_VERSION, uncovered } from './consent/plan.ts';
-import { git, matchingTenants, resolveContext } from './context.ts';
+import { git, matchingTenants, ownerOf, resolveContext } from './context.ts';
 import { PERSON_SCOPE, TENANT_SCOPE } from './items.ts';
 import { READS_EXPIRED } from './recall/rank.ts';
 import { networkFilesystem } from './store/filesystem.ts';
@@ -197,13 +197,14 @@ export async function doctor(data: string, cwd: string, configDir: string, env: 
   const url = git(cwd, 'config', '--get', 'remote.origin.url')?.trim();
   if (context.repository === null) checks.push(off('tenant', `${context.reason}; only the person file applies`));
   else {
-    const [owner, repo] = context.repository.split('/') as [string, string];
-    const tenants = matchingTenants(c, owner, repo);
+    const group = ownerOf(context.repository);
+    const owner = group.split('/').at(-1)!;
+    const tenants = matchingTenants(c, context.repository);
     const bound = c.configs[configDir] ?? [];
     if (tenants.length === 0) {
       // init refuses "person" and a name over 40 characters; an existing tenant of that name keeps its patterns.
       const name = TENANT_NAME.test(owner) && owner !== 'person' ? owner : 'work';
-      const patterns = [...(c.tenants[name] ?? []), `${owner}/*`].join(',');
+      const patterns = [...(c.tenants[name] ?? []), `${group}/*`].join(',');
       checks.push(fail('tenant', `${context.repository} (remote ${url}) matches no tenant`, `memory init --tenant ${name}=${patterns} --bind ${[...new Set([...bound, name])].join(',')} --confirm`));
     } else if (tenants.length > 1) checks.push(fail('tenant', `${context.repository} matches tenants ${tenants.join(', ')}`, `keep ${context.repository} in one tenant's patterns in ${configPath(data)}`));
     else checks.push(ok('tenant', `${context.repository} is tenant ${tenants[0]}`));

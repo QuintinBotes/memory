@@ -26,7 +26,7 @@ import {
   subagentAllowed,
   type Config,
 } from './config.ts';
-import { filterRepository, git, resolveContext, type Context, type Reach } from './context.ts';
+import { filterRepository, git, repositoryKey, resolveContext, type Context, type Reach } from './context.ts';
 import { Refusal, refusal } from './gate.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from './items.ts';
@@ -86,10 +86,11 @@ suppressSqliteExperimentalWarning();
 
 const USAGE = `usage: memory <command>
 
-  init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
+  init [--tenant <name>=<[host/]owner/*|[host/]owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
        [--failing-commands on|off] [--transcripts on|off] [--recall on] [--scf <tenant>=<url|off>]... [--confirm]
-      show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
-      sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
+      show the consent plan; with --confirm, save it. A pattern without a host is on github.com; gitlab.com/acme/*
+      takes acme's repositories on gitlab.com, nested groups included. --bind binds this Claude Code config.
+      --automation on lets sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
       --failing-commands on keeps failed Bash commands as scrubbed episodes, 30 days, so the same command passing
       later becomes a repair proposal; off is the default. --transcripts on records each session's transcript path
       at its end and turns your corrections in it into quoted proposals at the next session start or sweep; off is
@@ -102,18 +103,18 @@ const USAGE = `usage: memory <command>
   doctor [--json]
       why memory does or does not recall and capture here: one line per check, ok, off (by choice) or fail with the
       command that fixes it. Read only, and never prints an item's text. Exits 1 when any check fails
-  list [--repo <owner/repo> | --all-repos | --expired]
+  list [--repo <[host/]owner/repo> | --all-repos | --expired]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
       only a repository of the tenant bound here; any other is refused and nothing of another tenant is read.
       --expired: the active items of this repository's tenant and the person file that read as expired, which no recall shows
-  export --to scf [--repo <owner/repo> | --all-repos]
+  export --to scf [--repo <[host/]owner/repo> | --all-repos]
       send this repository's tenant's proposed repository and organisation items to the SCF set for it with memory init
       --scf <tenant>=<url> (key in SCF_API_KEY), as world proposals of layer memory with their evidence; nothing in
       the person file, no other tenant, nothing redaction would change. Run twice, it sends nothing new. An SCF that does
       not answer leaves memory as it was. memory import --scf then brings back SCF's approvals and rejections and the
       outcomes of runs that used the items, counted once each as helped or wrong
-  export --markdown <dir> [--repo <owner/repo> | --all-repos]
+  export --markdown <dir> [--repo <[host/]owner/repo> | --all-repos]
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
       for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository.
       --repo limits it as list --repo does; --all-repos is what it writes without either
@@ -222,7 +223,7 @@ const USAGE = `usage: memory <command>
       counts as a contradiction of them, and two within seven days turn recall off. Any other command does nothing
   ci
       read this repository's CI runs with gh: a failed run followed by a passing run on another commit becomes a repair
-      proposal with the fingerprint, the fix commit and both runs as evidence
+      proposal with the fingerprint, the fix commit and both runs as evidence. Off github.com it does nothing
   reverts
       count the reverts of commits memory linked items to, as the hook does after a git revert
   pre-compact
@@ -237,7 +238,7 @@ const USAGE = `usage: memory <command>
   capture --cost [--since <YYYY-MM-DD>]
       what capture cost, per local day, from logs/capture.jsonl alone: runs (api key or Claude Code login), skips by
       reason, input and output tokens
-  purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
+  purge (--tenant <name> | --repo <[host/]owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
       learned in that repository. --source reaches this repository's tenant and the person file: an item left without
       evidence returns to proposed, or with --with-derived is deleted
@@ -292,7 +293,7 @@ function init(args: string[], data: string): void {
     }
     const list = patterns.split(',').map((p) => p.trim());
     const bad = list.find((p) => !TENANT_PATTERN.test(p));
-    if (bad !== undefined) throw new Refusal(`"${bad}" is not an owner/* or owner/repo pattern`, 2);
+    if (bad !== undefined) throw new Refusal(`"${bad}" is not an owner/*, owner/repo, host/group/* or host/group/repo pattern`, 2);
     config.tenants[name] = list;
   }
   if (values.bind !== undefined) {
@@ -598,7 +599,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
 }
 
 /**
- * `--repo <owner/repo>` or `--all-repos`, as the read they name, or undefined for neither. A `--repo` of any tenant but the one
+ * `--repo <[host/]owner/repo>` or `--all-repos`, as the read they name, or undefined for neither. A `--repo` of any tenant but the one
  * bound here is refused before any store is opened.
  */
 function reachOf(values: { repo?: string | undefined; 'all-repos'?: boolean | undefined }, config: Config, context: Context): Reach | undefined {
@@ -615,7 +616,7 @@ const REACH_OPTIONS = { repo: { type: 'string' }, 'all-repos': { type: 'boolean'
 function list(args: string[], data: string, cwd: string): void {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...REACH_OPTIONS, expired: { type: 'boolean' } } });
   if (positionals.length > 0 || (values.expired === true && (values.repo !== undefined || values['all-repos'] === true))) {
-    throw new Refusal('usage: memory list [--repo <owner/repo> | --all-repos | --expired]', 2);
+    throw new Refusal('usage: memory list [--repo <[host/]owner/repo> | --all-repos | --expired]', 2);
   }
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
@@ -641,7 +642,7 @@ async function doctorCommand(args: string[], data: string): Promise<void> {
 async function exportCommand(args: string[], data: string, cwd: string): Promise<void> {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: 'string' }, to: { type: 'string' }, ...REACH_OPTIONS } });
   if (values.to !== undefined) {
-    if (values.to !== 'scf' || values.markdown !== undefined || positionals.length > 0) throw new Refusal('usage: memory export --to scf [--repo <owner/repo> | --all-repos]', 2);
+    if (values.to !== 'scf' || values.markdown !== undefined || positionals.length > 0) throw new Refusal('usage: memory export --to scf [--repo <[host/]owner/repo> | --all-repos]', 2);
     const config = setUp(data);
     return scfExport(config, data, cwd, reachOf(values, config, resolveContext(cwd, config, currentConfigDir())));
   }
@@ -1516,10 +1517,8 @@ function purge(args: string[], data: string, cwd: string): void {
   if (values.tenant !== undefined && !TENANT_NAME.test(values.tenant)) throw new Refusal(`no tenant named "${values.tenant}"`, 2);
   if (values.item !== undefined && !/^m-[0-9a-f]+$/.test(values.item)) throw new Refusal(`"${values.item}" is not an item id`, 2);
   if (values.source !== undefined && values.source.trim() === '') throw new Refusal('--source takes a source reference', 2);
-  const repository = values.repo?.toLowerCase();
-  if (repository !== undefined && !/^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(repository)) {
-    throw new Refusal('--repo takes owner/repo', 2);
-  }
+  const repository = values.repo === undefined ? undefined : repositoryKey(values.repo) ?? undefined;
+  if (values.repo !== undefined && repository === undefined) throw new Refusal('--repo takes owner/repo or host/group/repo', 2);
   const scope: PurgeScope = {
     tenant: values.tenant,
     repository,

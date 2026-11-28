@@ -70,7 +70,7 @@ function scfUrl(text5) {
 }
 var scfEndpoint = (u) => `${u.origin}${u.pathname.replace(/\/$/, "")}`;
 var TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
-var TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
+var TENANT_PATTERN = /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[a-z0-9_][a-z0-9_.-]*)+|[a-z0-9][a-z0-9-]*)\/(?:\*|[a-z0-9_.-]+)$/i;
 var ConfigError = class extends Error {
 };
 var configPath = (data) => join2(data, "config.json");
@@ -255,28 +255,44 @@ function git(cwd, ...args) {
   if (r.error !== void 0 && r.missing !== true) throw r.error;
   return r.stdout;
 }
-function parseGitHubRemote(url) {
-  const m = /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/.exec(
-    url.trim()
-  );
-  if (!m) return null;
-  return { owner: m[1].toLowerCase(), repo: m[2].toLowerCase() };
+var OWNER = /^[a-z0-9][a-z0-9-]*$/;
+var HOST = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
+var GROUP = /^[a-z0-9_][a-z0-9_.-]*$/;
+var NAME = /^[a-z0-9._-]+$/;
+function repositoryKey(value) {
+  const parts2 = value.trim().toLowerCase().split("/");
+  const github = parts2[0] === "github.com";
+  if (github) parts2.shift();
+  const name = parts2.at(-1);
+  const ok2 = parts2.length === 2 ? OWNER.test(parts2[0]) : !github && parts2.length > 2 && HOST.test(parts2[0]) && parts2.slice(1, -1).every((g) => GROUP.test(g));
+  return ok2 && NAME.test(name) && name !== "." && name !== ".." ? parts2.join("/") : null;
 }
-function matchingTenants(config, owner, repo) {
+var hostOf = (key2) => key2.split("/").length > 2 ? key2.split("/")[0].toLowerCase() : "github.com";
+var ownerOf = (repository) => repository.slice(0, repository.lastIndexOf("/"));
+function parseRemote(url) {
+  const m = /^(?:https:\/\/(?:[^@/]+@)?([^/:@]+)\/|git@([^/:@]+):|ssh:\/\/git@([^/:@]+)\/)(.+?)(?:\.git)?\/?$/.exec(url.trim());
+  return m === null ? null : repositoryKey(`${m[1] ?? m[2] ?? m[3]}/${m[4]}`);
+}
+var full = (key2) => key2.split("/").length === 2 ? `github.com/${key2}` : key2;
+function matchingTenants(config, repository) {
+  const repo = full(repository);
   return Object.keys(config.tenants).filter(
     (name) => (config.tenants[name] ?? []).some((pattern) => {
-      const [o, r] = pattern.toLowerCase().split("/");
-      return o === owner && (r === "*" || r === repo);
+      const p = full(pattern.toLowerCase());
+      return p.endsWith("/*") ? repo.startsWith(p.slice(0, -1)) : repo === p;
     })
   ).sort();
 }
 function resolveContext(cwd, config, configDir) {
   const url = git(cwd, "config", "--get", "remote.origin.url");
-  const parsed2 = url === null ? null : parseGitHubRemote(url);
-  if (parsed2 === null) return { repository: null, owner: null, tenant: null, reason: "no github.com origin remote here" };
-  const repository = `${parsed2.owner}/${parsed2.repo}`;
-  const base2 = { repository, owner: parsed2.owner };
-  const tenants = matchingTenants(config, parsed2.owner, parsed2.repo);
+  const repository = url === null ? null : parseRemote(url);
+  if (repository === null) return { repository: null, owner: null, tenant: null, reason: "no origin remote here that names a repository" };
+  const host = hostOf(repository);
+  if (host !== "github.com" && !Object.values(config.tenants).some((patterns) => patterns.some((p) => hostOf(p) === host))) {
+    return { repository: null, owner: null, tenant: null, reason: `no tenant pattern names the host ${host}` };
+  }
+  const base2 = { repository, owner: ownerOf(repository) };
+  const tenants = matchingTenants(config, repository);
   if (tenants.length === 0) return { ...base2, tenant: null, reason: `${repository} matches no tenant` };
   if (tenants.length > 1) return { ...base2, tenant: null, reason: `${repository} matches more than one tenant` };
   const tenant = tenants[0];
@@ -285,13 +301,11 @@ function resolveContext(cwd, config, configDir) {
   }
   return { ...base2, tenant, reason: "" };
 }
-var REPOSITORY_FILTER = /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/;
 function filterRepository(config, context, value) {
-  const repository = value.trim().toLowerCase();
-  if (!REPOSITORY_FILTER.test(repository)) return { reason: `${value} is not owner/repo`, malformed: true };
+  const repository = repositoryKey(value);
+  if (repository === null) return { reason: `${value} is not owner/repo or host/group/repo`, malformed: true };
   if (context.tenant === null) return { reason: `no tenant is bound here, so there is no repository to filter by; only the person file can be read`, malformed: false };
-  const [owner, repo] = repository.split("/");
-  const tenants = matchingTenants(config, owner, repo);
+  const tenants = matchingTenants(config, repository);
   if (tenants.length !== 1 || tenants[0] !== context.tenant) return { reason: `${repository} is not a repository of the tenant bound here, so it cannot be read from here`, malformed: false };
   return { repository };
 }
@@ -1116,8 +1130,9 @@ function knownItem(db, c) {
     `SELECT id, status FROM items WHERE tenant = ? AND statement_key = ?
          AND (status IN ('rejected', 'expired') OR tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
        ORDER BY status = 'rejected' DESC LIMIT 1`
-  ).get(c.tenant, statementKey(c.statement), c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
+  ).get(c.tenant, statementKey(c.statement), c.scope, c.scopeKey, organisationKey(c));
 }
+var organisationKey = (c) => c.scope === "repository" ? ownerOf(c.scopeKey) : c.scopeKey;
 var TOMBSTONE_DAYS = 30;
 function reduceTombstones(db) {
   const due = `status IN ('rejected', 'expired') AND statement != '' AND valid_to < ?`;
@@ -1462,6 +1477,7 @@ function buildConsentPlan(config, storageLocation) {
   return {
     version: PLAN_VERSION,
     tenants: config.tenants,
+    hosts: [...new Set(Object.values(config.tenants).flat().map(hostOf))].sort(),
     configs: config.configs,
     dataCategories: DATA_CATEGORIES.map((c) => c.text),
     optIns: { ...config.optIns },
@@ -1960,7 +1976,7 @@ function place(db, c, key2, write) {
     const same = db.prepare(
       `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
            AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?)) ORDER BY created_at, id`
-    ).all(c.tenant, key2, c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
+    ).all(c.tenant, key2, c.scope, c.scopeKey, organisationKey(c));
     const repeat = same.find((r) => anchorsOverlap(c.anchors, JSON.parse(r.anchors_json)));
     return repeat === void 0 ? write() : mergeEvidence(db, repeat.id, c);
   });
@@ -1981,7 +1997,7 @@ function addItem(db, c) {
        WHERE tenant = ? AND status IN ('active', 'proposed') AND statement != ''
          AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
        ORDER BY created_at, id`
-  ).all(c.tenant, c.scope, c.scopeKey, c.scopeKey.split("/")[0]);
+  ).all(c.tenant, c.scope, c.scopeKey, organisationKey(c));
   let conflict2;
   for (const r of rows) {
     if (!anchorsOverlap(c.anchors, JSON.parse(r.anchors_json))) continue;
@@ -3682,7 +3698,7 @@ function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, wi
       try {
         if (!other) withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
         const named = reach !== void 0 && reach !== "all" ? reach.repository : void 0;
-        const items = reach === "all" ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === void 0 ? context.owner : named.split("/")[0], asOf);
+        const items = reach === "all" ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === void 0 ? context.owner : ownerOf(named), asOf);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld), textMatches(db, terms));
       } finally {
         db.close();
@@ -3722,7 +3738,7 @@ var TOOLS = [
       properties: {
         query: { type: "string", description: "Words of the task." },
         paths: { type: "array", items: { type: "string" }, description: "Files or directories in play, relative to the repository root." },
-        repository: { type: "string", description: "owner/repo of another repository of the same tenant, to search its items instead of this checkout's. Paths then do not match anchors. Refused for a repository of any other tenant." },
+        repository: { type: "string", description: "owner/repo (host/group/repo off github.com) of another repository of the same tenant, to search its items instead of this checkout's. Paths then do not match anchors. Refused for a repository of any other tenant." },
         as_of: { type: "string", description: "An ISO date, such as 2026-03-01, to search the versions that applied then instead of the current ones. Each row then says when its version was valid." }
       },
       required: ["query"],
@@ -3832,7 +3848,7 @@ async function search(args, data, config, context, cwd) {
   const top = paths.some((p) => isAbsolute4(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
   const relativePaths = paths.map((p) => isAbsolute4(p) && top !== void 0 ? relative3(top, p) : p);
   const asked = args["repository"];
-  if (asked !== void 0 && typeof asked !== "string") throw new ToolError("repository is a string, owner/repo");
+  if (asked !== void 0 && typeof asked !== "string") throw new ToolError("repository is a string, owner/repo or host/group/repo");
   let reach;
   if (asked !== void 0) {
     const found2 = filterRepository(config, context, asked);
@@ -4190,7 +4206,7 @@ async function decideById(data, config, context, id, decision, options) {
       const to = options.scope ?? p.scope;
       if (!allowed.includes(to)) throw new Refusal(`this ${p.scope} proposal can be approved as ${allowed.join(" or ")} only`);
       if (to === "organisation" && p.anchors_json !== "[]") throw new Refusal("only a repository item can have an anchor");
-      const scopeKey = to === "organisation" && p.scope === "repository" ? p.scope_key.split("/")[0] : p.scope_key;
+      const scopeKey = to === "organisation" && p.scope === "repository" ? ownerOf(p.scope_key) : p.scope_key;
       const superseded = decide(db, p, "approve", { scope: to, scopeKey });
       const flag = p.quarantine === null ? "" : `; it was quarantined (${p.quarantine}) as text that reads as an instruction`;
       const replaced = superseded === null ? "" : `; it supersedes ${p.older.id}, which stays on record; undo with memory undo ${superseded}`;
@@ -5353,7 +5369,7 @@ function namedRepositories(config, text5) {
   const plain = text5.replace(/https?:\/\/github\.com\//gi, " ");
   for (const m of plain.matchAll(/(?<![\w./-])([a-z0-9][a-z0-9-]*)\/([a-z0-9._-]*[a-z0-9_-])/gi)) {
     const [owner, repo] = [m[1].toLowerCase(), m[2].toLowerCase().replace(/\.git$/, "")];
-    const tenants = matchingTenants(config, owner, repo);
+    const tenants = matchingTenants(config, `${owner}/${repo}`);
     if (tenants.length === 1) named.set(`${owner}/${repo}`, tenants[0]);
   }
   return named;
@@ -5424,8 +5440,9 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
           } else if (named.size === 1 || home !== null) {
             const [repository, tenant] = named.size === 1 ? [...named][0] : [home.repository, home.tenant];
             if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
-            const own = new Set((config.tenants[tenant] ?? []).map((p) => p.split("/")[0].toLowerCase()));
-            const others = Object.entries(config.tenants).filter(([t]) => t !== tenant).flatMap(([, patterns]) => patterns.map((p) => p.split("/")[0].toLowerCase())).filter((o) => !own.has(o));
+            const groups = (p) => p.toLowerCase().split("/").slice(p.split("/").length > 2 ? 1 : 0, -1);
+            const own = new Set((config.tenants[tenant] ?? []).flatMap(groups));
+            const others = Object.entries(config.tenants).filter(([t]) => t !== tenant).flatMap(([, patterns]) => patterns.flatMap(groups)).filter((o) => !own.has(o));
             if (refused(source, namesOrganisation(text5, others) ? "it also names an owner of another tenant" : null)) continue;
             candidates.push({ ...base2, tenant, scope: "repository", scopeKey: repository, type: "convention", source: stored });
           } else {
@@ -5699,7 +5716,7 @@ function itemFile(r, evidence, supersededBy) {
 `;
 }
 function read(db, tenant, repository) {
-  const [where2, params] = repository === void 0 ? ["tenant = ?", [tenant]] : tenant === "" ? ["tenant = ? AND scope IN ('person', 'global') AND origin_repository = ?", [tenant, repository]] : ["tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))", [tenant, repository, repository.split("/")[0]]];
+  const [where2, params] = repository === void 0 ? ["tenant = ?", [tenant]] : tenant === "" ? ["tenant = ? AND scope IN ('person', 'global') AND origin_repository = ?", [tenant, repository]] : ["tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))", [tenant, repository, ownerOf(repository)]];
   const rows = db.prepare(`SELECT ${COLUMNS2} FROM items WHERE ${where2} ORDER BY id`).all(...params);
   const evidence = db.prepare(`SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where2}) ORDER BY item_id, captured_at, source_ref, author_role, taint, id`).all(...params);
   const byItem = /* @__PURE__ */ new Map();
@@ -5748,9 +5765,9 @@ function foreignRepository(dir, config, tenant) {
   const top = git(at3, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0) return null;
   const url = git(top, "config", "--get", "remote.origin.url");
-  const parsed2 = url === null ? null : parseGitHubRemote(url);
-  if (parsed2 === null) return null;
-  const other = matchingTenants(config, parsed2.owner, parsed2.repo).filter((t) => t !== tenant);
+  const repository = url === null ? null : parseRemote(url);
+  if (repository === null) return null;
+  const other = matchingTenants(config, repository).filter((t) => t !== tenant);
   return other.length === 0 ? null : `${top} is a repository of tenant ${other[0]}`;
 }
 
@@ -6558,6 +6575,7 @@ function repairedRuns(runs) {
 function captureCi(data, config, cwd, limit = 100) {
   if (!covers(config, "failures")) return ["your consent does not cover reading CI runs yet; run memory init and confirm"];
   const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.repository !== null && hostOf(context.repository) !== "github.com") return [`nothing captured: memory ci reads GitHub Actions through gh, which is not available on ${hostOf(context.repository)}`];
   if (context.tenant === null || context.repository === null) return [`nothing captured: ${context.reason}`];
   const repo = { tenant: context.tenant, repository: context.repository };
   let runs;
@@ -7026,12 +7044,13 @@ async function doctor(data, cwd, configDir, env = process.env) {
   const url = git(cwd, "config", "--get", "remote.origin.url")?.trim();
   if (context.repository === null) checks.push(off("tenant", `${context.reason}; only the person file applies`));
   else {
-    const [owner, repo] = context.repository.split("/");
-    const tenants = matchingTenants(c, owner, repo);
+    const group = ownerOf(context.repository);
+    const owner = group.split("/").at(-1);
+    const tenants = matchingTenants(c, context.repository);
     const bound = c.configs[configDir] ?? [];
     if (tenants.length === 0) {
       const name = TENANT_NAME.test(owner) && owner !== "person" ? owner : "work";
-      const patterns = [...c.tenants[name] ?? [], `${owner}/*`].join(",");
+      const patterns = [...c.tenants[name] ?? [], `${group}/*`].join(",");
       checks.push(fail("tenant", `${context.repository} (remote ${url}) matches no tenant`, `memory init --tenant ${name}=${patterns} --bind ${[.../* @__PURE__ */ new Set([...bound, name])].join(",")} --confirm`));
     } else if (tenants.length > 1) checks.push(fail("tenant", `${context.repository} matches tenants ${tenants.join(", ")}`, `keep ${context.repository} in one tenant's patterns in ${configPath(data)}`));
     else checks.push(ok("tenant", `${context.repository} is tenant ${tenants[0]}`));
@@ -7237,7 +7256,7 @@ import { tmpdir as tmpdir4 } from "node:os";
 import { join as join16 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
-var OWNER = "acme";
+var OWNER2 = "acme";
 var SESSIONS = 100;
 var BENIGN = 50;
 var base = (statement, trust, status, source, type = "convention") => ({ tenant: TENANT2, scope: "repository", scopeKey: REPO, type, statement, rationale: null, anchors: [], source, status, trust });
@@ -7353,7 +7372,7 @@ function outsideFence(rendering, attacks) {
   return new Set(attacks.filter((a) => outside.includes(safe(a).slice(0, 12))));
 }
 var renderings = (db) => {
-  const items = tenantItems(db, TENANT2, REPO, OWNER);
+  const items = tenantItems(db, TENANT2, REPO, OWNER2);
   const review2 = proposals(db, TENANT2);
   return {
     recall: [renderAll(items), chooseSlice(items, 300).text],
@@ -7406,7 +7425,7 @@ function benign() {
     const statements = Array.from({ length: BENIGN }, (_, i) => `Rule ${i}: kw${i}a kw${i}b kw${i}c kw${i}d kw${i}e belongs to the team`);
     for (const s of statements) if (refusal(s, void 0, true) === null) addItem(db, base(s, "owner", "active", "remember"));
     const active = new Set(db.prepare("SELECT statement FROM items WHERE status = 'active'").all().map((r) => r.statement));
-    const shown = renderAll(tenantItems(db, TENANT2, REPO, OWNER));
+    const shown = renderAll(tenantItems(db, TENANT2, REPO, OWNER2));
     return { of: BENIGN, accepted: statements.filter((s) => active.has(s)).length, recalled: statements.filter((s) => shown.includes(safe(s))).length };
   });
 }
@@ -8093,10 +8112,11 @@ var headToHeadDir = (data, tenant) => join19(data, "eval", "head-to-head", tenan
 suppressSqliteExperimentalWarning();
 var USAGE = `usage: memory <command>
 
-  init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
+  init [--tenant <name>=<[host/]owner/*|[host/]owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
        [--failing-commands on|off] [--transcripts on|off] [--recall on] [--scf <tenant>=<url|off>]... [--confirm]
-      show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
-      sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
+      show the consent plan; with --confirm, save it. A pattern without a host is on github.com; gitlab.com/acme/*
+      takes acme's repositories on gitlab.com, nested groups included. --bind binds this Claude Code config.
+      --automation on lets sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
       --failing-commands on keeps failed Bash commands as scrubbed episodes, 30 days, so the same command passing
       later becomes a repair proposal; off is the default. --transcripts on records each session's transcript path
       at its end and turns your corrections in it into quoted proposals at the next session start or sweep; off is
@@ -8109,18 +8129,18 @@ var USAGE = `usage: memory <command>
   doctor [--json]
       why memory does or does not recall and capture here: one line per check, ok, off (by choice) or fail with the
       command that fixes it. Read only, and never prints an item's text. Exits 1 when any check fails
-  list [--repo <owner/repo> | --all-repos | --expired]
+  list [--repo <[host/]owner/repo> | --all-repos | --expired]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
       only a repository of the tenant bound here; any other is refused and nothing of another tenant is read.
       --expired: the active items of this repository's tenant and the person file that read as expired, which no recall shows
-  export --to scf [--repo <owner/repo> | --all-repos]
+  export --to scf [--repo <[host/]owner/repo> | --all-repos]
       send this repository's tenant's proposed repository and organisation items to the SCF set for it with memory init
       --scf <tenant>=<url> (key in SCF_API_KEY), as world proposals of layer memory with their evidence; nothing in
       the person file, no other tenant, nothing redaction would change. Run twice, it sends nothing new. An SCF that does
       not answer leaves memory as it was. memory import --scf then brings back SCF's approvals and rejections and the
       outcomes of runs that used the items, counted once each as helped or wrong
-  export --markdown <dir> [--repo <owner/repo> | --all-repos]
+  export --markdown <dir> [--repo <[host/]owner/repo> | --all-repos]
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
       for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository.
       --repo limits it as list --repo does; --all-repos is what it writes without either
@@ -8229,7 +8249,7 @@ var USAGE = `usage: memory <command>
       counts as a contradiction of them, and two within seven days turn recall off. Any other command does nothing
   ci
       read this repository's CI runs with gh: a failed run followed by a passing run on another commit becomes a repair
-      proposal with the fingerprint, the fix commit and both runs as evidence
+      proposal with the fingerprint, the fix commit and both runs as evidence. Off github.com it does nothing
   reverts
       count the reverts of commits memory linked items to, as the hook does after a git revert
   pre-compact
@@ -8244,7 +8264,7 @@ var USAGE = `usage: memory <command>
   capture --cost [--since <YYYY-MM-DD>]
       what capture cost, per local day, from logs/capture.jsonl alone: runs (api key or Claude Code login), skips by
       reason, input and output tokens
-  purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
+  purge (--tenant <name> | --repo <[host/]owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
       learned in that repository. --source reaches this repository's tenant and the person file: an item left without
       evidence returns to proposed, or with --with-derived is deleted
@@ -8296,7 +8316,7 @@ function init(args, data) {
     }
     const list2 = patterns.split(",").map((p) => p.trim());
     const bad2 = list2.find((p) => !TENANT_PATTERN.test(p));
-    if (bad2 !== void 0) throw new Refusal(`"${bad2}" is not an owner/* or owner/repo pattern`, 2);
+    if (bad2 !== void 0) throw new Refusal(`"${bad2}" is not an owner/*, owner/repo, host/group/* or host/group/repo pattern`, 2);
     config.tenants[name] = list2;
   }
   if (values.bind !== void 0) {
@@ -8597,7 +8617,7 @@ var REACH_OPTIONS = { repo: { type: "string" }, "all-repos": { type: "boolean" }
 function list(args, data, cwd) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...REACH_OPTIONS, expired: { type: "boolean" } } });
   if (positionals.length > 0 || values.expired === true && (values.repo !== void 0 || values["all-repos"] === true)) {
-    throw new Refusal("usage: memory list [--repo <owner/repo> | --all-repos | --expired]", 2);
+    throw new Refusal("usage: memory list [--repo <[host/]owner/repo> | --all-repos | --expired]", 2);
   }
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
@@ -8620,7 +8640,7 @@ async function doctorCommand(args, data) {
 async function exportCommand(args, data, cwd) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: "string" }, to: { type: "string" }, ...REACH_OPTIONS } });
   if (values.to !== void 0) {
-    if (values.to !== "scf" || values.markdown !== void 0 || positionals.length > 0) throw new Refusal("usage: memory export --to scf [--repo <owner/repo> | --all-repos]", 2);
+    if (values.to !== "scf" || values.markdown !== void 0 || positionals.length > 0) throw new Refusal("usage: memory export --to scf [--repo <[host/]owner/repo> | --all-repos]", 2);
     const config2 = setUp(data);
     return scfExport(config2, data, cwd, reachOf(values, config2, resolveContext(cwd, config2, currentConfigDir())));
   }
@@ -9363,10 +9383,8 @@ function purge(args, data, cwd) {
   if (values.tenant !== void 0 && !TENANT_NAME.test(values.tenant)) throw new Refusal(`no tenant named "${values.tenant}"`, 2);
   if (values.item !== void 0 && !/^m-[0-9a-f]+$/.test(values.item)) throw new Refusal(`"${values.item}" is not an item id`, 2);
   if (values.source !== void 0 && values.source.trim() === "") throw new Refusal("--source takes a source reference", 2);
-  const repository = values.repo?.toLowerCase();
-  if (repository !== void 0 && !/^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(repository)) {
-    throw new Refusal("--repo takes owner/repo", 2);
-  }
+  const repository = values.repo === void 0 ? void 0 : repositoryKey(values.repo) ?? void 0;
+  if (values.repo !== void 0 && repository === void 0) throw new Refusal("--repo takes owner/repo or host/group/repo", 2);
   const scope = {
     tenant: values.tenant,
     repository,

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../config.ts';
-import { git, matchingTenants, parseGitHubRemote } from '../context.ts';
+import { git, matchingTenants, ownerOf, parseRemote } from '../context.ts';
 import { safe } from '../render/rows.ts';
 import { taintList, type Anchor } from '../items.ts';
 
@@ -109,7 +109,7 @@ export function read(db: DatabaseSync, tenant: string, repository?: string): { r
       ? ['tenant = ?', [tenant]]
       : tenant === ''
         ? ["tenant = ? AND scope IN ('person', 'global') AND origin_repository = ?", [tenant, repository]]
-        : ["tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))", [tenant, repository, repository.split('/')[0]!]];
+        : ["tenant = ? AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))", [tenant, repository, ownerOf(repository)]];
   const rows = db.prepare(`SELECT ${COLUMNS} FROM items WHERE ${where} ORDER BY id`).all(...params) as unknown as ItemRow[];
   const evidence = db
     .prepare(`SELECT item_id, source_ref, author_role, captured_at, taint FROM evidence WHERE item_id IN (SELECT id FROM items WHERE ${where}) ORDER BY item_id, captured_at, source_ref, author_role, taint, id`)
@@ -171,8 +171,8 @@ export function foreignRepository(dir: string, config: Config, tenant: string): 
   const top = git(at, 'rev-parse', '--show-toplevel')?.trim();
   if (top === undefined) return null;
   const url = git(top, 'config', '--get', 'remote.origin.url');
-  const parsed = url === null ? null : parseGitHubRemote(url);
-  if (parsed === null) return null;
-  const other = matchingTenants(config, parsed.owner, parsed.repo).filter((t) => t !== tenant);
+  const repository = url === null ? null : parseRemote(url);
+  if (repository === null) return null;
+  const other = matchingTenants(config, repository).filter((t) => t !== tenant);
   return other.length === 0 ? null : `${top} is a repository of tenant ${other[0]}`;
 }
