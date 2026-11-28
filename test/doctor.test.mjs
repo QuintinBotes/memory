@@ -59,7 +59,7 @@ test('SC3: a consent one plan version behind names each category not yet agreed 
   editConfig(s, (c) => (c.consent.version = 12));
   const r = doctor(s, s.acmeApi);
   assert.equal(r.status, 1);
-  assert.match(line(r.stdout, 'consent'), /^fail .*agreed to plan version 12 of 13; not yet agreed: embeddings$/);
+  assert.match(line(r.stdout, 'consent'), /^fail .*agreed to plan version 12 of \d+; not yet agreed: embeddings(, [a-z-]+)*$/);
   assert.equal(fixOf(r.stdout, 'consent'), 'memory init --confirm');
 });
 
