@@ -5776,7 +5776,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false, shared) {
     const homes = /* @__PURE__ */ new Map();
     const checkoutHome = (cwd) => {
       const context = isAbsolute7(cwd) && existsSync10(cwd) ? resolveContext(cwd, config, configDir) : null;
-      const tenants = context?.repository == null ? [] : matchingTenants(config, context.owner, context.repository.split("/")[1]);
+      const tenants = context?.repository == null ? [] : matchingTenants(config, context.repository);
       return tenants.length === 1 ? { repository: context.repository, tenant: tenants[0] } : null;
     };
     for (const name of ["MEMORY.md", "memory_summary.md"]) {

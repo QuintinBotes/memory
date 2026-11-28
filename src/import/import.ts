@@ -210,7 +210,7 @@ export function importSilos(config: Config, data: string, configDir: string, dry
     /** The repository of the checkout at `cwd` and its one tenant, bound here or not: an unbound one is refused, never made personal. */
     const checkoutHome = (cwd: string): Home => {
       const context = isAbsolute(cwd) && existsSync(cwd) ? resolveContext(cwd, config, configDir) : null;
-      const tenants = context?.repository == null ? [] : matchingTenants(config, context.owner!, context.repository.split('/')[1]!);
+      const tenants = context?.repository == null ? [] : matchingTenants(config, context.repository);
       return tenants.length === 1 ? { repository: context!.repository!, tenant: tenants[0]! } : null;
     };
     for (const name of ['MEMORY.md', 'memory_summary.md']) {
