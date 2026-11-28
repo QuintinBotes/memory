@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Capture no longer skips the first transcript record written after each run: the saved position counted the empty piece after the last newline. A record still being written is now read once it is finished (#147).
 - A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
 - The session lab times memory's Stop hooks again: current Claude Code records them in a `stop_hook_summary` record, not as `hook_success` attachments, so `hook_ms` came back empty with real Claude Code. Hooks that print nothing (such as session start with no recall) are not timed anywhere in the transcript, so `hook_ms` still omits them (#153).
 
