@@ -15,6 +15,7 @@ import { openStore } from '../store/db.ts';
 import { tenantFile } from '../store/paths.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { filterModel, type Candidate } from './model.ts';
+import { DAILY_CAP, dailyCap } from './cost.ts';
 import { HIDDEN, hidePrivateRecords } from './transcripts.ts';
 
 /** The newest this many characters of a session go to the model. */
@@ -303,6 +304,12 @@ async function captureLocked(
   }
 
   const settings = captureSettings(config);
+  // Over a daily cap (#140): no model call, and the watermark stays, so tomorrow's first run reads this text.
+  const capped = dailyCap(data, settings, session);
+  if (capped !== null) {
+    summarise(data, { session, agent, skipped: DAILY_CAP, saved: 0 });
+    return capped.told ? `nothing captured: ${DAILY_CAP}` : `skipped, daily cap reached: ${capped.reason}; capture resumes tomorrow from where it stopped`;
+  }
   const model = filterModel(settings);
   const candidates = (await model.extract(scrub(text))).slice(0, settings.maxCandidates);
 
@@ -315,7 +322,7 @@ async function captureLocked(
   }
   const { saved, merged, queued } = kept;
   const usage = model.usage ?? { input: 0, output: 0 };
-  summarise(data, { session, agent, model: settings.model === 'haiku' ? settings.apiModel : settings.model, inputTokens: usage.input, outputTokens: usage.output, candidates: candidates.length, saved, merged });
+  summarise(data, { session, agent, model: settings.model === 'haiku' ? settings.apiModel : settings.model, inputTokens: usage.input, outputTokens: usage.output, via: model.via, candidates: candidates.length, saved, merged });
   commitWatermark(data, session, lines.length);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }

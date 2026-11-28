@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
-import { basename as basename4, isAbsolute as isAbsolute9, join as join18, normalize as normalize4 } from "node:path";
+import { existsSync as existsSync14, readFileSync as readFileSync16, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
+import { basename as basename4, isAbsolute as isAbsolute9, join as join19, normalize as normalize4 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, write
 import { homedir } from "node:os";
 import { isAbsolute, join as join2, resolve } from "node:path";
 var EMBEDDING_PROVIDERS = ["ollama", "voyage", "fake"];
-var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5", skipTainted: false };
+var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5", maxCallsPerDay: 100, maxTokensPerDay: 2e6, skipTainted: false };
 var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
 var SILOS = ["rejections", "standards", "policy", "notes", "decisions", "orbit"];
 var DEFAULT_SESSION_BUDGET = 300;
@@ -125,9 +125,10 @@ function loadConfig(data) {
   const capture2 = c.capture;
   if (capture2 !== void 0) {
     const ok = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
-    const { enabled: enabled2, model, maxCandidates, apiModel, skipTainted } = ok ? capture2 : {};
-    if (!ok || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || skipTainted !== void 0 && typeof skipTainted !== "boolean" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) {
-      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, skipTainted: true|false }');
+    const { enabled: enabled2, model, maxCandidates, apiModel, maxCallsPerDay, maxTokensPerDay, skipTainted } = ok ? capture2 : {};
+    const cap = (n) => n === void 0 || Number.isInteger(n) && n >= 1;
+    if (!ok || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || skipTainted !== void 0 && typeof skipTainted !== "boolean" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20) || !cap(maxCallsPerDay) || !cap(maxTokensPerDay)) {
+      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, maxCallsPerDay and maxTokensPerDay: whole numbers of 1 or more, skipTainted: true|false }');
     }
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
@@ -1436,7 +1437,7 @@ var DATA_CATEGORIES = [
   { id: "injections", since: 2, text: "Which items a subagent was shown, and with pointOfAction on which an agent was shown when it read or edited anchored code, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
   { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
   { id: "embeddings", since: 13, text: "Embeddings, only when embeddings in config.json names a provider (off by default; a local Ollama with an embedding model you install, or voyage-4, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query and the changed files' names of memory recall --diff, are sent to that provider and the vectors that come back are kept in the item's own file. A tenant's text is sent only to a provider on this machine (an address of 127.0.0.1, localhost or [::1]); one elsewhere gets the person file's text only. When rerank in config.json names a generative model (off by default; Inkling 2 Mini on the same local Ollama unless set, which you install), each memory_search query or memory recall --diff file list and the statements of the rows it found are sent to it to reorder them, under the same rule for a tenant's text. Quarantined text is never sent, and no hook uses either. Without a provider, a key or a network, nothing is sent and recall uses words and paths only" },
-  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; text between <private> and </private> is left out, a session in which you typed DO NOT INDEX THIS CHAT is not sent, and with capture.skipTainted true neither is a session that read the web or another MCP server; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
+  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; text between <private> and </private> is left out, a session in which you typed DO NOT INDEX THIS CHAT is not sent, and with capture.skipTainted true neither is a session that read the web or another MCP server; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. At most capture.maxCallsPerDay calls (100) and maxTokensPerDay tokens (2,000,000) a local day; past either, capture waits for the next day, and memory capture --cost shows the spend. Turn it off with capture.enabled false in config.json" },
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
   { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" },
@@ -2443,8 +2444,8 @@ function fuse(items, similarity2, ranked) {
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
-import { appendFileSync as appendFileSync3, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename3, dirname as dirname8, join as join6 } from "node:path";
+import { appendFileSync as appendFileSync3, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync9, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename as basename3, dirname as dirname8, join as join7 } from "node:path";
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
@@ -2811,6 +2812,7 @@ function haiku(apiModel, env = process.env) {
     async extract(text5) {
       const key2 = env["ANTHROPIC_API_KEY"];
       if (key2 === void 0 || key2 === "") return viaCli(model, apiModel, text5, env);
+      model.via = "api";
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": key2, "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -2840,12 +2842,14 @@ function viaCli(model, apiModel, text5, env) {
   if (body2.is_error === true || typeof body2.result !== "string") throw new Error(`claude -p answered an error: ${String(body2.result ?? "no result").slice(0, 200)}`);
   const u = body2.usage ?? {};
   model.usage = { input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), output: u.output_tokens ?? 0 };
+  model.via = "login";
   return parseCandidates(body2.result);
 }
 function fake() {
   const model = {
     async extract(text5) {
       model.usage = { input: Math.ceil(text5.length / 4), output: 0 };
+      model.via = "fake";
       return [...text5.matchAll(/^L(\d+) \w+: (LESSON|DECISION): (.+)$/gm)].map((m) => ({
         kind: m[2] === "LESSON" ? "lesson" : "decision",
         statement: m[3],
@@ -2861,9 +2865,65 @@ function filterModel(settings, env = process.env) {
   throw new Error(`capture.model "${settings.model}" is not a filter; use haiku or fake`);
 }
 
+// src/capture/cost.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join6 } from "node:path";
+var DAILY_CAP = "daily cap";
+function localDay(at3) {
+  const d = new Date(at3);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function readCaptureLog(data) {
+  let text5;
+  try {
+    text5 = readFileSync7(join6(data, "logs", "capture.jsonl"), "utf8");
+  } catch {
+    return [];
+  }
+  return text5.split("\n").flatMap((line) => {
+    try {
+      const o = JSON.parse(line);
+      return typeof o === "object" && o !== null && typeof o.at === "string" ? [o] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+var isRun = (l) => l.skipped === void 0 && typeof l.inputTokens === "number";
+function dailyCap(data, settings, session) {
+  const today = localDay(Date.now());
+  const lines2 = readCaptureLog(data).filter((l) => localDay(l.at) === today);
+  const runs = lines2.filter(isRun);
+  const tokens2 = runs.reduce((n, l) => n + (l.inputTokens ?? 0) + (l.outputTokens ?? 0), 0);
+  const reason = runs.length >= settings.maxCallsPerDay ? `${runs.length} of ${settings.maxCallsPerDay} calls today` : tokens2 >= settings.maxTokensPerDay ? `${tokens2} of ${settings.maxTokensPerDay} tokens today` : null;
+  return reason === null ? null : { reason, told: lines2.some((l) => l.skipped === DAILY_CAP && l.session === session) };
+}
+function costReport(data, since) {
+  const days = /* @__PURE__ */ new Map();
+  for (const l of readCaptureLog(data)) {
+    const day = localDay(l.at);
+    if (since !== void 0 && day < since) continue;
+    days.set(day, [...days.get(day) ?? [], l]);
+  }
+  const counts = (keys) => [...keys.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), /* @__PURE__ */ new Map())].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, n]) => `${k} ${n}`).join(", ");
+  return [...days.keys()].sort().map((day) => {
+    const lines2 = days.get(day);
+    const runs = lines2.filter(isRun);
+    const skips = lines2.filter((l) => l.skipped !== void 0).map((l) => l.skipped);
+    const sum = (k) => runs.reduce((n, l) => n + (l[k] ?? 0), 0);
+    return [
+      day,
+      `runs ${runs.length}${runs.length > 0 ? ` (${counts(runs.map((l) => l.via ?? "unrecorded"))})` : ""}`,
+      `skipped ${skips.length}${skips.length > 0 ? ` (${counts(skips)})` : ""}`,
+      `input ${sum("inputTokens")}`,
+      `output ${sum("outputTokens")}`
+    ].join("  ");
+  });
+}
+
 // src/capture/transcripts.ts
 import { randomBytes as randomBytes4 } from "node:crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync7 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync8 } from "node:fs";
 import { basename as basename2 } from "node:path";
 var TRANSCRIPT_DAYS = 30;
 var MAX_SUMMARY = 4e3;
@@ -2978,7 +3038,7 @@ function hidePrivateRecords(raw) {
   });
 }
 function ownerTurns(file) {
-  const raw = readFileSync7(file, "utf8");
+  const raw = readFileSync8(file, "utf8");
   if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
   const turns = [];
   const state = { depth: 0, held: "" };
@@ -3127,7 +3187,7 @@ var ADAPTERS = [
 ];
 var OPT_OUT = "DO NOT INDEX THIS CHAT";
 function readLog(file) {
-  const raw = readFileSync8(file, "utf8");
+  const raw = readFileSync9(file, "utf8");
   const records = /<\/?private>/i.test(raw) ? hidePrivateRecords(raw) : raw.split("\n").map((line) => {
     try {
       const o = JSON.parse(line);
@@ -3149,14 +3209,14 @@ function readLog(file) {
   return { agent: adapter.agent, lines: lines2, optedOut };
 }
 var summarise = (data, record) => {
-  mkdirSync6(join6(data, "logs"), { recursive: true, mode: 448 });
-  appendFileSync3(join6(data, "logs", "capture.jsonl"), `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), ...record })}
+  mkdirSync6(join7(data, "logs"), { recursive: true, mode: 448 });
+  appendFileSync3(join7(data, "logs", "capture.jsonl"), `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), ...record })}
 `, { mode: 384 });
 };
 function externalSources(file) {
   const found = /* @__PURE__ */ new Set();
   const label = (s) => s.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 60);
-  for (const line of readFileSync8(file, "utf8").split("\n")) {
+  for (const line of readFileSync9(file, "utf8").split("\n")) {
     try {
       const o = JSON.parse(line);
       if (o.payload?.type === "web_search_call") found.add("web:search");
@@ -3181,10 +3241,10 @@ function externalSources(file) {
   }
   return [...found].sort().slice(0, 3);
 }
-var stateFile2 = (data) => join6(data, "logs", "capture-state.json");
+var stateFile2 = (data) => join7(data, "logs", "capture-state.json");
 var readState = (data) => {
   try {
-    return JSON.parse(readFileSync8(stateFile2(data), "utf8"));
+    return JSON.parse(readFileSync9(stateFile2(data), "utf8"));
   } catch {
     return {};
   }
@@ -3240,7 +3300,7 @@ async function capture(data, input2) {
   const path = input2["transcript_path"];
   const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
   if (typeof path !== "string" || !existsSync6(path)) return "nothing captured: no transcript";
-  const lock = join6(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
+  const lock = join7(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
   if (!tryLock(lock)) return "nothing captured: another capture of this session is already running";
   try {
     return await captureLocked(data, config, { tenant: context.tenant, repository: context.repository }, path, session, input2);
@@ -3303,6 +3363,11 @@ async function captureLocked(data, config, context, path, session, input2) {
     return `waiting for more: ${text5.length} of ${STOP_MIN_CHARS} characters; the session's end reads it whatever its length`;
   }
   const settings = captureSettings(config);
+  const capped = dailyCap(data, settings, session);
+  if (capped !== null) {
+    summarise(data, { session, agent, skipped: DAILY_CAP, saved: 0 });
+    return capped.told ? `nothing captured: ${DAILY_CAP}` : `skipped, daily cap reached: ${capped.reason}; capture resumes tomorrow from where it stopped`;
+  }
   const model = filterModel(settings);
   const candidates = (await model.extract(scrub(text5))).slice(0, settings.maxCandidates);
   const db = openStore(tenantFile(data, context.tenant), true);
@@ -3314,7 +3379,7 @@ async function captureLocked(data, config, context, path, session, input2) {
   }
   const { saved, merged, queued } = kept;
   const usage2 = model.usage ?? { input: 0, output: 0 };
-  summarise(data, { session, agent, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, candidates: candidates.length, saved, merged });
+  summarise(data, { session, agent, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, via: model.via, candidates: candidates.length, saved, merged });
   commitWatermark(data, session, lines2.length);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }
@@ -4655,8 +4720,8 @@ function serveUi(data, cwd, port) {
 
 // src/promote/promote.ts
 import { randomBytes as randomBytes6 } from "node:crypto";
-import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute5, join as join7, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
+import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync10, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute5, join as join8, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
 var DEFAULT_STANDARDS = "docs/review-standards.md";
 var BAR = `tenant = ? AND scope = 'repository' AND scope_key = ? AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}
   AND origin_trust = 'owner' AND quarantine IS NULL AND support >= ${PROMOTE_SUPPORT} AND contradictions = 0
@@ -4727,7 +4792,7 @@ function writable(top, rel) {
   while (!exists(dir)) dir = dirname9(dir);
   let real;
   try {
-    real = join7(realpathSync3(dir), relative4(dir, target));
+    real = join8(realpathSync3(dir), relative4(dir, target));
   } catch {
     throw new Error(`${clean} resolves outside the repository; nothing was written`);
   }
@@ -4746,7 +4811,7 @@ function readPlain(path, name) {
   }
   try {
     const { dev, ino } = fstatSync(fd);
-    const bytes = readFileSync9(fd);
+    const bytes = readFileSync10(fd);
     if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
     try {
       return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), dev, ino };
@@ -4911,8 +4976,8 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync9, lstatSync as lstatSync3, readFileSync as readFileSync10, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join9, sep as sep3 } from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync3, readFileSync as readFileSync11, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join10, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
 import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
@@ -5107,7 +5172,7 @@ ${o.finding_id}`)) continue;
 // src/import/orbit.ts
 import { copyFileSync, existsSync as existsSync8, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
 var PASSED = /^(?:passed|succeeded|success|completed|done)$/i;
 var TYPES2 = { practice: "convention", convention: "convention", hazard: "hazard", "failure-pattern": "failure-pattern", "repair-recipe": "repair-recipe" };
@@ -5116,8 +5181,8 @@ function orbitFindings(path) {
   let dir;
   let db;
   try {
-    dir = mkdtempSync(join8(tmpdir2(), "memory-orbit-"));
-    const copy = join8(dir, "knowledge.sqlite");
+    dir = mkdtempSync(join9(tmpdir2(), "memory-orbit-"));
+    const copy = join9(dir, "knowledge.sqlite");
     copyFileSync(path, copy);
     if (existsSync8(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
     db = new DatabaseSync3(copy);
@@ -5219,7 +5284,7 @@ function readInside2(path, root) {
     const top = realpathSync4(root);
     if (!real.startsWith(top + sep3)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
     if (!statSync4(real).isFile()) return { reason: "not a file" };
-    return { text: readFileSync10(real, "utf8") };
+    return { text: readFileSync11(real, "utf8") };
   } catch (error) {
     return { reason: `cannot be read (${error.code ?? "error"})` };
   }
@@ -5237,10 +5302,10 @@ function namedRepositories(config, text5) {
 function checkoutOf(project, root = sep3) {
   const parts2 = project.split("-").slice(1);
   const walk = (dir, rest) => {
-    if (rest.length === 0) return existsSync9(join9(dir, ".git")) ? dir : null;
+    if (rest.length === 0) return existsSync9(join10(dir, ".git")) ? dir : null;
     for (let n = 1; n <= Math.min(rest.length, 8); n++) {
       for (const name of joins(rest.slice(0, n))) {
-        const path = join9(dir, name);
+        const path = join10(dir, name);
         if (!existsSync9(path) || !statSync4(path).isDirectory()) continue;
         const found = walk(path, rest.slice(n));
         if (found !== null) return found;
@@ -5276,19 +5341,19 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     return why !== null;
   };
   for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
-    const projects = join9(dir, "projects");
+    const projects = join10(dir, "projects");
     if (!existsSync9(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
-      const folder = join9(projects, project, "memory");
+      const folder = join10(projects, project, "memory");
       if (!existsSync9(folder) || !statSync4(folder).isDirectory()) continue;
       const checkout = checkoutOf(project);
       const context = checkout === null ? null : resolveContext(checkout, config, dir);
       const home = context?.tenant != null && context.repository !== null ? { repository: context.repository, tenant: context.tenant } : null;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
-        const path = join9(folder, name);
+        const path = join10(folder, name);
         const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link2 of parsed2.links) if (!existsSync9(join9(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
+        for (const link2 of parsed2.links) if (!existsSync9(join10(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line, text: text5 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -5314,7 +5379,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     }
   }
   const readOrbit = (checkout, rel, context) => {
-    const path = join9(checkout, rel);
+    const path = join10(checkout, rel);
     if (!inside3(rel)) {
       report.skippedFiles.push({ path: rel, reason: "not a path inside the repository" });
       return;
@@ -5368,7 +5433,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     for (const silo of SILOS) {
       const rel = silos[silo];
       if (rel === void 0 || silo === "orbit") continue;
-      const path = silo === "decisions" && isAbsolute7(rel) ? rel : join9(checkout, rel);
+      const path = silo === "decisions" && isAbsolute7(rel) ? rel : join10(checkout, rel);
       if (silo !== "decisions" && !inside3(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
@@ -5382,8 +5447,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
           report.skippedFiles.push({ path, reason: "your consent does not cover reading a Review Voice store yet; run memory init and confirm" });
           continue;
         }
-        const rvConfig = join9(checkout, ".review-voice", "config.yaml");
-        const found = reviewVoiceDecisions(path, existsSync9(rvConfig) ? ownerReviewer(readFileSync10(rvConfig, "utf8")) : null);
+        const rvConfig = join10(checkout, ".review-voice", "config.yaml");
+        const found = reviewVoiceDecisions(path, existsSync9(rvConfig) ? ownerReviewer(readFileSync11(rvConfig, "utf8")) : null);
         if ("reason" in found) {
           report.skippedFiles.push({ path, reason: found.reason });
           continue;
@@ -5520,8 +5585,8 @@ ${coverage === void 0 ? "" : `${coverage}
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync10, mkdirSync as mkdirSync8, readFileSync as readFileSync11, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync8, readFileSync as readFileSync12, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname10, join as join11, resolve as resolve5 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS2 = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
   anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
@@ -5585,7 +5650,7 @@ function read(db, tenant, repository) {
 function writeIfChanged(path, content, mayExist) {
   if (mayExist) {
     try {
-      if (readFileSync11(path, "utf8") === content) return;
+      if (readFileSync12(path, "utf8") === content) return;
     } catch {
     }
   }
@@ -5595,17 +5660,17 @@ function exportMarkdown(stores2, dir, repository) {
   const all = stores2.flatMap(({ db, tenant }) => read(db, tenant, repository)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
   const successors = /* @__PURE__ */ new Map();
   for (const { row: row4 } of all) if (row4.supersedes !== null) successors.set(row4.supersedes, [...successors.get(row4.supersedes) ?? [], row4.id]);
-  const items = join10(dir, "items");
+  const items = join11(dir, "items");
   mkdirSync8(items, { recursive: true });
   const current = new Set(all.map((a) => a.row.id));
   let previous = "";
   try {
-    previous = readFileSync11(join10(dir, "index.md"), "utf8");
+    previous = readFileSync12(join11(dir, "index.md"), "utf8");
   } catch {
   }
   const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
-  for (const id of listed) if (!current.has(id)) rmSync2(join10(items, `${id}.md`), { force: true });
-  for (const { row: row4, evidence } of all) writeIfChanged(join10(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
+  for (const id of listed) if (!current.has(id)) rmSync2(join11(items, `${id}.md`), { force: true });
+  for (const { row: row4, evidence } of all) writeIfChanged(join11(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
   const index = ["# Memory export", "", "Read only: editing these files changes nothing in memory.", ""];
   const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
   for (const status of statuses) {
@@ -5614,7 +5679,7 @@ function exportMarkdown(stores2, dir, repository) {
     for (const { row: row4 } of group) index.push(`- [${row4.id}](items/${row4.id}.md) ${span(row4.type)} ${span(where(row4))}`);
     index.push("");
   }
-  writeIfChanged(join10(dir, "index.md"), `${index.join("\n")}
+  writeIfChanged(join11(dir, "index.md"), `${index.join("\n")}
 `, previous !== "");
   return all.length;
 }
@@ -5905,18 +5970,18 @@ async function diffRecall(data, config, context, cwd, range) {
 }
 
 // src/recall/orbit.ts
-import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
-import { join as join11 } from "node:path";
+import { existsSync as existsSync11, readFileSync as readFileSync13 } from "node:fs";
+import { join as join12 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
 function lessonsInPrompts(root) {
-  const file = join11(root, ".orbit", "config.yaml");
+  const file = join12(root, ".orbit", "config.yaml");
   if (!existsSync11(file)) return false;
   let sections = 0;
   let inKnowledge = false;
   let indent = 0;
   const seen = {};
-  for (const line of readFileSync12(file, "utf8").split(/\r?\n/)) {
+  for (const line of readFileSync13(file, "utf8").split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
     if (line.includes("	")) return false;
     const spaces = /^ */.exec(line)[0].length;
@@ -6484,8 +6549,8 @@ function captureCi(data, config, cwd, limit = 100) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync12, readFileSync as readFileSync13, realpathSync as realpathSync5 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute8, join as join12, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync14, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname11, isAbsolute as isAbsolute8, join as join13, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
 var str4 = (v) => typeof v === "string" && v !== "" ? v : void 0;
@@ -6500,7 +6565,7 @@ function locate(abs) {
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root = realpathSync5(top);
-  const path = relative5(root, join12(realpathSync5(dir), relative5(dir, abs)));
+  const path = relative5(root, join13(realpathSync5(dir), relative5(dir, abs)));
   return path.startsWith("..") || isAbsolute8(path) ? null : { root, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
@@ -6556,7 +6621,7 @@ function anchored(items, root, t) {
   const read2 = () => {
     if (text5 === void 0) {
       try {
-        text5 = readFileSync13(resolve6(root, t.path), "utf8");
+        text5 = readFileSync14(resolve6(root, t.path), "utf8");
       } catch {
         text5 = null;
       }
@@ -6729,7 +6794,7 @@ function falseRecall(version, events) {
 // src/eval/replay.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text5) {
   const doc = JSON.parse(text5);
@@ -6756,9 +6821,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync2(join13(tmpdir3(), "memory-replay-"));
+  const dir = mkdtempSync2(join14(tmpdir3(), "memory-replay-"));
   try {
-    const db = openStore(join13(dir, "replay.sqlite"), true);
+    const db = openStore(join14(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -6812,7 +6877,7 @@ function replay(version, pulls, since) {
 // src/eval/poison.ts
 import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -6939,8 +7004,8 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync3(join14(tmpdir4(), "memory-poison-"));
-  const db = openStore(join14(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync3(join15(tmpdir4(), "memory-poison-"));
+  const db = openStore(join15(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
@@ -7017,19 +7082,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync4 } from "node:child_process";
-import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync14, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync15, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { dirname as dirname12, join as join15 } from "node:path";
+import { dirname as dirname12, join as join16 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
 var ROOT = dirname12(dirname12(fileURLToPath2(import.meta.url)));
-var TASKS = join15(ROOT, "lab", "tasks");
-var BUNDLE = join15(ROOT, "dist", "memory.mjs");
+var TASKS = join16(ROOT, "lab", "tasks");
+var BUNDLE = join16(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", "types"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync13(join15(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync13(join16(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -7039,7 +7104,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join15(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join16(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -7058,7 +7123,7 @@ var jsonLines2 = (text5) => text5.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync13(file) ? jsonLines2(readFileSync14(file, "utf8")) : [];
+var readLines = (file) => existsSync13(file) ? jsonLines2(readFileSync15(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -7072,10 +7137,10 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync4(join15(base2, "run-"));
-  const repo = join15(dir, "repo");
-  const data = join15(dir, "data");
-  const out = join15(dir, "out");
+  const dir = mkdtempSync4(join16(base2, "run-"));
+  const repo = join16(dir, "repo");
+  const data = join16(dir, "data");
+  const out = join16(dir, "out");
   mkdirSync9(data);
   mkdirSync9(out);
   fixtureRepository(task, repo);
@@ -7100,8 +7165,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join15(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join15(hidden, f));
+  const hidden = join16(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join16(hidden, f));
   const grade2 = agentFailed ? null : spawnSync4(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -7109,7 +7174,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade2?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join15(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join16(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
@@ -7138,12 +7203,12 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync4(join15(tmpdir5(), "memory-lab-"));
+  const base2 = mkdtempSync4(join16(tmpdir5(), "memory-lab-"));
   try {
-    const plugin = join15(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync13(join15(ROOT, part))) cpSync(join15(ROOT, part), join15(plugin, part), { recursive: true });
+    const plugin = join16(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync13(join16(ROOT, part))) cpSync(join16(ROOT, part), join16(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync14(join15(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync15(join16(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off, on] = arms;
       return [
@@ -7246,19 +7311,19 @@ function buildReplaySet(h, since) {
 
 // src/eval/head-to-head/scorecard.ts
 import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 import { performance } from "node:perf_hooks";
 
 // src/eval/head-to-head/arms.ts
 import { spawn } from "node:child_process";
 import { mkdtempSync as mkdtempSync5, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 import { createInterface as createInterface2 } from "node:readline";
 var TYPE = { decision: "decision", correction: "convention", lesson: "precedent", hazard: "hazard", failure: "failure-pattern", "code-change": "" };
 function memoryArm() {
-  const dir = mkdtempSync5(join16(tmpdir6(), "memory-head-to-head-"));
-  const db = openStore(join16(dir, "arm.sqlite"), true);
+  const dir = mkdtempSync5(join17(tmpdir6(), "memory-head-to-head-"));
+  const db = openStore(join17(dir, "arm.sqlite"), true);
   let set;
   const item = /* @__PURE__ */ new Map();
   const evidence = /* @__PURE__ */ new Map();
@@ -7641,11 +7706,11 @@ async function headToHead(version, set, external, checked, out) {
     vocabulary_misses: vocabulary,
     memory_misses_found_elsewhere: elsewhere,
     vocabulary_miss_share: share,
-    matcher_precision: precision(sampled, checked, join17(out, "sample.jsonl"))
+    matcher_precision: precision(sampled, checked, join18(out, "sample.jsonl"))
   };
   rows.push(...latency, verdict2);
   mkdirSync10(out, { recursive: true, mode: 448 });
-  const write = (file, text5) => writeFileSync6(join17(out, file), text5, { mode: 384 });
+  const write = (file, text5) => writeFileSync6(join18(out, file), text5, { mode: 384 });
   const lines2 = (xs) => xs.map((x) => `${JSON.stringify(x)}
 `).join("");
   write("replay-set.json", `${JSON.stringify(set, null, 1)}
@@ -7658,7 +7723,7 @@ async function headToHead(version, set, external, checked, out) {
 `);
   return { rows, last };
 }
-var headToHeadDir = (data, tenant) => join17(data, "eval", "head-to-head", tenant);
+var headToHeadDir = (data, tenant) => join18(data, "eval", "head-to-head", tenant);
 
 // src/cli.ts
 suppressSqliteExperimentalWarning();
@@ -7791,7 +7856,11 @@ var USAGE = `usage: memory <command>
       or a compaction's redacted summary as an episode; the next session start or sweep reads the corrections
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
-      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
+      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports.
+      Past capture.maxCallsPerDay or maxTokensPerDay in a local day it makes no model call and logs a daily cap skip
+  capture --cost [--since <YYYY-MM-DD>]
+      what capture cost, per local day, from logs/capture.jsonl alone: runs (api key or Claude Code login), skips by
+      reason, input and output tokens
   purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
       learned in that repository. --source reaches this repository's tenant and the person file: an item left without
@@ -8587,11 +8656,11 @@ function correctionsCommand(data, cwd) {
   }
 }
 async function modelClient() {
-  process.stdout.write(await ollamaClient(readFileSync15(0, "utf8")));
+  process.stdout.write(await ollamaClient(readFileSync16(0, "utf8")));
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync15(0, "utf8"));
+    const v = JSON.parse(readFileSync16(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -8721,7 +8790,15 @@ function preCompactHook(data) {
 }
 var LOG_LOCK_PURGE_MS = 1e4;
 async function captureCommand(args, data) {
-  const { values } = parseArgs({ args, options: { foreground: { type: "boolean" } } });
+  const { values } = parseArgs({ args, options: { foreground: { type: "boolean" }, cost: { type: "boolean" }, since: { type: "string" } } });
+  if (values.cost === true || values.since !== void 0) {
+    if (values.cost !== true || values.foreground === true) throw new Refusal("usage: memory capture --cost [--since <YYYY-MM-DD>]", 2);
+    if (values.since !== void 0 && !/^\d{4}-\d{2}-\d{2}$/.test(values.since)) throw new Refusal("--since takes a date as YYYY-MM-DD", 2);
+    const lines2 = costReport(data, values.since);
+    if (lines2.length === 0) console.error("no capture runs logged");
+    for (const line of lines2) console.log(line);
+    return;
+  }
   const input2 = hookInput();
   if (values.foreground === true) {
     try {
@@ -8757,7 +8834,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync15(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync16(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -8812,7 +8889,7 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join18(data, "tenants");
+  const tenantsDir = join19(data, "tenants");
   const every = existsSync14(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
@@ -8864,7 +8941,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync15(file, "utf8"));
+    return parse(readFileSync16(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
