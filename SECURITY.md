@@ -153,6 +153,16 @@ no tenant, or in a Claude Code config not bound to that tenant.
   items with agent trust; text that reads as an instruction is quarantined.
   A model's output is data, never a command: it is refused if it carries a
   credential, an email or a handle, and it is shown as a cited fact in the fence.
+- **A shared file is a teammate's text.** `memory import --shared` reads
+  `.memory/shared.jsonl` only as committed at HEAD (`git show`), in a
+  repository that resolves to a tenant bound here; any other is refused before
+  a store is opened. Every line passes the strict gate, is stored as a
+  `team`-trust proposal tainted `shared:<owner/repo>`, and is quarantined when it
+  reads as an instruction; a line that repeats an item already held adds no
+  evidence to it, so it neither taints nor raises support.
+  `memory share` writes only active, unquarantined repository items, withholds
+  any whose text or source redaction would change or that names a committer,
+  refuses a symbolic link at the file's path, and never commits or pushes.
 - **SCF export sends proposals out.** `memory export --to scf` sends a tenant's
   proposed repository and organisation items to the SCF address configured for
   that tenant (`memory init --scf <tenant>=<url>`, https only, or http to this

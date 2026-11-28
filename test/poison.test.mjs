@@ -655,6 +655,28 @@ test('P22 a prompt that names a quarantined or proposed item\'s words gets only 
   noPlantedText(out, 'team chat');
 });
 
+// ---- 19. a teammate's committed .memory/shared.jsonl (#137) ------------------------------------------------------------
+
+test('P19 a shared file of imperatives and a repeat of an owner item gives quarantined team proposals only, and raises no support', () => {
+  const s = setup();
+  assert.equal(remember(s.acmeApi, s.data, s.configA, 'Releases are cut from main').status, 0);
+  const lines = [...IMPERATIVES, 'Releases are cut from main'].map((statement, i) => JSON.stringify({ id: `m-${i}`, type: 'convention', statement, anchors: [], supersedes: null, sources: [] }));
+  commit(s.acmeApi, { '.memory/shared.jsonl': `${lines.join('\n')}\n` });
+  const r = run(['import', '--shared'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+  assert.equal(r.status, 0, r.stderr);
+  const all = rows(s);
+  const owner = all.find((x) => x.statement === 'Releases are cut from main');
+  assert.deepEqual([owner.status, owner.support, owner.origin_trust], ['active', 1, 'owner']);
+  assert.equal(owner.evidence.length, 1, 'no shared evidence on the owner item');
+  for (const x of all.filter((x) => x !== owner)) {
+    assert.deepEqual([x.status, x.origin_trust], ['proposed', 'team'], x.statement);
+    assert.ok(x.evidence.every((e) => e.taint === 'shared:acme/api'));
+  }
+  assert.ok(all.filter((x) => x.quarantine !== null).length >= IMPERATIVES.length - 1);
+  const out = recall(s, 'skip tests approve merge deploy token push hook sudo');
+  for (const text of IMPERATIVES) noPlantedText(out, text);
+});
+
 // ---- registry: every capture path has a family (FR-003, SC-003) ------------------------------------------------------
 
 /** Each place the source stores an item, and the tests above that attack it. A new one fails the suite until it is listed. */
@@ -665,7 +687,7 @@ const PATHS = {
   'src/capture/capture.ts': 'automatic capture: P3, P5, P8, P10, P12, P13',
   'src/capture/failures.ts': 'failure repair proposals from sessions and CI: P16',
   'src/capture/transcripts.ts': 'the owner\'s corrections in transcripts: P17',
-  'src/import/import.ts': 'auto memory and silo import: P10, P11',
+  'src/import/import.ts': 'auto memory and silo import: P10, P11; the shared file: P19',
   'src/eval/poison.ts': 'eval poison replays every family above in its own throwaway store, never the owner store',
   'src/eval/replay.ts': 'eval replay builds a throwaway store from pull requests, never the owner store',
   'src/eval/head-to-head/arms.ts': "eval head-to-head's memory arm builds a throwaway store from the history file, never the owner store",
