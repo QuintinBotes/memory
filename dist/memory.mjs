@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync15, readFileSync as readFileSync16, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
-import { basename as basename4, isAbsolute as isAbsolute9, join as join19, normalize as normalize4 } from "node:path";
+import { existsSync as existsSync15, readFileSync as readFileSync17, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
+import { basename as basename4, isAbsolute as isAbsolute9, join as join20, normalize as normalize4 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, write
 import { homedir } from "node:os";
 import { isAbsolute, join as join2, resolve } from "node:path";
 var EMBEDDING_PROVIDERS = ["ollama", "voyage", "fake"];
-var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5" };
+var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5", maxCallsPerDay: 100, maxTokensPerDay: 2e6, skipTainted: false };
 var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
 var SILOS = ["rejections", "standards", "policy", "notes", "decisions", "orbit"];
 var DEFAULT_SESSION_BUDGET = 300;
@@ -125,9 +125,10 @@ function loadConfig(data) {
   const capture2 = c.capture;
   if (capture2 !== void 0) {
     const ok2 = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
-    const { enabled: enabled2, model, maxCandidates, apiModel } = ok2 ? capture2 : {};
-    if (!ok2 || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) {
-      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias }');
+    const { enabled: enabled2, model, maxCandidates, apiModel, maxCallsPerDay, maxTokensPerDay, skipTainted } = ok2 ? capture2 : {};
+    const cap = (n) => n === void 0 || Number.isInteger(n) && n >= 1;
+    if (!ok2 || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || skipTainted !== void 0 && typeof skipTainted !== "boolean" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20) || !cap(maxCallsPerDay) || !cap(maxTokensPerDay)) {
+      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, maxCallsPerDay and maxTokensPerDay: whole numbers of 1 or more, skipTainted: true|false }');
     }
   }
   if (c.automation !== void 0 && typeof c.automation !== "boolean") throw new ConfigError("automation must be true or false");
@@ -1436,7 +1437,7 @@ var DATA_CATEGORIES = [
   { id: "injections", since: 2, text: "Which items a subagent was shown, and with pointOfAction on which an agent was shown when it read or edited anchored code, by item id with its anchored file paths, the session and agent ids, the estimated tokens and the time, in logs/injections.jsonl; never their text. memory purge removes the lines of the items it deletes, --older-than the lines older than its cut-off, and --all the file" },
   { id: "import", since: 1, text: "When you run memory import: the auto memory files of every Claude Code config bound here, and the review-standards, rejections, Review Voice policy and notes files, listed under imports in config.json; each statement is stored as a proposal that waits for your approval" },
   { id: "embeddings", since: 13, text: "Embeddings, only when embeddings in config.json names a provider (off by default; a local Ollama with an embedding model you install, or voyage-4, which needs VOYAGE_API_KEY): the text of each active item you remember or approve, and the words of each memory_search query and the changed files' names of memory recall --diff, are sent to that provider and the vectors that come back are kept in the item's own file. A tenant's text is sent only to a provider on this machine (an address of 127.0.0.1, localhost or [::1]); one elsewhere gets the person file's text only. When rerank in config.json names a generative model (off by default; Inkling 2 Mini on the same local Ollama unless set, which you install), each memory_search query or memory recall --diff file list and the statements of the rows it found are sent to it to reorder them, under the same rule for a tenant's text. Quarantined text is never sent, and no hook uses either. Without a provider, a key or a network, nothing is sent and recall uses words and paths only" },
-  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. Turn it off with capture.enabled false in config.json" },
+  { id: "capture", since: 3, text: "At the end of a session in a repository that matches a tenant: the session transcript's user and assistant text, newest 48,000 characters at most, with credentials, emails and handles replaced, is sent to Anthropic's API (key ANTHROPIC_API_KEY, model set in config capture) so a small model can pick out lessons and decisions; text between <private> and </private> is left out, a session in which you typed DO NOT INDEX THIS CHAT is not sent, and with capture.skipTainted true neither is a session that read the web or another MCP server; what it keeps is stored as active items with agent trust, and the tokens used per run go to logs/capture.jsonl, never the transcript. At most capture.maxCallsPerDay calls (100) and maxTokensPerDay tokens (2,000,000) a local day; past either, capture waits for the next day, and memory capture --cost shows the spend. Turn it off with capture.enabled false in config.json" },
   { id: "decisions", since: 5, text: "When you run memory import with decisions set under imports: Review Voice's SQLite store is opened read-only. It holds findings and decisions for every repository it reviewed; those of other repositories are read and then filtered out, and only the checkout's own repository's owner and team decisions are kept, each as a proposal that waits for your approval. The finding text came from a model, so it is checked as agent-written" },
   { id: "orbit", since: 6, text: "When you run memory import --orbit: each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite unless imports names another) is opened read-only. Its validated repository lessons, the runs that supported or contradicted them and the failure fingerprints and check ids of runs that ended without succeeding are kept as proposals in the checkout's tenant, agent-trusted, waiting for your approval. Lessons of Orbit's global graph are not read. memory recall --orbit, called by Orbit, reads active items and the checkout's .orbit/config.yaml and writes nothing" },
   { id: "failures", since: 7, text: "Failures that were fixed (#18): memory ci reads this repository's GitHub Actions runs with gh run list and, for a failed run followed by a passing run on another commit, the failed run's log with gh run view --log-failed; Orbit's run-end observations count the same way. The log line that names the failure, with credentials, emails, handles and committers' names replaced, is kept in a repair proposal that waits for your approval; the rest of the log is not kept. When you turn on the separate opt-in for failing commands (memory init --failing-commands on), a failed Bash command in a session is also kept as an episode: its scrubbed error line, the command's program and subcommand only (npm run build; never its arguments, flags, paths or environment), a hash of the command and the directory it ran in, the failure's fingerprint, the session id, the commit it failed at and the time, in the tenant's file, deleted after 30 days, and the same command passing later in that session, after a new commit, becomes a repair proposal. Commits and reverts are tracked without that opt-in: the commit hash of each commit made in a session, with the ids of the items shown in that session, and each revert of such a commit made by you (the commit's subject Revert or Reapply, its body naming the hash); a revert counts as a contradiction of those items, and two such reverts within seven days turn recall off until you run memory init --recall on. memory purge removes episodes with the items it deletes and --older-than removes episodes older than its cut-off" },
@@ -2443,8 +2444,8 @@ function fuse(items, similarity2, ranked) {
 
 // src/capture/capture.ts
 import { createHash as createHash4 } from "node:crypto";
-import { appendFileSync as appendFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename2, dirname as dirname8, join as join6 } from "node:path";
+import { appendFileSync as appendFileSync3, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync9, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename as basename3, dirname as dirname8, join as join7 } from "node:path";
 
 // src/store/db.ts
 import { DatabaseSync } from "node:sqlite";
@@ -2811,6 +2812,7 @@ function haiku(apiModel, env = process.env) {
     async extract(text5) {
       const key2 = env["ANTHROPIC_API_KEY"];
       if (key2 === void 0 || key2 === "") return viaCli(model, apiModel, text5, env);
+      model.via = "api";
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": key2, "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -2840,12 +2842,14 @@ function viaCli(model, apiModel, text5, env) {
   if (body2.is_error === true || typeof body2.result !== "string") throw new Error(`claude -p answered an error: ${String(body2.result ?? "no result").slice(0, 200)}`);
   const u = body2.usage ?? {};
   model.usage = { input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), output: u.output_tokens ?? 0 };
+  model.via = "login";
   return parseCandidates(body2.result);
 }
 function fake() {
   const model = {
     async extract(text5) {
       model.usage = { input: Math.ceil(text5.length / 4), output: 0 };
+      model.via = "fake";
       return [...text5.matchAll(/^L(\d+) \w+: (LESSON|DECISION): (.+)$/gm)].map((m) => ({
         kind: m[2] === "LESSON" ? "lesson" : "decision",
         statement: m[3],
@@ -2859,6 +2863,298 @@ function filterModel(settings, env = process.env) {
   if (settings.model === "haiku") return haiku(settings.apiModel, env);
   if (settings.model === "fake") return fake();
   throw new Error(`capture.model "${settings.model}" is not a filter; use haiku or fake`);
+}
+
+// src/capture/cost.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join6 } from "node:path";
+var DAILY_CAP = "daily cap";
+function localDay(at3) {
+  const d = new Date(at3);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function readCaptureLog(data) {
+  let text5;
+  try {
+    text5 = readFileSync7(join6(data, "logs", "capture.jsonl"), "utf8");
+  } catch {
+    return [];
+  }
+  return text5.split("\n").flatMap((line) => {
+    try {
+      const o = JSON.parse(line);
+      return typeof o === "object" && o !== null && typeof o.at === "string" ? [o] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+var isRun = (l) => l.skipped === void 0 && typeof l.inputTokens === "number";
+function dailyCap(data, settings, session) {
+  const today = localDay(Date.now());
+  const lines2 = readCaptureLog(data).filter((l) => localDay(l.at) === today);
+  const runs = lines2.filter(isRun);
+  const tokens2 = runs.reduce((n, l) => n + (l.inputTokens ?? 0) + (l.outputTokens ?? 0), 0);
+  const reason = runs.length >= settings.maxCallsPerDay ? `${runs.length} of ${settings.maxCallsPerDay} calls today` : tokens2 >= settings.maxTokensPerDay ? `${tokens2} of ${settings.maxTokensPerDay} tokens today` : null;
+  return reason === null ? null : { reason, told: lines2.some((l) => l.skipped === DAILY_CAP && l.session === session) };
+}
+function costReport(data, since) {
+  const days = /* @__PURE__ */ new Map();
+  for (const l of readCaptureLog(data)) {
+    const day = localDay(l.at);
+    if (since !== void 0 && day < since) continue;
+    days.set(day, [...days.get(day) ?? [], l]);
+  }
+  const counts2 = (keys) => [...keys.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), /* @__PURE__ */ new Map())].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, n]) => `${k} ${n}`).join(", ");
+  return [...days.keys()].sort().map((day) => {
+    const lines2 = days.get(day);
+    const runs = lines2.filter(isRun);
+    const skips = lines2.filter((l) => l.skipped !== void 0).map((l) => l.skipped);
+    const sum = (k) => runs.reduce((n, l) => n + (l[k] ?? 0), 0);
+    return [
+      day,
+      `runs ${runs.length}${runs.length > 0 ? ` (${counts2(runs.map((l) => l.via ?? "unrecorded"))})` : ""}`,
+      `skipped ${skips.length}${skips.length > 0 ? ` (${counts2(skips)})` : ""}`,
+      `input ${sum("inputTokens")}`,
+      `output ${sum("outputTokens")}`
+    ].join("  ");
+  });
+}
+
+// src/capture/transcripts.ts
+import { randomBytes as randomBytes4 } from "node:crypto";
+import { existsSync as existsSync5, readFileSync as readFileSync8 } from "node:fs";
+import { basename as basename2 } from "node:path";
+var TRANSCRIPT_DAYS = 30;
+var MAX_SUMMARY = 4e3;
+var cutoff = () => new Date(Date.now() - TRANSCRIPT_DAYS * 864e5).toISOString();
+var transcriptsOn = (config) => config !== null && consented(config) && config.optIns.transcripts && covers(config, "transcripts");
+var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
+function recordTranscript(data, input2) {
+  const config = loadConfig(data);
+  if (!transcriptsOn(config)) return;
+  const path = str(input2["transcript_path"]);
+  if (automationRefusal(config, process.env) !== null) return;
+  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
+  const person = context.tenant === null;
+  if (person ? !covers(config, "personTranscripts") : context.repository === null) return;
+  const compaction = input2["hook_event_name"] === "PostCompact";
+  const summary = compaction ? str(input2["compact_summary"]) : void 0;
+  if (compaction ? person || summary === void 0 : path === void 0) return;
+  const session = str(input2["session_id"]) ?? "unknown";
+  const repository = context.repository ?? "";
+  const db = openStore(person ? personFile(data) : tenantFile(data, context.tenant), true, HOOK_BUSY_MS);
+  try {
+    const id = `t-${randomBytes4(5).toString("hex")}`;
+    const at3 = (/* @__PURE__ */ new Date()).toISOString();
+    if (summary !== void 0) {
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, repository, scrub(summary).slice(0, MAX_SUMMARY), at3, at3);
+    } else if (db.prepare("SELECT 1 FROM transcripts WHERE session = ? AND kind = 'path' AND path = ? AND processed_at IS NULL").get(session, path) === void 0) {
+      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, repository, path, at3);
+    }
+  } finally {
+    db.close();
+  }
+}
+var NOT_TYPED = /^</;
+var HIDDEN = "\uE000";
+var TAGS = ["<private>", "</private>"];
+function hidePrivate(text5, state) {
+  const s = state.held + text5;
+  let out = "";
+  let last = 0;
+  for (const m of s.matchAll(/<(\/?)private>/gi)) {
+    if (state.depth === 0) out += s.slice(last, m.index);
+    if (m[1] === "") {
+      if (state.depth === 0) out += HIDDEN;
+      state.depth++;
+    } else if (state.depth > 0 && --state.depth === 0) out += HIDDEN;
+    last = m.index + m[0].length;
+  }
+  const rest = s.slice(last);
+  let keep = 0;
+  for (let n = Math.min(rest.length, TAGS[1].length - 1); n > 0 && keep === 0; n--) {
+    if (TAGS.some((t) => t.startsWith(rest.slice(rest.length - n).toLowerCase()))) keep = n;
+  }
+  state.held = rest.slice(rest.length - keep);
+  const shown = rest.slice(0, rest.length - keep);
+  return out + (state.depth > 0 ? HIDDEN : shown);
+}
+var NEVER_TEXT = /* @__PURE__ */ new Set(["type", "id", "tool_use_id", "role", "uuid", "parentUuid", "messageId", "sessionId", "timestamp", "cwd", "version", "gitBranch", "userType", "entrypoint", "requestId"]);
+function* writtenStrings(row4) {
+  const stack = [];
+  const pathOf = () => stack.map((f) => f.array ? f.index : f.key);
+  let i = 0;
+  while (i < row4.length) {
+    const c = row4[i];
+    const top = stack[stack.length - 1];
+    if (c === "{" || c === "[") {
+      stack.push({ array: c === "[", index: 0, key: "", expectKey: c === "{", skip: false });
+      i++;
+    } else if (c === "}" || c === "]") {
+      stack.pop();
+      i++;
+    } else if (c === ",") {
+      if (top?.array) top.index++;
+      else if (top) {
+        top.expectKey = true;
+        top.skip = false;
+      }
+      i++;
+    } else if (c === ":") {
+      if (top) top.expectKey = false;
+      i++;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < row4.length && row4[j] !== '"') j += row4[j] === "\\" ? 2 : 1;
+      const text5 = JSON.parse(row4.slice(i, j + 1));
+      i = j + 1;
+      if (top !== void 0 && !top.array && top.expectKey) {
+        top.key = text5;
+        top.skip = NEVER_TEXT.has(text5);
+        if (!stack.some((f) => f.skip) && /[<>]/.test(text5)) yield { path: pathOf().slice(0, -1), text: text5, key: true };
+      } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text: text5, key: false };
+    } else i++;
+  }
+}
+function hidePrivateRecords(raw) {
+  const state = { depth: 0, held: "" };
+  return raw.split("\n").map((row4) => {
+    let o;
+    try {
+      o = JSON.parse(row4);
+    } catch {
+      hidePrivate(row4, state);
+      return null;
+    }
+    for (const t of writtenStrings(row4)) {
+      const visible2 = hidePrivate(t.text, state);
+      if (t.key || t.path.length === 0) continue;
+      let at3 = o;
+      for (const k of t.path.slice(0, -1)) at3 = at3?.[k];
+      if (typeof at3 === "object" && at3 !== null) at3[t.path.at(-1)] = visible2;
+    }
+    return typeof o === "object" && o !== null ? o : null;
+  });
+}
+function ownerTurns(file) {
+  const raw = readFileSync8(file, "utf8");
+  if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
+  const turns = [];
+  const state = { depth: 0, held: "" };
+  raw.split("\n").forEach((row4, i) => {
+    let o;
+    try {
+      o = JSON.parse(row4);
+    } catch {
+      hidePrivate(row4, state);
+      return;
+    }
+    const eligible2 = o?.type === "user" && o.isSidechain !== true && o.isMeta !== true;
+    const content = o?.message?.content;
+    const mine = (path) => eligible2 && path[0] === "message" && path[1] === "content" && (path.length === 2 || path.length === 4 && path[3] === "text" && content?.[path[2]]?.type === "text");
+    const pieces = [];
+    for (const t of writtenStrings(row4)) {
+      const visible2 = hidePrivate(t.text, state);
+      if (!t.key && mine(t.path)) pieces.push(visible2);
+    }
+    const flat = scrub(pieces.join(" ")).replace(/\s+/g, " ").trim();
+    if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
+  });
+  return turns;
+}
+var CORRECTION = /^(?:no(?=[,.!:;])|no\s+(?:use|not|do|don'?t|that|it|the|wait|stop)\b|nope\b|wrong\b|stop\b|don'?t\b|do not\b|never\b|not that\b|that'?s (?:not|wrong)\b|actually\b|instead\b|please (?:don'?t|do not|stop|use)\b)/i;
+function findCorrections(turns) {
+  const out = [];
+  for (const t of turns.slice(1)) {
+    for (const quote of t.text.split(/(?<=[.!?])\s+/)) {
+      if (!quote.includes(HIDDEN) && CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
+    }
+  }
+  return out;
+}
+var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
+function expireTranscripts(db) {
+  const expired = Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
+  if (expired > 0) recordAudit(db, "transcripts_expired", null, { expired });
+  return expired;
+}
+function propose2(db, tenant, config, r, turns, candidates) {
+  const person = tenant === "";
+  const terms = person ? organisationTerms(config, r.repository || null) : void 0;
+  let proposed = 0;
+  for (const c of verbatim(turns, candidates)) {
+    const statement = `Owner correction: "${c.quote}"`;
+    const source = `transcript:${r.session}:L${c.line}:${basename2(r.path)}`;
+    if (refusal(statement, terms) !== null || refusal(source) !== null) continue;
+    const stored = addItem(db, { tenant, scope: person ? "person" : "repository", scopeKey: person ? "" : r.repository, originRepository: r.repository || null, type: "preference", statement, rationale: null, anchors: [], source, trust: "owner", status: "proposed" });
+    if (stored.kind === "inserted") proposed++;
+  }
+  return proposed;
+}
+function processTranscripts(db, tenant, config, extract = findCorrections) {
+  const done = { read: 0, proposed: 0, missing: 0 };
+  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all();
+  for (const r of rows) {
+    let outcome = "read";
+    if (!existsSync5(r.path)) {
+      outcome = "missing";
+      done.missing++;
+    } else if (automationRefusal(config, {}, r.path) !== null) {
+      outcome = "automation";
+    } else {
+      done.read++;
+      const turns = ownerTurns(r.path);
+      done.proposed += propose2(db, tenant, config, r, turns, extract(turns));
+    }
+    db.prepare("UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), outcome, r.id);
+  }
+  if (rows.length > 0) recordAudit(db, "transcripts_processed", null, { ...done });
+  return done;
+}
+var MODEL_DEFAULTS = { url: "http://127.0.0.1:11434", model: "inkling-2-mini" };
+function modelTranscripts(db, tenant, config, ask) {
+  const done = { read: 0, proposed: 0 };
+  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND outcome = 'read' ORDER BY at, id").all();
+  for (const r of rows) {
+    const turns = existsSync5(r.path) && automationRefusal(config, {}, r.path) === null ? ownerTurns(r.path).slice(1) : [];
+    const found = turns.length === 0 ? [] : ask(turns);
+    if ("failed" in found) {
+      done.failed = found.failed;
+      break;
+    }
+    done.read++;
+    done.proposed += propose2(db, tenant, config, r, turns, found);
+    db.prepare("UPDATE transcripts SET outcome = 'model' WHERE id = ?").run(r.id);
+  }
+  if (done.read > 0) recordAudit(db, "transcripts_modelled", null, { read: done.read, proposed: done.proposed });
+  return done;
+}
+function parseCorrections(stdout) {
+  let o;
+  try {
+    o = JSON.parse(stdout.split("\n")[0]);
+  } catch {
+    return { failed: "it answered text that is not JSON" };
+  }
+  if (o?.status !== "ok" || !Array.isArray(o.corrections)) return { failed: "it did not answer status ok with corrections" };
+  return o.corrections.flatMap((c) => Number.isInteger(c?.line) && typeof c?.quote === "string" ? [{ line: c.line, quote: c.quote }] : []);
+}
+var PROMPT2 = `You read the owner's own messages from a coding session, one per line as "L<number>: <text>".
+Find each sentence in which the owner corrects what the agent did or chose, or says how the agent must work from now on.
+Answer JSON only: {"corrections":[{"line":<number>,"quote":"<the sentence, copied character for character>"}]}.
+Never paraphrase, shorten or fix a quote. Answer {"corrections":[]} when there is none.`;
+async function ollamaClient(input2) {
+  const req = JSON.parse(input2);
+  const res = await fetch(new URL("/api/generate", req.url), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: req.model, system: PROMPT2, prompt: req.turns.map((t) => `L${t.line}: ${t.text}`).join("\n"), format: "json", stream: false, options: { temperature: 0, num_predict: 2048 } })
+  });
+  if (!res.ok) throw new Error(`Ollama answered ${res.status}`);
+  const answer2 = JSON.parse((await res.json()).response ?? "");
+  return `${JSON.stringify({ status: "ok", corrections: Array.isArray(answer2?.corrections) ? answer2.corrections : [] })}
+`;
 }
 
 // src/capture/capture.ts
@@ -2889,8 +3185,10 @@ var ADAPTERS = [
     }
   }
 ];
+var OPT_OUT = "DO NOT INDEX THIS CHAT";
 function readLog(file) {
-  const records = readFileSync7(file, "utf8").split("\n").map((line) => {
+  const raw = readFileSync9(file, "utf8");
+  const records = /<\/?private>/i.test(raw) ? hidePrivateRecords(raw) : raw.split("\n").map((line) => {
     try {
       const o = JSON.parse(line);
       return typeof o === "object" && o !== null ? o : null;
@@ -2900,22 +3198,25 @@ function readLog(file) {
   });
   const adapter = ADAPTERS.find((a) => records.some((o) => o !== null && a.owns(o)));
   if (adapter === void 0) return null;
+  let optedOut = false;
   const lines2 = records.map((o, i) => {
     const turn = o === null ? null : adapter.turn(o);
-    const flat = turn?.[1].replace(/\s+/g, " ").trim() ?? "";
+    if (turn?.[0] === "user" && o.isMeta !== true && o.isSidechain !== true && !/^\s*</.test(turn[1]) && turn[1].includes(OPT_OUT)) optedOut = true;
+    let flat = turn?.[1].replace(/\s+/g, " ").trim() ?? "";
+    if (flat.includes(HIDDEN)) flat = flat.split(/(?<=[.!?])\s+/).filter((s) => !s.includes(HIDDEN)).join(" ");
     return flat === "" ? "" : `L${i + 1} ${turn[0]}: ${flat}`;
   });
-  return { agent: adapter.agent, lines: lines2 };
+  return { agent: adapter.agent, lines: lines2, optedOut };
 }
 var summarise = (data, record) => {
-  mkdirSync6(join6(data, "logs"), { recursive: true, mode: 448 });
-  appendFileSync3(join6(data, "logs", "capture.jsonl"), `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), ...record })}
+  mkdirSync6(join7(data, "logs"), { recursive: true, mode: 448 });
+  appendFileSync3(join7(data, "logs", "capture.jsonl"), `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), ...record })}
 `, { mode: 384 });
 };
 function externalSources(file) {
   const found = /* @__PURE__ */ new Set();
   const label = (s) => s.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 60);
-  for (const line of readFileSync7(file, "utf8").split("\n")) {
+  for (const line of readFileSync9(file, "utf8").split("\n")) {
     try {
       const o = JSON.parse(line);
       if (o.payload?.type === "web_search_call") found.add("web:search");
@@ -2940,10 +3241,10 @@ function externalSources(file) {
   }
   return [...found].sort().slice(0, 3);
 }
-var stateFile2 = (data) => join6(data, "logs", "capture-state.json");
+var stateFile2 = (data) => join7(data, "logs", "capture-state.json");
 var readState = (data) => {
   try {
-    return JSON.parse(readFileSync7(stateFile2(data), "utf8"));
+    return JSON.parse(readFileSync9(stateFile2(data), "utf8"));
   } catch {
     return {};
   }
@@ -2998,8 +3299,8 @@ async function capture(data, input2) {
   if (context.tenant === null || context.repository === null) return `nothing captured: ${context.reason}`;
   const path = input2["transcript_path"];
   const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
-  if (typeof path !== "string" || !existsSync5(path)) return "nothing captured: no transcript";
-  const lock = join6(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
+  if (typeof path !== "string" || !existsSync6(path)) return "nothing captured: no transcript";
+  const lock = join7(data, "logs", "capture-locks", `${createHash4("sha256").update(session).digest("hex").slice(0, 16)}.lock`);
   if (!tryLock(lock)) return "nothing captured: another capture of this session is already running";
   try {
     return await captureLocked(data, config, { tenant: context.tenant, repository: context.repository }, path, session, input2);
@@ -3042,11 +3343,17 @@ function keepCandidates(db, context, candidates, from2) {
 async function captureLocked(data, config, context, path, session, input2) {
   const log = readLog(path);
   if (log === null) {
-    const skipped = `${basename2(path)}: unknown log format`;
+    const skipped = `${basename3(path)}: unknown log format`;
     summarise(data, { session, skipped, saved: 0 });
     return `nothing captured: skipped ${skipped}`;
   }
   const { agent, lines: lines2 } = log;
+  const taint = externalSources(path);
+  const optOut = log.optedOut ? `the owner wrote ${OPT_OUT}` : captureSettings(config).skipTainted && taint.length > 0 ? `the session read ${taint.join(", ")} and skipTainted is on` : null;
+  if (optOut !== null) {
+    summarise(data, { session, agent, skipped: optOut, saved: 0 });
+    return `nothing captured: ${optOut}`;
+  }
   const seen = readState(data)[session] ?? 0;
   let text5 = lines2.slice(seen).filter((l) => l !== "").join("\n");
   if (text5.length > MAX_TRANSCRIPT_CHARS) text5 = text5.slice(text5.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, "");
@@ -3056,19 +3363,23 @@ async function captureLocked(data, config, context, path, session, input2) {
     return `waiting for more: ${text5.length} of ${STOP_MIN_CHARS} characters; the session's end reads it whatever its length`;
   }
   const settings = captureSettings(config);
+  const capped = dailyCap(data, settings, session);
+  if (capped !== null) {
+    summarise(data, { session, agent, skipped: DAILY_CAP, saved: 0 });
+    return capped.told ? `nothing captured: ${DAILY_CAP}` : `skipped, daily cap reached: ${capped.reason}; capture resumes tomorrow from where it stopped`;
+  }
   const model = filterModel(settings);
   const candidates = (await model.extract(scrub(text5))).slice(0, settings.maxCandidates);
-  const taint = externalSources(path);
   const db = openStore(tenantFile(data, context.tenant), true);
   let kept;
   try {
-    kept = keepCandidates(db, context, candidates, { session, agent, source: `capture:${agent}:${session}:${basename2(path)}`, taint });
+    kept = keepCandidates(db, context, candidates, { session, agent, source: `capture:${agent}:${session}:${basename3(path)}`, taint });
   } finally {
     db.close();
   }
   const { saved, merged, queued } = kept;
   const usage2 = model.usage ?? { input: 0, output: 0 };
-  summarise(data, { session, agent, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, candidates: candidates.length, saved, merged });
+  summarise(data, { session, agent, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, via: model.via, candidates: candidates.length, saved, merged });
   commitWatermark(data, session, lines2.length);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }
@@ -3180,7 +3491,7 @@ function providerFor(config, timeoutMs, env = process.env) {
 // src/recall/rerank.ts
 var RERANK_DEFAULTS = { url: OLLAMA_URL, model: "inkling-2-mini" };
 var RERANK_TIMEOUT_MS = 3e3;
-var PROMPT2 = `You rank remembered facts by how well each answers a search query.
+var PROMPT3 = `You rank remembered facts by how well each answers a search query.
 The facts are numbered. Answer JSON only: {"order":[<the numbers, most relevant first>]}.`;
 async function rerank(config, context, query, hits) {
   if (config.rerank === void 0 || hits.length < 2) return { hits };
@@ -3199,7 +3510,7 @@ async function rerank(config, context, query, hits) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model,
-        system: PROMPT2,
+        system: PROMPT3,
         format: "json",
         stream: false,
         options: { temperature: 0 },
@@ -3603,7 +3914,7 @@ function itemDetail(data, context, cwd, id) {
   };
   return { ...found, view, anchors, status, anchorStatus, level, taint };
 }
-function propose2(args, data, config, context, cwd, agent) {
+function propose3(args, data, config, context, cwd, agent) {
   const automated = automationRefusal(config);
   if (automated !== null) throw new ToolError(`not proposed: ${automated}`);
   const statement = text2(args, "statement");
@@ -3690,7 +4001,7 @@ async function call(name, args, data, cwd, agent) {
     case "memory_related":
       return relatedTool(args, data, config, context, cwd);
     case "memory_propose":
-      return propose2(args, data, config, context, cwd, agent);
+      return propose3(args, data, config, context, cwd, agent);
     case "memory_feedback":
       return feedback(args, data, context, cwd);
     default:
@@ -3764,7 +4075,7 @@ function serve(data, cwd, version) {
 }
 
 // src/ui/server.ts
-import { randomBytes as randomBytes4, timingSafeEqual } from "node:crypto";
+import { randomBytes as randomBytes5, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/review/review.ts
@@ -4356,8 +4667,8 @@ async function answer(req, url, data, cwd) {
   }
 }
 function serveUi(data, cwd, port) {
-  const token = randomBytes4(32).toString("hex");
-  const nonce = randomBytes4(16).toString("base64");
+  const token = randomBytes5(32).toString("hex");
+  const nonce = randomBytes5(16).toString("base64");
   const peerOverride = process.env["MEMORY_TEST_HARNESS"] === "1" ? process.env["MEMORY_UI_PEER"] : void 0;
   const server = createServer((req, res) => {
     const send = (status, type, payload) => {
@@ -4408,9 +4719,9 @@ function serveUi(data, cwd, port) {
 }
 
 // src/promote/promote.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
-import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync8, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute5, join as join7, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
+import { randomBytes as randomBytes6 } from "node:crypto";
+import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync10, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute5, join as join8, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
 var DEFAULT_STANDARDS = "docs/review-standards.md";
 var BAR = `tenant = ? AND scope = 'repository' AND scope_key = ? AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}
   AND origin_trust = 'owner' AND quarantine IS NULL AND support >= ${PROMOTE_SUPPORT} AND contradictions = 0
@@ -4433,7 +4744,7 @@ function lineRefusal(statement, top) {
   const names = committers(top);
   return names.some((n) => new RegExp(`(?<![\\p{L}\\p{N}_])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u").test(statement)) ? "it names a committer" : null;
 }
-function propose3(db, tenant, repository, top, file) {
+function propose4(db, tenant, repository, top, file) {
   let made = 0;
   const insert = db.prepare(
     `INSERT OR IGNORE INTO promotions (id, item_id, target, symbol, file, line, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)`
@@ -4443,7 +4754,7 @@ function propose3(db, tenant, repository, top, file) {
       const symbol = untested(item);
       const row4 = symbol !== null ? ["test", symbol, null, null] : file !== null && PROMOTABLE.has(item.type) && lineRefusal(item.statement, top) === null ? ["review-standards", "", file, `- ${item.statement.trim()}`] : null;
       if (row4 === null) continue;
-      const id = `p-${randomBytes5(5).toString("hex")}`;
+      const id = `p-${randomBytes6(5).toString("hex")}`;
       if (Number(insert.run(id, item.id, row4[0], row4[1], row4[2], row4[3], (/* @__PURE__ */ new Date()).toISOString()).changes) === 1) {
         made++;
         recordAudit(db, "promotion_proposed", { type: "item", id: item.id }, { promotion: id, target: row4[0] });
@@ -4481,7 +4792,7 @@ function writable(top, rel) {
   while (!exists(dir)) dir = dirname9(dir);
   let real;
   try {
-    real = join7(realpathSync3(dir), relative4(dir, target));
+    real = join8(realpathSync3(dir), relative4(dir, target));
   } catch {
     throw new Error(`${clean} resolves outside the repository; nothing was written`);
   }
@@ -4500,7 +4811,7 @@ function readPlain(path, name) {
   }
   try {
     const { dev, ino } = fstatSync(fd);
-    const bytes = readFileSync8(fd);
+    const bytes = readFileSync10(fd);
     if (bytes.length > MAX_BYTES) throw new Error(`${name} is too large to edit (over ${MAX_BYTES / 1024} KB); nothing was written`);
     try {
       return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), dev, ino };
@@ -4665,8 +4976,8 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync8, lstatSync as lstatSync3, readFileSync as readFileSync9, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join9, sep as sep3 } from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync3, readFileSync as readFileSync11, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join10, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
 import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
@@ -4719,6 +5030,16 @@ function policy(text5) {
     if (!top && item && POLICY_KEYS.has(key2)) statements.push({ line: i + 1, text: unquote(item[1]) });
   });
   return parsed(statements);
+}
+function ownerReviewer(text5) {
+  let key2 = "";
+  for (const line of lines(text5)) {
+    const top = /^([A-Za-z_][\w-]*):/.exec(line);
+    if (top) key2 = top[1];
+    const m = key2 === "identity" ? /^\s+owner_reviewer:\s*(\S.*?)\s*(?:#.*)?$/.exec(line) : null;
+    if (m) return unquote(m[1]) || null;
+  }
+  return null;
 }
 function jsonLines(text5, each) {
   const unreadable = [];
@@ -4781,7 +5102,7 @@ var OWNER_STATEMENTS = {
   never_flag: (text5) => `Owner declined this finding: ${text5}`,
   rewrite: (_text, replacement) => replacement === null ? null : `Owner reworded a finding to: ${replacement}`
 };
-function reviewVoiceDecisions(path) {
+function reviewVoiceDecisions(path, owner = null) {
   let db;
   try {
     db = new DatabaseSync2(path, { readOnly: true });
@@ -4835,8 +5156,10 @@ ${f.finding_id}`);
       if (statement !== void 0) add(f.review_run_id, f.finding_id, "owner", (text5) => statement(text5, f.replacement_text?.trim() || null));
     }
     for (const o of outcomes2) {
-      if (!decided.has(`${o.review_run_id}
-${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "agent" : "team", (text5) => `Declined in review by ${o.decided_by == null ? "someone unnamed" : "a team member"}: ${text5}`);
+      if (decided.has(`${o.review_run_id}
+${o.finding_id}`)) continue;
+      if (owner !== null && o.decided_by?.toLowerCase() === owner.toLowerCase()) add(o.review_run_id, o.finding_id, "owner", (text5) => `Owner declined this finding: ${text5}`);
+      else add(o.review_run_id, o.finding_id, o.decided_by == null ? "agent" : "team", (text5) => `Declined in review by ${o.decided_by == null ? "someone unnamed" : "a team member"}: ${text5}`);
     }
     return { decisions, unreadable };
   } catch (error) {
@@ -4847,9 +5170,9 @@ ${o.finding_id}`)) add(o.review_run_id, o.finding_id, o.decided_by == null ? "ag
 }
 
 // src/import/orbit.ts
-import { copyFileSync, existsSync as existsSync7, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync as existsSync8, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
 var PASSED = /^(?:passed|succeeded|success|completed|done)$/i;
 var TYPES2 = { practice: "convention", convention: "convention", hazard: "hazard", "failure-pattern": "failure-pattern", "repair-recipe": "repair-recipe" };
@@ -4858,10 +5181,10 @@ function orbitFindings(path) {
   let dir;
   let db;
   try {
-    dir = mkdtempSync(join8(tmpdir2(), "memory-orbit-"));
-    const copy = join8(dir, "knowledge.sqlite");
+    dir = mkdtempSync(join9(tmpdir2(), "memory-orbit-"));
+    const copy = join9(dir, "knowledge.sqlite");
     copyFileSync(path, copy);
-    if (existsSync7(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
+    if (existsSync8(`${path}-wal`)) copyFileSync(`${path}-wal`, `${copy}-wal`);
     db = new DatabaseSync3(copy);
   } catch (error) {
     if (dir !== void 0) rmSync(dir, { recursive: true, force: true });
@@ -4955,13 +5278,13 @@ function orbitFindings(path) {
 var ORBIT_STORE = ".orbit/knowledge.sqlite";
 function readInside2(path, root2) {
   try {
-    if (!existsSync8(path)) return { reason: "not there" };
+    if (!existsSync9(path)) return { reason: "not there" };
     const link2 = lstatSync3(path).isSymbolicLink();
     const real = realpathSync4(path);
     const top = realpathSync4(root2);
     if (!real.startsWith(top + sep3)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
     if (!statSync4(real).isFile()) return { reason: "not a file" };
-    return { text: readFileSync9(real, "utf8") };
+    return { text: readFileSync11(real, "utf8") };
   } catch (error) {
     return { reason: `cannot be read (${error.code ?? "error"})` };
   }
@@ -4975,6 +5298,27 @@ function namedRepositories(config, text5) {
     if (tenants.length === 1) named.set(`${owner}/${repo}`, tenants[0]);
   }
   return named;
+}
+function checkoutOf(project, root2 = sep3) {
+  const parts2 = project.split("-").slice(1);
+  const walk = (dir, rest) => {
+    if (rest.length === 0) return existsSync9(join10(dir, ".git")) ? dir : null;
+    for (let n = 1; n <= Math.min(rest.length, 8); n++) {
+      for (const name of joins(rest.slice(0, n))) {
+        const path = join10(dir, name);
+        if (!existsSync9(path) || !statSync4(path).isDirectory()) continue;
+        const found = walk(path, rest.slice(n));
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  };
+  return parts2.length === 0 ? null : walk(root2, parts2);
+}
+function joins(parts2) {
+  if (parts2[0] === "") return parts2.length < 2 ? [] : joins(parts2.slice(1)).map((n) => `.${n}`);
+  if (parts2.includes("")) return [];
+  return parts2.slice(1).reduce((names, part) => names.flatMap((n) => [`${n}-${part}`, `${n}.${part}`]), [parts2[0]]);
 }
 function importSilos(config, data, configDir, dryRun, orbit = false) {
   const report = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
@@ -4997,16 +5341,19 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     return why !== null;
   };
   for (const dir of orbit ? [] : Object.keys(config.configs).sort()) {
-    const projects = join9(dir, "projects");
-    if (!existsSync8(projects)) continue;
+    const projects = join10(dir, "projects");
+    if (!existsSync9(projects)) continue;
     for (const project of readdirSync(projects).sort()) {
-      const folder = join9(projects, project, "memory");
-      if (!existsSync8(folder) || !statSync4(folder).isDirectory()) continue;
+      const folder = join10(projects, project, "memory");
+      if (!existsSync9(folder) || !statSync4(folder).isDirectory()) continue;
+      const checkout = checkoutOf(project);
+      const context = checkout === null ? null : resolveContext(checkout, config, dir);
+      const home = context?.tenant != null && context.repository !== null ? { repository: context.repository, tenant: context.tenant } : null;
       for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
-        const path = join9(folder, name);
+        const path = join10(folder, name);
         const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
-        for (const link2 of parsed2.links) if (!existsSync8(join9(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
+        for (const link2 of parsed2.links) if (!existsSync9(join10(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line, text: text5 } of parsed2.statements) {
           const source = `${path}:${line}`;
           const stored = `auto memory ${name}:${line}`;
@@ -5015,8 +5362,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
           const base2 = { statement: text5, rationale: null, anchors: [], status: "proposed", trust: "agent" };
           if (named.size > 1) {
             refused(source, "it names more than one repository");
-          } else if (named.size === 1) {
-            const [repository, tenant] = [...named][0];
+          } else if (named.size === 1 || home !== null) {
+            const [repository, tenant] = named.size === 1 ? [...named][0] : [home.repository, home.tenant];
             if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
             const own = new Set((config.tenants[tenant] ?? []).map((p) => p.split("/")[0].toLowerCase()));
             const others = Object.entries(config.tenants).filter(([t]) => t !== tenant).flatMap(([, patterns]) => patterns.map((p) => p.split("/")[0].toLowerCase())).filter((o) => !own.has(o));
@@ -5032,7 +5379,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     }
   }
   const readOrbit = (checkout, rel, context) => {
-    const path = join9(checkout, rel);
+    const path = join10(checkout, rel);
     if (!inside3(rel)) {
       report.skippedFiles.push({ path: rel, reason: "not a path inside the repository" });
       return;
@@ -5045,7 +5392,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
       report.skippedFiles.push({ path, reason: "your consent does not cover reading an Orbit knowledge store yet; run memory init and confirm" });
       return;
     }
-    if (!existsSync8(path)) {
+    if (!existsSync9(path)) {
       report.skippedFiles.push({ path, reason: "not there" });
       return;
     }
@@ -5086,7 +5433,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     for (const silo of SILOS) {
       const rel = silos[silo];
       if (rel === void 0 || silo === "orbit") continue;
-      const path = silo === "decisions" && isAbsolute7(rel) ? rel : join9(checkout, rel);
+      const path = silo === "decisions" && isAbsolute7(rel) ? rel : join10(checkout, rel);
       if (silo !== "decisions" && !inside3(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
@@ -5100,7 +5447,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
           report.skippedFiles.push({ path, reason: "your consent does not cover reading a Review Voice store yet; run memory init and confirm" });
           continue;
         }
-        const found = reviewVoiceDecisions(path);
+        const rvConfig = join10(checkout, ".review-voice", "config.yaml");
+        const found = reviewVoiceDecisions(path, existsSync9(rvConfig) ? ownerReviewer(readFileSync11(rvConfig, "utf8")) : null);
         if ("reason" in found) {
           report.skippedFiles.push({ path, reason: found.reason });
           continue;
@@ -5237,8 +5585,8 @@ ${coverage === void 0 ? "" : `${coverage}
 }
 
 // src/export/markdown.ts
-import { existsSync as existsSync9, mkdirSync as mkdirSync8, readFileSync as readFileSync10, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname10, join as join10, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync8, readFileSync as readFileSync12, rmSync as rmSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname10, join as join11, resolve as resolve5 } from "node:path";
 var STATUS_ORDER = ["active", "proposed", "stale", "superseded", "promoted", "closed", "rejected", "expired"];
 var COLUMNS2 = `id, scope, scope_key, type, statement, statement_key, rationale, status, status_reason, origin_trust, quarantine,
   anchors_json, support, helped, wrong, contradictions, stale_reports, valid_from, valid_to, supersedes, promoted_to`;
@@ -5302,7 +5650,7 @@ function read(db, tenant, repository) {
 function writeIfChanged(path, content, mayExist) {
   if (mayExist) {
     try {
-      if (readFileSync10(path, "utf8") === content) return;
+      if (readFileSync12(path, "utf8") === content) return;
     } catch {
     }
   }
@@ -5312,17 +5660,17 @@ function exportMarkdown(stores2, dir, repository) {
   const all = stores2.flatMap(({ db, tenant }) => read(db, tenant, repository)).sort((a, b) => a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
   const successors = /* @__PURE__ */ new Map();
   for (const { row: row4 } of all) if (row4.supersedes !== null) successors.set(row4.supersedes, [...successors.get(row4.supersedes) ?? [], row4.id]);
-  const items = join10(dir, "items");
+  const items = join11(dir, "items");
   mkdirSync8(items, { recursive: true });
   const current = new Set(all.map((a) => a.row.id));
   let previous = "";
   try {
-    previous = readFileSync10(join10(dir, "index.md"), "utf8");
+    previous = readFileSync12(join11(dir, "index.md"), "utf8");
   } catch {
   }
   const listed = new Set([...previous.matchAll(/\]\(items\/([^/\\)]+)\.md\)/g)].map((m) => m[1]));
-  for (const id of listed) if (!current.has(id)) rmSync2(join10(items, `${id}.md`), { force: true });
-  for (const { row: row4, evidence } of all) writeIfChanged(join10(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
+  for (const id of listed) if (!current.has(id)) rmSync2(join11(items, `${id}.md`), { force: true });
+  for (const { row: row4, evidence } of all) writeIfChanged(join11(items, `${row4.id}.md`), itemFile(row4, evidence, successors.get(row4.id) ?? []), listed.size > 0);
   const index = ["# Memory export", "", "Read only: editing these files changes nothing in memory.", ""];
   const statuses = [...new Set(all.map((a) => a.row.status))].sort((a, b) => (STATUS_ORDER.indexOf(a) + 1 || 99) - (STATUS_ORDER.indexOf(b) + 1 || 99) || (a < b ? -1 : 1));
   for (const status of statuses) {
@@ -5331,13 +5679,13 @@ function exportMarkdown(stores2, dir, repository) {
     for (const { row: row4 } of group) index.push(`- [${row4.id}](items/${row4.id}.md) ${span(row4.type)} ${span(where(row4))}`);
     index.push("");
   }
-  writeIfChanged(join10(dir, "index.md"), `${index.join("\n")}
+  writeIfChanged(join11(dir, "index.md"), `${index.join("\n")}
 `, previous !== "");
   return all.length;
 }
 function foreignRepository(dir, config, tenant) {
   let at3 = resolve5(dir);
-  while (!existsSync9(at3)) at3 = dirname10(at3);
+  while (!existsSync10(at3)) at3 = dirname10(at3);
   const top = git(at3, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0) return null;
   const url = git(top, "config", "--get", "remote.origin.url");
@@ -5622,18 +5970,18 @@ async function diffRecall(data, config, context, cwd, range) {
 }
 
 // src/recall/orbit.ts
-import { existsSync as existsSync10, readFileSync as readFileSync11 } from "node:fs";
-import { join as join11 } from "node:path";
+import { existsSync as existsSync11, readFileSync as readFileSync13 } from "node:fs";
+import { join as join12 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
 function lessonsInPrompts(root2) {
-  const file = join11(root2, ".orbit", "config.yaml");
-  if (!existsSync10(file)) return false;
+  const file = join12(root2, ".orbit", "config.yaml");
+  if (!existsSync11(file)) return false;
   let sections = 0;
   let inKnowledge = false;
   let indent = 0;
   const seen = {};
-  for (const line of readFileSync11(file, "utf8").split(/\r?\n/)) {
+  for (const line of readFileSync13(file, "utf8").split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
     if (line.includes("	")) return false;
     const spaces = /^ */.exec(line)[0].length;
@@ -5691,7 +6039,7 @@ function orbitRecall(data, context, cwd, ask) {
 }
 
 // src/recall/toolsets.ts
-import { randomBytes as randomBytes6 } from "node:crypto";
+import { randomBytes as randomBytes7 } from "node:crypto";
 var OUTCOMES = ["accepted", "rejected"];
 function recordOutcome(db, id, outcome, cost, source) {
   return inTransaction(db, () => {
@@ -5702,7 +6050,7 @@ function recordOutcome(db, id, outcome, cost, source) {
     db.prepare(
       `INSERT INTO evidence (id, item_id, source_ref, author_role, quote_hash, captured_at, extractor, outcome, cost)
        VALUES (?, ?, ?, 'owner', ?, ?, 'deterministic', ?, ?)`
-    ).run(`e-${randomBytes6(5).toString("hex")}`, id, source ?? "run", sha256(item.statement), now, outcome, cost);
+    ).run(`e-${randomBytes7(5).toString("hex")}`, id, source ?? "run", sha256(item.statement), now, outcome, cost);
     if (outcome === "accepted") db.prepare("UPDATE items SET reinforced_at = ? WHERE id = ?").run(now, id);
     recordAudit(db, "toolset_outcome", { type: "item", id }, { outcome, cost });
     return "recorded";
@@ -5718,222 +6066,6 @@ function routeToolsets(db, task) {
   if (hits.length === 0) return "";
   return fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why)} \xB7 accepted ${h.accepted} \xB7 rejected ${h.rejected} \xB7 cost ${h.cost}
 `).join(""));
-}
-
-// src/capture/transcripts.ts
-import { randomBytes as randomBytes7 } from "node:crypto";
-import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
-import { basename as basename3 } from "node:path";
-var TRANSCRIPT_DAYS = 30;
-var MAX_SUMMARY = 4e3;
-var cutoff = () => new Date(Date.now() - TRANSCRIPT_DAYS * 864e5).toISOString();
-var transcriptsOn = (config) => config !== null && consented(config) && config.optIns.transcripts && covers(config, "transcripts");
-var str = (v) => typeof v === "string" && v !== "" ? v : void 0;
-function recordTranscript(data, input2) {
-  const config = loadConfig(data);
-  if (!transcriptsOn(config)) return;
-  const path = str(input2["transcript_path"]);
-  if (automationRefusal(config, process.env) !== null) return;
-  const context = resolveContext(str(input2["cwd"]) ?? process.cwd(), config, currentConfigDir());
-  const person = context.tenant === null;
-  if (person ? !covers(config, "personTranscripts") : context.repository === null) return;
-  const compaction = input2["hook_event_name"] === "PostCompact";
-  const summary = compaction ? str(input2["compact_summary"]) : void 0;
-  if (compaction ? person || summary === void 0 : path === void 0) return;
-  const session = str(input2["session_id"]) ?? "unknown";
-  const repository = context.repository ?? "";
-  const db = openStore(person ? personFile(data) : tenantFile(data, context.tenant), true, HOOK_BUSY_MS);
-  try {
-    const id = `t-${randomBytes7(5).toString("hex")}`;
-    const at3 = (/* @__PURE__ */ new Date()).toISOString();
-    if (summary !== void 0) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, summary, at, processed_at, outcome) VALUES (?, ?, 'summary', ?, ?, ?, ?, 'episode')").run(id, session, repository, scrub(summary).slice(0, MAX_SUMMARY), at3, at3);
-    } else if (db.prepare("SELECT 1 FROM transcripts WHERE session = ? AND kind = 'path' AND path = ? AND processed_at IS NULL").get(session, path) === void 0) {
-      db.prepare("INSERT INTO transcripts (id, session, kind, repository, path, at) VALUES (?, ?, 'path', ?, ?, ?)").run(id, session, repository, path, at3);
-    }
-  } finally {
-    db.close();
-  }
-}
-var NOT_TYPED = /^</;
-var HIDDEN = "\uE000";
-var TAGS = ["<private>", "</private>"];
-function hidePrivate(text5, state) {
-  const s = state.held + text5;
-  let out = "";
-  let last = 0;
-  for (const m of s.matchAll(/<(\/?)private>/gi)) {
-    if (state.depth === 0) out += s.slice(last, m.index);
-    if (m[1] === "") {
-      if (state.depth === 0) out += HIDDEN;
-      state.depth++;
-    } else if (state.depth > 0 && --state.depth === 0) out += HIDDEN;
-    last = m.index + m[0].length;
-  }
-  const rest = s.slice(last);
-  let keep = 0;
-  for (let n = Math.min(rest.length, TAGS[1].length - 1); n > 0 && keep === 0; n--) {
-    if (TAGS.some((t) => t.startsWith(rest.slice(rest.length - n).toLowerCase()))) keep = n;
-  }
-  state.held = rest.slice(rest.length - keep);
-  const shown = rest.slice(0, rest.length - keep);
-  return out + (state.depth > 0 ? HIDDEN : shown);
-}
-var NEVER_TEXT = /* @__PURE__ */ new Set(["type", "id", "tool_use_id", "role", "uuid", "parentUuid", "messageId", "sessionId", "timestamp", "cwd", "version", "gitBranch", "userType", "entrypoint", "requestId"]);
-function* writtenStrings(row4) {
-  const stack = [];
-  const pathOf = () => stack.map((f) => f.array ? f.index : f.key);
-  let i = 0;
-  while (i < row4.length) {
-    const c = row4[i];
-    const top = stack[stack.length - 1];
-    if (c === "{" || c === "[") {
-      stack.push({ array: c === "[", index: 0, key: "", expectKey: c === "{", skip: false });
-      i++;
-    } else if (c === "}" || c === "]") {
-      stack.pop();
-      i++;
-    } else if (c === ",") {
-      if (top?.array) top.index++;
-      else if (top) {
-        top.expectKey = true;
-        top.skip = false;
-      }
-      i++;
-    } else if (c === ":") {
-      if (top) top.expectKey = false;
-      i++;
-    } else if (c === '"') {
-      let j = i + 1;
-      while (j < row4.length && row4[j] !== '"') j += row4[j] === "\\" ? 2 : 1;
-      const text5 = JSON.parse(row4.slice(i, j + 1));
-      i = j + 1;
-      if (top !== void 0 && !top.array && top.expectKey) {
-        top.key = text5;
-        top.skip = NEVER_TEXT.has(text5);
-        if (!stack.some((f) => f.skip) && /[<>]/.test(text5)) yield { path: pathOf().slice(0, -1), text: text5, key: true };
-      } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text: text5, key: false };
-    } else i++;
-  }
-}
-function ownerTurns(file) {
-  const raw = readFileSync12(file, "utf8");
-  if (/DO NOT INDEX THIS CHAT/.test(raw)) return [];
-  const turns = [];
-  const state = { depth: 0, held: "" };
-  raw.split("\n").forEach((row4, i) => {
-    let o;
-    try {
-      o = JSON.parse(row4);
-    } catch {
-      hidePrivate(row4, state);
-      return;
-    }
-    const eligible2 = o?.type === "user" && o.isSidechain !== true && o.isMeta !== true;
-    const content = o?.message?.content;
-    const mine = (path) => eligible2 && path[0] === "message" && path[1] === "content" && (path.length === 2 || path.length === 4 && path[3] === "text" && content?.[path[2]]?.type === "text");
-    const pieces = [];
-    for (const t of writtenStrings(row4)) {
-      const visible2 = hidePrivate(t.text, state);
-      if (!t.key && mine(t.path)) pieces.push(visible2);
-    }
-    const flat = scrub(pieces.join(" ")).replace(/\s+/g, " ").trim();
-    if (flat !== "" && flat !== HIDDEN && !NOT_TYPED.test(flat)) turns.push({ line: i + 1, text: flat });
-  });
-  return turns;
-}
-var CORRECTION = /^(?:no(?=[,.!:;])|no\s+(?:use|not|do|don'?t|that|it|the|wait|stop)\b|nope\b|wrong\b|stop\b|don'?t\b|do not\b|never\b|not that\b|that'?s (?:not|wrong)\b|actually\b|instead\b|please (?:don'?t|do not|stop|use)\b)/i;
-function findCorrections(turns) {
-  const out = [];
-  for (const t of turns.slice(1)) {
-    for (const quote of t.text.split(/(?<=[.!?])\s+/)) {
-      if (!quote.includes(HIDDEN) && CORRECTION.test(quote) && quote.split(/\s+/).length >= 3) out.push({ line: t.line, quote });
-    }
-  }
-  return out;
-}
-var verbatim = (turns, candidates) => candidates.filter((c) => c.quote.trim() !== "" && !c.quote.includes(HIDDEN) && turns.some((t) => t.line === c.line && t.text.includes(c.quote)));
-function expireTranscripts(db) {
-  const expired = Number(db.prepare("DELETE FROM transcripts WHERE at < ?").run(cutoff()).changes);
-  if (expired > 0) recordAudit(db, "transcripts_expired", null, { expired });
-  return expired;
-}
-function propose4(db, tenant, config, r, turns, candidates) {
-  const person = tenant === "";
-  const terms = person ? organisationTerms(config, r.repository || null) : void 0;
-  let proposed = 0;
-  for (const c of verbatim(turns, candidates)) {
-    const statement = `Owner correction: "${c.quote}"`;
-    const source = `transcript:${r.session}:L${c.line}:${basename3(r.path)}`;
-    if (refusal(statement, terms) !== null || refusal(source) !== null) continue;
-    const stored = addItem(db, { tenant, scope: person ? "person" : "repository", scopeKey: person ? "" : r.repository, originRepository: r.repository || null, type: "preference", statement, rationale: null, anchors: [], source, trust: "owner", status: "proposed" });
-    if (stored.kind === "inserted") proposed++;
-  }
-  return proposed;
-}
-function processTranscripts(db, tenant, config, extract = findCorrections) {
-  const done = { read: 0, proposed: 0, missing: 0 };
-  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND processed_at IS NULL ORDER BY at, id").all();
-  for (const r of rows) {
-    let outcome = "read";
-    if (!existsSync11(r.path)) {
-      outcome = "missing";
-      done.missing++;
-    } else if (automationRefusal(config, {}, r.path) !== null) {
-      outcome = "automation";
-    } else {
-      done.read++;
-      const turns = ownerTurns(r.path);
-      done.proposed += propose4(db, tenant, config, r, turns, extract(turns));
-    }
-    db.prepare("UPDATE transcripts SET processed_at = ?, outcome = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), outcome, r.id);
-  }
-  if (rows.length > 0) recordAudit(db, "transcripts_processed", null, { ...done });
-  return done;
-}
-var MODEL_DEFAULTS = { url: "http://127.0.0.1:11434", model: "inkling-2-mini" };
-function modelTranscripts(db, tenant, config, ask) {
-  const done = { read: 0, proposed: 0 };
-  const rows = db.prepare("SELECT id, session, repository, path FROM transcripts WHERE kind = 'path' AND outcome = 'read' ORDER BY at, id").all();
-  for (const r of rows) {
-    const turns = existsSync11(r.path) && automationRefusal(config, {}, r.path) === null ? ownerTurns(r.path).slice(1) : [];
-    const found = turns.length === 0 ? [] : ask(turns);
-    if ("failed" in found) {
-      done.failed = found.failed;
-      break;
-    }
-    done.read++;
-    done.proposed += propose4(db, tenant, config, r, turns, found);
-    db.prepare("UPDATE transcripts SET outcome = 'model' WHERE id = ?").run(r.id);
-  }
-  if (done.read > 0) recordAudit(db, "transcripts_modelled", null, { read: done.read, proposed: done.proposed });
-  return done;
-}
-function parseCorrections(stdout) {
-  let o;
-  try {
-    o = JSON.parse(stdout.split("\n")[0]);
-  } catch {
-    return { failed: "it answered text that is not JSON" };
-  }
-  if (o?.status !== "ok" || !Array.isArray(o.corrections)) return { failed: "it did not answer status ok with corrections" };
-  return o.corrections.flatMap((c) => Number.isInteger(c?.line) && typeof c?.quote === "string" ? [{ line: c.line, quote: c.quote }] : []);
-}
-var PROMPT3 = `You read the owner's own messages from a coding session, one per line as "L<number>: <text>".
-Find each sentence in which the owner corrects what the agent did or chose, or says how the agent must work from now on.
-Answer JSON only: {"corrections":[{"line":<number>,"quote":"<the sentence, copied character for character>"}]}.
-Never paraphrase, shorten or fix a quote. Answer {"corrections":[]} when there is none.`;
-async function ollamaClient(input2) {
-  const req = JSON.parse(input2);
-  const res = await fetch(new URL("/api/generate", req.url), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: req.model, system: PROMPT3, prompt: req.turns.map((t) => `L${t.line}: ${t.text}`).join("\n"), format: "json", stream: false, options: { temperature: 0, num_predict: 2048 } })
-  });
-  if (!res.ok) throw new Error(`Ollama answered ${res.status}`);
-  const answer2 = JSON.parse((await res.json()).response ?? "");
-  return `${JSON.stringify({ status: "ok", corrections: Array.isArray(answer2?.corrections) ? answer2.corrections : [] })}
-`;
 }
 
 // src/capture/ci.ts
@@ -6417,8 +6549,8 @@ function captureCi(data, config, cwd, limit = 100) {
 }
 
 // src/hooks/point-of-action.ts
-import { existsSync as existsSync12, readFileSync as readFileSync13, realpathSync as realpathSync5 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute8, join as join12, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync14, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname11, isAbsolute as isAbsolute8, join as join13, relative as relative5, resolve as resolve6, sep as sep4 } from "node:path";
 var INJECTION_BUDGET = 120;
 var COMPACT_CHARS = 1e3;
 var str4 = (v) => typeof v === "string" && v !== "" ? v : void 0;
@@ -6433,7 +6565,7 @@ function locate(abs) {
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
   const root2 = realpathSync5(top);
-  const path = relative5(root2, join12(realpathSync5(dir), relative5(dir, abs)));
+  const path = relative5(root2, join13(realpathSync5(dir), relative5(dir, abs)));
   return path.startsWith("..") || isAbsolute8(path) ? null : { root: root2, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
@@ -6489,7 +6621,7 @@ function anchored(items, root2, t) {
   const read2 = () => {
     if (text5 === void 0) {
       try {
-        text5 = readFileSync13(resolve6(root2, t.path), "utf8");
+        text5 = readFileSync14(resolve6(root2, t.path), "utf8");
       } catch {
         text5 = null;
       }
@@ -6574,17 +6706,17 @@ function afterCompaction(data, input2) {
 
 // src/doctor.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { accessSync, constants as constants2, existsSync as existsSync13, readFileSync as readFileSync14 } from "node:fs";
-import { delimiter, dirname as dirname12, join as join13 } from "node:path";
+import { accessSync, constants as constants2, existsSync as existsSync13, readFileSync as readFileSync15 } from "node:fs";
+import { delimiter, dirname as dirname12, join as join14 } from "node:path";
 import { DatabaseSync as DatabaseSync4 } from "node:sqlite";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
 var ok = (id, detail) => ({ id, status: "ok", detail, fix: null });
 var off = (id, detail, fix = null) => ({ id, status: "off", detail, fix });
 var fail = (id, detail, fix) => ({ id, status: "fail", detail, fix });
-var root = join13(dirname12(fileURLToPath2(import.meta.url)), "..");
+var root = join14(dirname12(fileURLToPath2(import.meta.url)), "..");
 var readJson = (file) => {
   try {
-    return JSON.parse(readFileSync14(file, "utf8"));
+    return JSON.parse(readFileSync15(file, "utf8"));
   } catch {
     return void 0;
   }
@@ -6594,7 +6726,7 @@ function onPath(program, env) {
   return (env["PATH"] ?? "").split(delimiter).some(
     (dir) => dir !== "" && names.some((n) => {
       try {
-        accessSync(join13(dir, n), constants2.X_OK);
+        accessSync(join14(dir, n), constants2.X_OK);
         return true;
       } catch {
         return false;
@@ -6604,18 +6736,18 @@ function onPath(program, env) {
 }
 function versionCheck(configDir) {
   const running = pluginVersion();
-  const plugins = readJson(join13(configDir, "plugins", "installed_plugins.json"))?.plugins ?? {};
+  const plugins = readJson(join14(configDir, "plugins", "installed_plugins.json"))?.plugins ?? {};
   const key2 = Object.keys(plugins).find((k) => k.startsWith("memory@"));
   const installed = key2 === void 0 ? void 0 : plugins[key2]?.[0]?.version;
   if (key2 === void 0 || installed === void 0) return off("version", `running ${running}; not installed from a marketplace in this Claude Code config`);
   const market = key2.slice("memory@".length);
-  const held2 = readJson(join13(configDir, "plugins", "marketplaces", market, ".claude-plugin", "plugin.json"))?.version;
+  const held2 = readJson(join14(configDir, "plugins", "marketplaces", market, ".claude-plugin", "plugin.json"))?.version;
   if (typeof held2 !== "string") return fail("version", `installed ${installed}; the ${market} marketplace checkout was not found`, `/plugin marketplace update ${market}`);
   if (held2 !== installed) return fail("version", `installed ${installed}, the ${market} marketplace holds ${held2}`, `/plugin update ${key2}`);
   return ok("version", `installed ${installed}, as the ${market} marketplace holds; running ${running}`);
 }
 function hooksCheck() {
-  const hooks = readJson(join13(root, "hooks", "hooks.json"))?.hooks;
+  const hooks = readJson(join14(root, "hooks", "hooks.json"))?.hooks;
   if (hooks === void 0) return fail("hooks", `no hooks/hooks.json in ${root}`, "/plugin update memory@memory");
   return ok("hooks", Object.keys(hooks).join(", "));
 }
@@ -6634,7 +6766,7 @@ function mcpCheck(cwd) {
   return ok("mcp", `answers initialize (memory ${answer2.result.serverInfo?.version ?? "unknown"})`);
 }
 function lastCapture(data) {
-  const lines2 = existsSync13(join13(data, "logs", "capture.jsonl")) ? readFileSync14(join13(data, "logs", "capture.jsonl"), "utf8").trim().split("\n") : [];
+  const lines2 = existsSync13(join14(data, "logs", "capture.jsonl")) ? readFileSync15(join14(data, "logs", "capture.jsonl"), "utf8").trim().split("\n") : [];
   let last;
   try {
     last = JSON.parse(lines2.at(-1) ?? "");
@@ -6851,7 +6983,7 @@ function falseRecall(version, events) {
 // src/eval/replay.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text5) {
   const doc = JSON.parse(text5);
@@ -6878,9 +7010,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync2(join14(tmpdir3(), "memory-replay-"));
+  const dir = mkdtempSync2(join15(tmpdir3(), "memory-replay-"));
   try {
-    const db = openStore(join14(dir, "replay.sqlite"), true);
+    const db = openStore(join15(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -6934,7 +7066,7 @@ function replay(version, pulls, since) {
 // src/eval/poison.ts
 import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -7061,8 +7193,8 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync3(join15(tmpdir4(), "memory-poison-"));
-  const db = openStore(join15(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync3(join16(tmpdir4(), "memory-poison-"));
+  const db = openStore(join16(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
@@ -7139,19 +7271,19 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync5 } from "node:child_process";
-import { cpSync, existsSync as existsSync14, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync15, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { cpSync, existsSync as existsSync14, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync16, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { dirname as dirname13, join as join16 } from "node:path";
+import { dirname as dirname13, join as join17 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
 var ROOT = dirname13(dirname13(fileURLToPath3(import.meta.url)));
-var TASKS = join16(ROOT, "lab", "tasks");
-var BUNDLE = join16(ROOT, "dist", "memory.mjs");
+var TASKS = join17(ROOT, "lab", "tasks");
+var BUNDLE = join17(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", "types"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync14(join16(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync14(join17(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -7161,7 +7293,7 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join16(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join17(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
     check(`set up ${task}'s repository`, spawnSync5("git", args, { cwd: repo, env, encoding: "utf8" }));
@@ -7180,7 +7312,7 @@ var jsonLines2 = (text5) => text5.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync14(file) ? jsonLines2(readFileSync15(file, "utf8")) : [];
+var readLines = (file) => existsSync14(file) ? jsonLines2(readFileSync16(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -7194,10 +7326,10 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync4(join16(base2, "run-"));
-  const repo = join16(dir, "repo");
-  const data = join16(dir, "data");
-  const out = join16(dir, "out");
+  const dir = mkdtempSync4(join17(base2, "run-"));
+  const repo = join17(dir, "repo");
+  const data = join17(dir, "data");
+  const out = join17(dir, "out");
   mkdirSync9(data);
   mkdirSync9(out);
   fixtureRepository(task, repo);
@@ -7222,8 +7354,8 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join16(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join16(hidden, f));
+  const hidden = join17(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join17(hidden, f));
   const grade2 = agentFailed ? null : spawnSync5(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -7231,7 +7363,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade2?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join16(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join17(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
@@ -7260,12 +7392,12 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync4(join16(tmpdir5(), "memory-lab-"));
+  const base2 = mkdtempSync4(join17(tmpdir5(), "memory-lab-"));
   try {
-    const plugin = join16(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync14(join16(ROOT, part))) cpSync(join16(ROOT, part), join16(plugin, part), { recursive: true });
+    const plugin = join17(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync14(join17(ROOT, part))) cpSync(join17(ROOT, part), join17(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync15(join16(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync16(join17(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
       const [off2, on] = arms;
       return [
@@ -7368,19 +7500,19 @@ function buildReplaySet(h, since) {
 
 // src/eval/head-to-head/scorecard.ts
 import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 import { performance } from "node:perf_hooks";
 
 // src/eval/head-to-head/arms.ts
 import { spawn } from "node:child_process";
 import { mkdtempSync as mkdtempSync5, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 import { createInterface as createInterface2 } from "node:readline";
 var TYPE = { decision: "decision", correction: "convention", lesson: "precedent", hazard: "hazard", failure: "failure-pattern", "code-change": "" };
 function memoryArm() {
-  const dir = mkdtempSync5(join17(tmpdir6(), "memory-head-to-head-"));
-  const db = openStore(join17(dir, "arm.sqlite"), true);
+  const dir = mkdtempSync5(join18(tmpdir6(), "memory-head-to-head-"));
+  const db = openStore(join18(dir, "arm.sqlite"), true);
   let set;
   const item = /* @__PURE__ */ new Map();
   const evidence = /* @__PURE__ */ new Map();
@@ -7763,11 +7895,11 @@ async function headToHead(version, set, external, checked, out) {
     vocabulary_misses: vocabulary,
     memory_misses_found_elsewhere: elsewhere,
     vocabulary_miss_share: share,
-    matcher_precision: precision(sampled, checked, join18(out, "sample.jsonl"))
+    matcher_precision: precision(sampled, checked, join19(out, "sample.jsonl"))
   };
   rows.push(...latency, verdict2);
   mkdirSync10(out, { recursive: true, mode: 448 });
-  const write = (file, text5) => writeFileSync6(join18(out, file), text5, { mode: 384 });
+  const write = (file, text5) => writeFileSync6(join19(out, file), text5, { mode: 384 });
   const lines2 = (xs) => xs.map((x) => `${JSON.stringify(x)}
 `).join("");
   write("replay-set.json", `${JSON.stringify(set, null, 1)}
@@ -7780,7 +7912,7 @@ async function headToHead(version, set, external, checked, out) {
 `);
   return { rows, last };
 }
-var headToHeadDir = (data, tenant) => join18(data, "eval", "head-to-head", tenant);
+var headToHeadDir = (data, tenant) => join19(data, "eval", "head-to-head", tenant);
 
 // src/cli.ts
 suppressSqliteExperimentalWarning();
@@ -7916,7 +8048,11 @@ var USAGE = `usage: memory <command>
       or a compaction's redacted summary as an episode; the next session start or sweep reads the corrections
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
-      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
+      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports.
+      Past capture.maxCallsPerDay or maxTokensPerDay in a local day it makes no model call and logs a daily cap skip
+  capture --cost [--since <YYYY-MM-DD>]
+      what capture cost, per local day, from logs/capture.jsonl alone: runs (api key or Claude Code login), skips by
+      reason, input and output tokens
   purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
       learned in that repository. --source reaches this repository's tenant and the person file: an item left without
@@ -8496,7 +8632,7 @@ function promoteCommand(args, data, cwd) {
       const configured = Object.entries(config.imports ?? {}).find(([checkout]) => realpathOrSelf(checkout) === realpathOrSelf(top))?.[1].standards;
       const rel = insidePath(configured ?? DEFAULT_STANDARDS);
       if (rel === null) console.error(`The review-standards path ${configured} is not a path inside the repository for a standards file (not absolute, not under .git, .claude or .github/workflows, not an instruction file); no line is proposed for it.`);
-      const made = propose3(db, context.tenant, context.repository, top, rel);
+      const made = propose4(db, context.tenant, context.repository, top, rel);
       console.error(`${made} new promotion proposal${made === 1 ? "" : "s"}.`);
     }
     const id = values.apply ?? values.reject;
@@ -8718,11 +8854,11 @@ function correctionsCommand(data, cwd) {
   }
 }
 async function modelClient() {
-  process.stdout.write(await ollamaClient(readFileSync16(0, "utf8")));
+  process.stdout.write(await ollamaClient(readFileSync17(0, "utf8")));
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync16(0, "utf8"));
+    const v = JSON.parse(readFileSync17(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -8852,7 +8988,15 @@ function preCompactHook(data) {
 }
 var LOG_LOCK_PURGE_MS = 1e4;
 async function captureCommand(args, data) {
-  const { values } = parseArgs({ args, options: { foreground: { type: "boolean" } } });
+  const { values } = parseArgs({ args, options: { foreground: { type: "boolean" }, cost: { type: "boolean" }, since: { type: "string" } } });
+  if (values.cost === true || values.since !== void 0) {
+    if (values.cost !== true || values.foreground === true) throw new Refusal("usage: memory capture --cost [--since <YYYY-MM-DD>]", 2);
+    if (values.since !== void 0 && !/^\d{4}-\d{2}-\d{2}$/.test(values.since)) throw new Refusal("--since takes a date as YYYY-MM-DD", 2);
+    const lines2 = costReport(data, values.since);
+    if (lines2.length === 0) console.error("no capture runs logged");
+    for (const line of lines2) console.log(line);
+    return;
+  }
   const input2 = hookInput();
   if (values.foreground === true) {
     try {
@@ -8888,7 +9032,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync16(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync17(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -8943,7 +9087,7 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join19(data, "tenants");
+  const tenantsDir = join20(data, "tenants");
   const every = existsSync15(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
@@ -8995,7 +9139,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync16(file, "utf8"));
+    return parse(readFileSync17(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }

@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
+
 ### Added
 
+- Capture honours the owner's markers (#143): text between `<private>` and `</private>` (and any sentence touching it) is never sent to the filter model, tracked across the whole transcript as the transcripts path tracks it; a session in which the owner typed `DO NOT INDEX THIS CHAT` makes no model call and logs a `skipped` line at every Stop and SessionEnd. Both work for Codex logs. `"capture": { "skipTainted": true }` (off by default) skips a session that read the web or another MCP server instead of labelling what it keeps.
+- A daily cap on capture spend (#140): `capture.maxCallsPerDay` (100) and `capture.maxTokensPerDay` (2,000,000) per local day, counted from `logs/capture.jsonl`. Past either, capture makes no model call, logs a `daily cap` skip, says so once per session and leaves the transcript unread for the next day. `memory capture --cost [--since <date>]` prints per day the runs (API key or Claude Code login), skips by reason and tokens, from the log alone.
 - `memory doctor [--json]`, and `/memory:doctor` in a session, says why memory does or does not recall and capture in this directory (#141): one line per check, `ok`, `off` or `fail` with the command that fixes it, covering the data directory, plugin version, consent plan, tenant and binding, hooks, MCP server, capture and its last run, recall, `pointOfAction`, embedder, reranker, anchor provider and item counts. Read only; never prints an item's text; exits 1 when a check fails.
+
+## [0.9.2] - 2026-11-27
+
+### Fixed
+
+- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
 
 ### Fixed
 
