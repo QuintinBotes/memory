@@ -350,6 +350,41 @@ proposals: `memory review` and `memory approve` as ever.
   `memory init --recall on` turns it back on. `memory reverts` scans on demand,
   for reverts made outside a session.
 
+### Seeding from commit history
+
+A repository memory has just been pointed at holds nothing, though its commits
+often already say why things are as they are. `memory seed --git [--since <date>]
+[--dry-run]` reads them, from a terminal and never from a hook:
+
+- `git log` on this machine, the last 12 months unless `--since` says otherwise,
+  skipping merge commits and bots' commits. Nothing leaves the machine: no `gh`,
+  no capture model.
+- No model by default. A revert with a body gives its reason; any other commit
+  gives the first sentence of its message with *because* or *so that*, or with
+  *must* or *never* when the sentence states a rule rather than tells a bug
+  story (it does not open with *Fix*, has no *was*, *were*, *had*, *did*,
+  *could* or *would* before the cue, and no past-tense *never mentioned*). One
+  sentence per commit, the conventional prefix (`fix:`) dropped.
+- Each is a proposal with agent trust, type `decision`, the commit hash as its
+  source (`commit:<sha>`), the commit's date as the evidence time and the
+  commit's files that still exist at HEAD as anchors (at most 10; changelogs,
+  READMEs, `docs/` and other Markdown only when the commit changed nothing
+  else). A commit none of whose files exist is skipped. `memory recheck` keeps the anchors honest after you
+  approve.
+- A sentence holding a credential, an email, a handle or a committer's name is
+  dropped, not redacted. Text that reads as an instruction is quarantined.
+- A rerun stores nothing new, and a statement you rejected is not proposed again.
+  Of two commits on one subject, the older arrives already superseded by the newer.
+- At most 20 proposals per run, newest first; the run says how many candidates
+  it left for the next run. `--dry-run` lists the candidates and writes nothing.
+- With `transcriptModel` set (see `memory corrections`) and a model on this
+  machine, the model rewrites each sentence. The rewrite is kept only when every
+  word of it is in the commit message; otherwise the rule's sentence is kept. A
+  model at any other address is not asked, and the run says so.
+
+Reading history is its own consent category (`seed`, plan version 16): run
+`memory init --confirm` once after upgrading.
+
 The `PostToolUse` hook on Bash runs after every command: it opens no store for
 one that is not a `git commit`, a `git revert` or (with the opt-in) a command
 with an open episode, and takes the write lock only to write.

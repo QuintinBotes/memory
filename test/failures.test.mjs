@@ -332,7 +332,7 @@ test('the opt-in is its own consent category: under plan version 6 nothing is ca
   const s = setup();
   enable(s);
   const plan = JSON.parse(run(['init'], { cwd: s.base, data: s.data, config: s.configA }).stdout);
-  assert.equal(plan.version, 15);
+  assert.equal(plan.version, 16);
   assert.equal(plan.optIns.failingCommands, true);
   assert.ok(plan.dataCategories.some((t) => /failing command/.test(t) && /30 days/.test(t)));
   const file = join(s.data, 'config.json');

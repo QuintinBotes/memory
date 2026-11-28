@@ -104,6 +104,16 @@ no tenant, or in a Claude Code config not bound to that tenant.
   is not a documented contract. `memory remember` is the owner's command and
   is not refused, since a shell cannot tell the owner from an agent that runs
   it. Recall at session start is unchanged.
+- **Commit history.** `memory seed --git` reads `git log` of the checkout it
+  runs in, with git's environment cut to the working directory, after its own
+  consent category (`seed`) is agreed, and never from a hook. A commit message
+  is text anyone with push access wrote: what it gives is a proposal with
+  agent trust, and text that reads as an instruction is quarantined. A sentence
+  holding a credential, an email, a handle or a committer's name is dropped
+  whole, not redacted; a name that is not a committer's and not handle-shaped
+  is not recognised. With `transcriptModel` set, the scrubbed message goes only
+  to a model at a loopback address, and a rewrite is kept only when every word
+  of it is in the message.
 - **Organisation-free person items.** Person and global items are refused when
   they name code, a path, a tenant, an owner or a repository. This is a
   heuristic; names of one character are not matched.
