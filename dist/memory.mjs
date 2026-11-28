@@ -7044,12 +7044,13 @@ async function doctor(data, cwd, configDir, env = process.env) {
   const url = git(cwd, "config", "--get", "remote.origin.url")?.trim();
   if (context.repository === null) checks.push(off("tenant", `${context.reason}; only the person file applies`));
   else {
-    const [owner, repo] = context.repository.split("/");
-    const tenants = matchingTenants(c, owner, repo);
+    const group = ownerOf(context.repository);
+    const owner = group.split("/").at(-1);
+    const tenants = matchingTenants(c, context.repository);
     const bound = c.configs[configDir] ?? [];
     if (tenants.length === 0) {
       const name = TENANT_NAME.test(owner) && owner !== "person" ? owner : "work";
-      const patterns = [...c.tenants[name] ?? [], `${owner}/*`].join(",");
+      const patterns = [...c.tenants[name] ?? [], `${group}/*`].join(",");
       checks.push(fail("tenant", `${context.repository} (remote ${url}) matches no tenant`, `memory init --tenant ${name}=${patterns} --bind ${[.../* @__PURE__ */ new Set([...bound, name])].join(",")} --confirm`));
     } else if (tenants.length > 1) checks.push(fail("tenant", `${context.repository} matches tenants ${tenants.join(", ")}`, `keep ${context.repository} in one tenant's patterns in ${configPath(data)}`));
     else checks.push(ok("tenant", `${context.repository} is tenant ${tenants[0]}`));
