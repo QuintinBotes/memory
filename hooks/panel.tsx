@@ -9,6 +9,8 @@ const PANE = 'memory-review'
 const proposals = atom({ plugin: 'memory', key: 'proposals' } as const, [], { shape: 'proposals-1' })
 const problem = atom({ plugin: 'memory', key: 'problem' } as const, '')
 const busy = atom({ plugin: 'memory', key: 'busy' } as const, '')
+// #142: how many items expire soon; renewing and pinning are terminal commands, so the pane only counts them.
+const expiring = atom({ plugin: 'memory', key: 'expiring' } as const, 0)
 
 // Statements come from agents: no control or bidi characters reach the terminal, and none runs long.
 const clean = (s: unknown, max = 400): string => {
@@ -38,10 +40,13 @@ async function refresh($: EngineInterface): Promise<void> {
     const r = await memory($, 'review', '--json')
     if (r.exitCode !== 0) throw new Error(clean(r.stderr, 200) || `memory review exited ${r.exitCode}`)
     const list = parse(r.stdout)
+    const soon = ((JSON.parse(r.stdout) as { expiring?: unknown[] }).expiring ?? []).length
     await update($, proposals, () => list)
+    await update($, expiring, () => soon)
     await update($, problem, () => '')
   } catch (error) {
     await update($, proposals, () => [])
+    await update($, expiring, () => 0)
     await update($, problem, () => clean((error as Error).message, 200))
   }
 }
@@ -59,6 +64,7 @@ async function decide($: EngineInterface, id: string, decision: 'approve' | 'rej
 }
 
 const count = (n: number) => `${n} proposal${n === 1 ? '' : 's'}`
+const soonText = (n: number) => `${n} expiring soon`
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -91,11 +97,13 @@ export const register: Register = on => {
     const list = await read($, proposals)
     const why = await read($, problem)
     const running = await read($, busy)
+    const soon = await read($, expiring)
     return (
       <Box flexDirection="column">
         {why !== '' && <Text color="red">memory review failed: {why}</Text>}
         {why === '' && list.length === 0 && <Text dimColor>No proposals to review here.</Text>}
         {list.length > 0 && <Text dimColor>{count(list.length)} waiting. Approve makes one active; reject keeps it as a tombstone.</Text>}
+        {soon > 0 && <Text dimColor>{soonText(soon)}: memory review lists them; renew or pin one with memory renew or memory pin in a terminal.</Text>}
         {list.map(p => (
           <Box key={p.id} flexDirection="column" marginTop={1}>
             <Text dimColor>[{p.id}] {p.type} · {p.where} · shadow gate: {p.shadow}</Text>
@@ -114,11 +122,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const list = await read($, proposals)
-    if (e.props.hasSurvey || list.length === 0) return next(e)
+    const soon = await read($, expiring)
+    if (e.props.hasSurvey || (list.length === 0 && soon === 0)) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
+    const parts = [...(list.length > 0 ? [`${count(list.length)} waiting`] : []), ...(soon > 0 ? [soonText(soon)] : [])]
     return (
       <Box>
-        <Text dimColor>memory · {count(list.length)} waiting · </Text>
+        <Text dimColor>memory · {parts.join(' · ')} · </Text>
         <Button key="review" label="Review" onPress={() => void $.ui.open({ id: PANE, title: 'Memory review' })} />
       </Box>
     )

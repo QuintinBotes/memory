@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setup, run, runAsync, remember, assemble, until } from './helpers.mjs';
+import { setup, sandbox, run, runAsync, remember, assemble, until } from './helpers.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const LESSON = 'Retries in the ledger must be idempotent because the queue redelivers';
@@ -83,6 +83,7 @@ test('S1b the cost is logged per run, as tokens, and the transcript text is not'
   const line = JSON.parse(text.trim());
   assert.equal(line.session, 's1');
   assert.ok(line.inputTokens > 0);
+  assert.equal(line.via, 'fake');
   assert.equal(line.saved, 1);
   assert.doesNotMatch(text, /running the tests again|idempotent/);
 });
@@ -508,4 +509,258 @@ test('#126 SC3 a log in codex-cli 0.172\'s format (world_state, turn_context, to
   assert.equal(evidence(s, items(s)[0].id)[0].source_ref, 'capture:codex:c4:rollout-2026-11-27T17-49-00-0000.jsonl');
   const line = JSON.parse(readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').at(-1));
   assert.equal(line.agent, 'codex');
+});
+
+// #140: a daily cap on capture spend, and memory capture --cost.
+const FILLER = 'the ledger worker drained the queue and the batch was reconciled against the journal again. '.repeat(45);
+/** Appends a turn worth a Stop's model call (over 4,000 characters) holding one lesson. */
+// The leading 'ok' line: the watermark counts the trailing empty split, so the first line after a run is not read (#147).
+const turn = (file, lesson) => appendFileSync(file, [
+  JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: 'ok' }] } }),
+  JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: FILLER }] } }),
+  JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `LESSON: ${lesson}` }] } }),
+].join('\n') + '\n');
+const stop = (s, file, session = 'cap', event = 'Stop') =>
+  run(['capture', '--foreground'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: session, hook_event_name: event, transcript_path: file, cwd: s.acmeApi }) });
+const logLines = (s) => readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+const modelCalls = (s) => logLines(s).filter((l) => l.inputTokens !== undefined).length;
+
+test('#140 SC1 with maxCallsPerDay 2, three qualifying Stops make two model calls; the third is skipped as daily cap, said once', () => {
+  const s = setup();
+  fakeModel(s, { maxCallsPerDay: 2 });
+  const file = transcript(s, []);
+  const said = [1, 2, 3, 4].map((n) => {
+    turn(file, `Lesson number ${n} about the ledger`);
+    const r = stop(s, file);
+    assert.equal(r.status, 0, r.stderr);
+    return r.stderr;
+  });
+  assert.equal(modelCalls(s), 2);
+  assert.deepEqual(items(s).map((i) => i.statement), ['Lesson number 1 about the ledger', 'Lesson number 2 about the ledger']);
+  assert.match(said[2], /daily cap reached: 2 of 2 calls today/);
+  assert.doesNotMatch(said[3], /reached/, 'the session is told once');
+  assert.deepEqual(logLines(s).slice(2).map((l) => [l.skipped, l.saved]), [['daily cap', 0], ['daily cap', 0]]);
+});
+
+test('#140 SC2 with maxTokensPerDay below two runs, the second run is skipped as daily cap', () => {
+  const s = setup();
+  fakeModel(s, { maxTokensPerDay: 1000 });
+  const file = transcript(s, []);
+  turn(file, 'First lesson about the ledger');
+  stop(s, file);
+  assert.ok(logLines(s)[0].inputTokens >= 1000, 'one run spends the cap');
+  turn(file, 'Second lesson about the ledger');
+  assert.match(stop(s, file).stderr, /daily cap reached: \d+ of 1000 tokens today/);
+  assert.equal(modelCalls(s), 1);
+  assert.equal(logLines(s)[1].skipped, 'daily cap');
+});
+
+test('#140 SC3 a capped run leaves the transcript unread: the next day\'s first run reads its text', () => {
+  const s = setup();
+  fakeModel(s, { maxCallsPerDay: 1 });
+  const file = transcript(s, []);
+  turn(file, 'First lesson about the ledger');
+  stop(s, file);
+  turn(file, 'Skipped lesson about the ledger');
+  assert.match(stop(s, file, 'cap', 'SessionEnd').stderr, /daily cap reached/, 'SessionEnd is capped too');
+  // A day later: move the log's lines back 24 hours.
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+  writeFileSync(join(logs(s), 'capture.jsonl'), logLines(s).map((l) => JSON.stringify({ ...l, at: yesterday })).join('\n') + '\n');
+  assert.match(stop(s, file, 'cap', 'SessionEnd').stderr, /captured 1/);
+  assert.ok(items(s).some((i) => i.statement === 'Skipped lesson about the ledger'));
+});
+
+test('#140 SC4 memory capture --cost prints per-day totals from the log alone, byte-identically, opening no store', () => {
+  const { base } = sandbox();
+  const data = join(base, 'data');
+  mkdirSync(join(data, 'logs'), { recursive: true });
+  const line = (o) => JSON.stringify(o);
+  writeFileSync(join(data, 'logs', 'capture.jsonl'), [
+    line({ at: '2026-11-25T09:00:00.000Z', session: 'a', agent: 'claude-code', inputTokens: 100, outputTokens: 10, saved: 1 }),
+    line({ at: '2026-11-26T09:00:00.000Z', session: 'a', agent: 'claude-code', via: 'login', inputTokens: 300, outputTokens: 20, saved: 0 }),
+    line({ at: '2026-11-26T10:00:00.000Z', session: 'b', agent: 'claude-code', via: 'api', inputTokens: 200, outputTokens: 5, saved: 1 }),
+    line({ at: '2026-11-26T11:00:00.000Z', session: 'b', agent: 'claude-code', skipped: 'shorter than 4000 characters', saved: 0 }),
+    line({ at: '2026-11-26T12:00:00.000Z', session: 'b', agent: 'claude-code', skipped: 'daily cap', saved: 0 }),
+    line({ at: '2026-11-26T13:00:00.000Z', session: 'c', agent: 'claude-code', skipped: 'daily cap', saved: 0 }),
+    'not json',
+  ].join('\n') + '\n');
+  const work = join(base, 'work.json');
+  const cost = (...args) => run(['capture', '--cost', ...args], { cwd: base, data, env: { TZ: 'UTC', WORK_LOG: work } });
+  const first = cost();
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stdout, [
+    '2026-11-25  runs 1 (unrecorded 1)  skipped 0  input 100  output 10',
+    '2026-11-26  runs 2 (api 1, login 1)  skipped 3 (daily cap 2, shorter than 4000 characters 1)  input 500  output 25',
+    '',
+  ].join('\n'));
+  assert.equal(cost().stdout, first.stdout, 'the same bytes for the same log');
+  assert.equal(JSON.parse(readFileSync(work, 'utf8')).statements, 0);
+  assert.deepEqual(readdirSync(data), ['logs'], 'no store opened');
+  assert.deepEqual(readdirSync(join(data, 'logs')), ['capture.jsonl']);
+  assert.match(cost('--since', '2026-11-26').stdout, /^2026-11-26 [^\n]*\n$/);
+  assert.equal(cost('--since', 'yesterday').status, 2);
+});
+
+test('#140 SC5 under the default caps capture runs as before', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = transcript(s, []);
+  for (const n of [1, 2, 3]) {
+    turn(file, `Lesson number ${n} about the ledger`);
+    assert.match(stop(s, file).stderr, /captured 1/);
+  }
+  assert.equal(modelCalls(s), 3);
+  assert.ok(logLines(s).every((l) => l.skipped === undefined));
+});
+
+test('#140 SC6 a cap of zero, below zero or not a whole number is refused by config validation', () => {
+  const s = setup();
+  for (const [key, bad] of [['maxCallsPerDay', 0], ['maxCallsPerDay', -1], ['maxTokensPerDay', 1.5], ['maxTokensPerDay', '100']]) {
+    fakeModel(s, { [key]: bad });
+    const r = run(['list'], { cwd: s.acmeApi, data: s.data, config: s.configA });
+    assert.equal(r.status, 2, `${key}: ${bad}`);
+    assert.match(r.stderr, /maxCallsPerDay and maxTokensPerDay: whole numbers of 1 or more/);
+  }
+});
+
+test('#140 SC7 the hook returns at once and never fails the session when the cap is reached', async () => {
+  const s = setup();
+  fakeModel(s, { maxCallsPerDay: 1 });
+  const file = transcript(s, []);
+  turn(file, 'First lesson about the ledger');
+  stop(s, file);
+  turn(file, 'Second lesson about the ledger');
+  const r = run(['capture'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 'cap', hook_event_name: 'Stop', transcript_path: file, cwd: s.acmeApi }) });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  await until(() => logLines(s).length === 2);
+  assert.equal(logLines(s)[1].skipped, 'daily cap');
+});
+
+// #143: the owner's <private> spans and DO NOT INDEX THIS CHAT, and skipTainted. The faked network records what is sent.
+const cc = (type, content, extra = {}) => JSON.stringify({ type, sessionId: 'p1', message: { role: type, content }, ...extra });
+const ccLog = (s, records, name = 'p.jsonl') => {
+  const file = join(s.base, name);
+  writeFileSync(file, records.join('\n') + '\n');
+  return file;
+};
+/** Runs capture against haiku with the network faked; the text it sent, or null when it made no call. */
+function sentText(s, file, session = 'p1', event = 'SessionEnd') {
+  const netLog = join(s.base, 'net.jsonl');
+  if (existsSync(netLog)) writeFileSync(netLog, '');
+  const r = run(['capture', '--foreground'], {
+    cwd: s.acmeApi, data: s.data, config: s.configA, net: true, netLog, env: { ANTHROPIC_API_KEY: 'sk-test-key' },
+    input: JSON.stringify({ session_id: session, hook_event_name: event, transcript_path: file, cwd: s.acmeApi }),
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const raw = existsSync(netLog) ? readFileSync(netLog, 'utf8').trim() : '';
+  return { r, text: raw === '' ? null : JSON.parse(JSON.parse(raw).body).messages[0].content };
+}
+const skips = (s) => readFileSync(join(logs(s), 'capture.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.skipped);
+
+test('#143 SC1 a <private> span in an owner message is not sent, nor any sentence touching it', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = ccLog(s, [
+    cc('user', 'Deploy the api. Note <private>the staging password is hunter2</private> for later. Then run the tests.'),
+    cc('assistant', [{ type: 'text', text: 'Deploying now.' }]),
+  ]);
+  const { text } = sentText(s, file);
+  assert.doesNotMatch(text, /hunter2|staging password|for later|private/);
+  assert.equal(text, 'L1 user: Deploy the api. Then run the tests.\nL2 assistant: Deploying now.');
+});
+
+test('#143 SC2 a span opened in a tool result or a skipped record and closed later hides everything between', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = ccLog(s, [
+    cc('user', 'Start here.'),
+    cc('user', [{ type: 'tool_result', tool_use_id: 't1', content: 'output <private>' }]),
+    cc('assistant', [{ type: 'text', text: 'Secret-A is in the vault.' }]),
+    cc('user', 'Secret-B too. </private>Visible after.'),
+    JSON.stringify({ type: 'system', sessionId: 'p1', content: 'hook said <private>' }),
+    cc('assistant', [{ type: 'text', text: 'Secret-C stays.' }]),
+    cc('user', 'closing </private>. Visible at the end.'),
+  ]);
+  const { text } = sentText(s, file);
+  assert.doesNotMatch(text, /Secret-/);
+  assert.match(text, /Start here\./);
+  assert.match(text, /Visible at the end\./);
+});
+
+test('#143 SC3 DO NOT INDEX THIS CHAT from the owner makes no model call at Stop or SessionEnd and logs the skip; in agent text or a tool result it does not', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const file = ccLog(s, [cc('user', 'DO NOT INDEX THIS CHAT please'), cc('assistant', [{ type: 'text', text: 'x'.repeat(5000) }])]);
+  for (const event of ['Stop', 'Stop', 'SessionEnd']) {
+    const { r, text } = sentText(s, file, 'p1', event);
+    assert.equal(text, null, event);
+    assert.match(r.stderr, /nothing captured: the owner wrote DO NOT INDEX THIS CHAT/);
+  }
+  assert.deepEqual(skips(s).map((l) => l.skipped), Array(3).fill('the owner wrote DO NOT INDEX THIS CHAT'));
+
+  const t = setup();
+  configure(t, { capture: { model: 'haiku' } });
+  const other = ccLog(t, [
+    cc('user', 'Fix the ledger.'),
+    cc('assistant', [{ type: 'text', text: 'The doc says DO NOT INDEX THIS CHAT.' }]),
+    cc('user', [{ type: 'tool_result', tool_use_id: 't1', content: 'DO NOT INDEX THIS CHAT' }]),
+  ]);
+  assert.match(sentText(t, other).text, /Fix the ledger/);
+});
+
+test('#143 SC4 skipTainted skips a session that called WebFetch; off, it is kept and labelled tainted', () => {
+  const records = [
+    cc('user', `LESSON: ${LESSON}`),
+    cc('assistant', [{ type: 'tool_use', id: 't1', name: 'WebFetch', input: { url: 'https://example.org/x' } }]),
+  ];
+  const s = setup();
+  fakeModel(s, { skipTainted: true });
+  const r = capture(s, s.acmeApi, ccLog(s, records));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /the session read web:example\.org and skipTainted is on/);
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false);
+  assert.deepEqual(skips(s).map((l) => l.skipped), ['the session read web:example.org and skipTainted is on']);
+
+  const t = setup();
+  fakeModel(t);
+  assert.equal(capture(t, t.acmeApi, ccLog(t, records)).status, 0);
+  const [item] = items(t);
+  assert.equal(item.statement, LESSON);
+  assert.equal(evidence(t, item.id)[0].taint, 'web:example.org');
+});
+
+test('#143 SC5 a transcript with no marker and no span sends the same text as before', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const { text } = sentText(s, transcript(s, ['Use a <', '<b>bold</b> stays']), 's1');
+  const noise = Array.from({ length: 12 }, (_, i) => `L${i + 1} ${i % 2 ? 'assistant' : 'user'}: ok, looking at step ${i}; running the tests again`);
+  assert.equal(text, [...noise, 'L13 assistant: Use a <', 'L14 assistant: <b>bold</b> stays', 'L15 user: thanks'].join('\n'));
+});
+
+test('#143 SC6 both markers work for a Codex session log', () => {
+  const s = setup();
+  configure(s, { capture: { model: 'haiku' } });
+  const { text } = sentText(s, codexLog(s, ['Keep this. <private>codex-secret</private> gone too.', 'Also kept.']), 'c1');
+  assert.doesNotMatch(text, /codex-secret|gone too/);
+  assert.match(text, /Keep this\./);
+  assert.match(text, /Also kept\./);
+
+  const t = setup();
+  configure(t, { capture: { model: 'haiku' } });
+  const file = codexLog(t, ['Agent text.']);
+  writeFileSync(file, readFileSync(file, 'utf8').replace('"thanks"', '"thanks, DO NOT INDEX THIS CHAT"'));
+  assert.equal(sentText(t, file, 'c2').text, null);
+  assert.deepEqual(skips(t).map((l) => [l.agent, l.skipped]), [['codex', 'the owner wrote DO NOT INDEX THIS CHAT']]);
+});
+
+test('#143 SC7 the hook returns at once and never fails the session when it skips', async () => {
+  const s = setup();
+  fakeModel(s, { skipTainted: true });
+  const file = ccLog(s, [cc('user', 'DO NOT INDEX THIS CHAT'), cc('user', 'a <private>never closed')]);
+  const r = run(['capture'], { cwd: s.acmeApi, data: s.data, config: s.configA, input: JSON.stringify({ session_id: 'p1', hook_event_name: 'Stop', transcript_path: file, cwd: s.acmeApi }) });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  await until(() => existsSync(join(logs(s), 'capture.jsonl')));
+  assert.equal(skips(s)[0].skipped, 'the owner wrote DO NOT INDEX THIS CHAT');
 });

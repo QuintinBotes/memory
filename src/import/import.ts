@@ -13,7 +13,7 @@ import { personFile, tenantFile } from '../store/paths.ts';
 import { covers } from '../consent/plan.ts';
 import { reviewVoiceDecisions } from './review-voice.ts';
 import { orbitFindings, type OrbitFinding } from './orbit.ts';
-import { inside, markdown, notes, policy, rejections, symbolPath, type Parsed } from './silos.ts';
+import { inside, markdown, notes, ownerReviewer, policy, rejections, symbolPath, type Parsed } from './silos.ts';
 import { SHARED_FILE } from '../export/shared.ts';
 import { sharedCandidates, sharedSource } from './shared.ts';
 
@@ -73,7 +73,7 @@ function namedRepositories(config: Config, text: string): Map<string, string> {
   const plain = text.replace(/https?:\/\/github\.com\//gi, ' ');
   for (const m of plain.matchAll(/(?<![\w./-])([a-z0-9][a-z0-9-]*)\/([a-z0-9._-]*[a-z0-9_-])/gi)) {
     const [owner, repo] = [m[1]!.toLowerCase(), m[2]!.toLowerCase().replace(/\.git$/, '')];
-    const tenants = matchingTenants(config, owner, repo);
+    const tenants = matchingTenants(config, `${owner}/${repo}`);
     if (tenants.length === 1) named.set(`${owner}/${repo}`, tenants[0]!);
   }
   return named;
@@ -164,10 +164,12 @@ export function importSilos(config: Config, data: string, configDir: string, dry
             // A named repository wins; otherwise the checkout whose auto memory this is (#134).
             const [repository, tenant] = named.size === 1 ? [...named][0]! : [home!.repository, home!.tenant];
             if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
-            const own = new Set((config.tenants[tenant] ?? []).map((p) => p.split('/')[0]!.toLowerCase()));
+            // A pattern's groups, without its host: `acme` of `acme/*`, `acme` and `platform` of `gitlab.com/acme/platform/*`.
+            const groups = (p: string): string[] => p.toLowerCase().split('/').slice(p.split('/').length > 2 ? 1 : 0, -1);
+            const own = new Set((config.tenants[tenant] ?? []).flatMap(groups));
             const others = Object.entries(config.tenants)
               .filter(([t]) => t !== tenant)
-              .flatMap(([, patterns]) => patterns.map((p) => p.split('/')[0]!.toLowerCase()))
+              .flatMap(([, patterns]) => patterns.flatMap(groups))
               .filter((o) => !own.has(o));
             if (refused(source, namesOrganisation(text, others) ? 'it also names an owner of another tenant' : null)) continue;
             candidates.push({ ...base, tenant, scope: 'repository', scopeKey: repository, type: 'convention', source: stored });
@@ -245,7 +247,8 @@ export function importSilos(config: Config, data: string, configDir: string, dry
           report.skippedFiles.push({ path, reason: 'your consent does not cover reading a Review Voice store yet; run memory init and confirm' });
           continue;
         }
-        const found = reviewVoiceDecisions(path);
+        const rvConfig = join(checkout, '.review-voice', 'config.yaml');
+        const found = reviewVoiceDecisions(path, existsSync(rvConfig) ? ownerReviewer(readFileSync(rvConfig, 'utf8')) : null);
         if ('reason' in found) {
           report.skippedFiles.push({ path, reason: found.reason });
           continue;

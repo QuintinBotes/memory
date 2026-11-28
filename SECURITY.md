@@ -13,8 +13,13 @@ no tenant, or in a Claude Code config not bound to that tenant.
 ## What memory protects, and what it does not
 
 - **Isolation by tenant.** Each tenant has its own SQLite file, and a process
-  opens only the tenant its repository's github.com `origin` remote and its
-  Claude Code config allow. Anything ambiguous means no tenant. The tenant is
+  opens only the tenant its repository's `origin` remote and its Claude Code
+  config allow. A remote on a host no tenant pattern names (github.com is
+  named by every pattern without a host) matches no tenant, and the host stays
+  part of the repository's name, so `acme/api` on two hosts are two
+  repositories. The configured remote URL is read, not one `url.*.insteadOf`
+  rewrites, so a rewrite cannot make one host read as another. Anything
+  ambiguous means no tenant. The tenant is
   whatever `origin` says: a directory delivered with its own `.git` (an
   archive, a shared drive) can claim a repository it is not.
 - **Refusal at the boundary.** A statement is checked before it is stored, and
@@ -70,7 +75,8 @@ no tenant, or in a Claude Code config not bound to that tenant.
   tool calls: `WebFetch` and `WebSearch` (by host) and any MCP server's tools
   but memory's own (by server). Taint is a label: a capture from such a
   session is still saved active, and imperative text from it is quarantined as
-  usual. The label shows in review, `memory_get`, search
+  usual, unless `capture.skipTainted` is on, when such a session is not
+  captured at all. The label shows in review, `memory_get`, search
   and the session slice, and is kept through merges and supersession. Limits:
   a page read through a shell command (`curl`, `gh`) is not seen, a tool
   result from inside your tenant is not told from one outside it, and an
@@ -91,6 +97,12 @@ no tenant, or in a Claude Code config not bound to that tenant.
 - **Organisation-free person items.** Person and global items are refused when
   they name code, a path, a tenant, an owner or a repository. This is a
   heuristic; names of one character are not matched.
+- **Recall at the prompt reads the prompt and keeps nothing of it.** With
+  `promptRecall` on (off by default), the `UserPromptSubmit` hook reads the
+  owner's prompt on this machine to find items sharing its words. The prompt
+  is not stored, logged or sent anywhere; the injection log gets the shown
+  items' ids only. It shows only the active items of the repository's own
+  tenant, as every other hook does.
 - **Advisory only.** Items are printed as cited facts. Memory never blocks a
   tool call or grants a permission.
 - **Local store.** Nothing else is uploaded. Files are created with mode 0600 in a 0700
@@ -132,7 +144,11 @@ no tenant, or in a Claude Code config not bound to that tenant.
   handles and webhook URLs are replaced before it leaves; pattern matching
   cannot catch a secret that does not look like one, such as a password in
   prose, and the transcript can hold your code. Nothing is sent from a
-  repository that matches no tenant. The tokens used per run are logged to
+  repository that matches no tenant. Text between `<private>` and
+  `</private>`, and any sentence touching it, is removed before redaction and
+  never sent; a session in which you typed `DO NOT INDEX THIS CHAT` is not
+  sent at all; with `capture.skipTainted` on, neither is a session that read
+  the web or another MCP server. The tokens used per run are logged to
   `logs/capture.jsonl`, never the text. What the model keeps is saved as active
   items with agent trust; text that reads as an instruction is quarantined.
   A model's output is data, never a command: it is refused if it carries a
