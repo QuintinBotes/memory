@@ -2416,12 +2416,12 @@ function appendInjections(data, lines2) {
   mkdirSync4(dirname6(file), { recursive: true, mode: 448 });
   withFileLock(injectionLock(data), () => appendFileSync2(file, lines2.join(""), { mode: 384 }), LOG_LOCK_HOOK_MS);
 }
-function logWithheld(data, config, via, session, withheld) {
+function logWithheld(data, config, via, session, withheld, agent) {
   if (withheld.length === 0 || !covers(config, "injections")) return;
   try {
     appendInjections(
       data,
-      withheld.map((w) => `${JSON.stringify({ event: "withheld", reason: w.reason, session, item: w.item.id, via, tokens: estimate(row(w.item)), at: (/* @__PURE__ */ new Date()).toISOString() })}
+      withheld.map((w) => `${JSON.stringify({ event: "withheld", reason: w.reason, session, ...agent === void 0 ? {} : { agent }, item: w.item.id, via, tokens: estimate(row(w.item)), at: (/* @__PURE__ */ new Date()).toISOString() })}
 `)
     );
   } catch {
@@ -6210,10 +6210,10 @@ function claim(db, session, agent, candidates, pick) {
 function shownIn(db, session) {
   return db.prepare("SELECT DISTINCT i.id, i.statement FROM ledger l JOIN items i ON i.id = l.item_id WHERE l.session = ? ORDER BY i.id").all(session);
 }
-function resetMain(db, session) {
+function resetMain(db, session, agent = MAIN_AGENT) {
   inTransaction(db, () => {
     db.exec(CREATE);
-    db.prepare("DELETE FROM ledger WHERE session = ? AND agent = ?").run(session, MAIN_AGENT);
+    db.prepare("DELETE FROM ledger WHERE session = ? AND agent = ?").run(session, agent);
   });
 }
 
@@ -6243,7 +6243,7 @@ var matches = (statement, lines2, all) => {
   return lines2.some((line) => mine.every((w) => line.has(w)));
 };
 var VERIFIED = /(^|\s)passed-after:\S+/;
-function plan(db, matching, session, agent, fingerprint) {
+function plan(db, matching, session, agent, fingerprint, unknownExit) {
   let shown = [];
   let charged = /* @__PURE__ */ new Set();
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'failure_ledger'").get() !== void 0) {
@@ -6251,9 +6251,9 @@ function plan(db, matching, session, agent, fingerprint) {
     charged = new Set(db.prepare("SELECT DISTINCT item_id FROM failure_ledger WHERE session = ? AND contradicted = 1").all(session).map((r) => r.item_id));
   }
   const seen = new Set(shown.map((r) => r.item_id));
-  return { show: matching.filter((id) => !seen.has(id)), charge: matching.filter((id) => seen.has(id) && !charged.has(id)) };
+  return { show: matching.filter((id) => !seen.has(id)), charge: unknownExit ? [] : matching.filter((id) => seen.has(id) && !charged.has(id)) };
 }
-function failureRecall(data, input2, log) {
+function failureRecall(data, input2, log, event = "PostToolUseFailure") {
   const config = loadConfig(data);
   const agentType = str2(input2["agent_type"]);
   const error = str2(input2["error"]);
@@ -6267,6 +6267,7 @@ function failureRecall(data, input2, log) {
   const all = new Set(lines2.flatMap((l) => [...l]));
   const session = str2(input2["session_id"]) ?? "unknown";
   const agent = str2(input2["agent_id"]) ?? MAIN_AGENT;
+  const unknownExit = input2["exit_unknown"] === true;
   const base2 = { session, agent, via: "failure-recall", at: (/* @__PURE__ */ new Date()).toISOString() };
   try {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
@@ -6274,11 +6275,11 @@ function failureRecall(data, input2, log) {
     try {
       const matching = failureStatements(db, context.tenant, context.repository, context.owner).filter((i) => matches(i.statement, lines2, all)).map((i) => i.id);
       if (matching.length === 0) return "";
-      const first2 = plan(db, matching, session, agent, fingerprint);
+      const first2 = plan(db, matching, session, agent, fingerprint, unknownExit);
       if (first2.show.length === 0 && first2.charge.length === 0) return "";
       const result = inTransaction(db, () => {
         db.exec(CREATE2);
-        const { show, charge } = plan(db, matching, session, agent, fingerprint);
+        const { show, charge } = plan(db, matching, session, agent, fingerprint, unknownExit);
         for (const id of charge) {
           db.prepare("UPDATE items SET contradictions = contradictions + 1 WHERE id = ?").run(id);
           db.prepare("UPDATE failure_ledger SET contradicted = 1 WHERE session = ? AND agent = ? AND fingerprint = ? AND item_id = ?").run(session, agent, fingerprint, id);
@@ -6292,7 +6293,7 @@ function failureRecall(data, input2, log) {
       });
       if (result.text === "") return "";
       if (covers(config, "injections")) log(result.shown.map((i) => ({ event: "injected", ...base2, item: i.id, anchors: [], tokens: estimate(row(i)) })));
-      return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: result.text } });
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: result.text } });
     } finally {
       db.close();
     }
@@ -6758,17 +6759,61 @@ function afterCompaction(data, input2) {
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return;
   try {
-    resetMain(db, session);
+    resetMain(db, session, str4(input2["agent_id"]));
   } finally {
     db.close();
   }
+}
+
+// src/hooks/agent.ts
+var CODEX = "codex";
+var str5 = (v) => typeof v === "string" && v !== "" ? v : void 0;
+function fromPatch(patch) {
+  const lines2 = patch.split("\n");
+  const at3 = lines2.findIndex((l) => /^\*\*\* (?:Update|Add|Delete) File: /.test(l));
+  if (at3 < 0) return null;
+  const [, kind, file] = /^\*\*\* (Update|Add|Delete) File: (.+)$/.exec(lines2[at3]);
+  if (kind !== "Update") return { tool_name: "Write", tool_input: { file_path: file.trim() } };
+  const edits2 = [];
+  let old = [];
+  const flush = () => {
+    if (old.length > 0) edits2.push({ old_string: old.join("\n") });
+    old = [];
+  };
+  for (const line of lines2.slice(at3 + 1)) {
+    if (line.startsWith("*** ") && !line.startsWith("*** End of File")) break;
+    if (line.startsWith("@@")) flush();
+    else if (line.startsWith("-") || line.startsWith(" ")) old.push(line.slice(1));
+  }
+  flush();
+  return { tool_name: "MultiEdit", tool_input: { file_path: file.trim(), edits: edits2 } };
+}
+function fromCodex(input2) {
+  const event = str5(input2["hook_event_name"]);
+  if (event === void 0 || str5(input2["session_id"]) === void 0 || str5(input2["cwd"]) === void 0) return null;
+  const out = { ...input2, agent_id: CODEX };
+  if (event === "PreToolUse" && input2["tool_name"] === "apply_patch") {
+    const patch = input2["tool_input"]?.["command"];
+    const edit2 = typeof patch === "string" ? fromPatch(patch) : null;
+    return edit2 === null ? null : { ...out, ...edit2 };
+  }
+  if (event === "PostToolUse" && input2["tool_name"] === "Bash") {
+    const response = input2["tool_response"];
+    if (typeof response !== "string") return null;
+    const head = /^Exit code: (\d+)\n(?:Wall time: [^\n]*\n)?(?:Output:\n)?/.exec(response);
+    if (head?.[1] === "0") return out;
+    if (head === null) return { ...out, error: response, exit_unknown: true };
+    return { ...out, error: `Exit code ${head[1]}
+${response.slice(head[0].length)}` };
+  }
+  return out;
 }
 
 // src/hooks/prompt.ts
 var MIN_PROMPT_WORDS = 4;
 var MIN_SHARED_TERMS = 2;
 var FILLER = /* @__PURE__ */ new Set(["how", "what", "why", "where", "who", "can", "could", "would", "should", "we", "you", "your", "me", "my", "our", "us", "please", "here", "there", "let", "just", "about"]);
-var str5 = (v) => typeof v === "string" && v !== "" ? v : void 0;
+var str6 = (v) => typeof v === "string" && v !== "" ? v : void 0;
 function promptTerms(prompt) {
   const text5 = prompt.trim();
   if (text5.startsWith("/") || text5.split(/\s+/).length < MIN_PROMPT_WORDS) return [];
@@ -6776,16 +6821,16 @@ function promptTerms(prompt) {
 }
 function promptRecall(data, input2, log) {
   const config = enabled(data, ["promptRecall"]);
-  const agentType = str5(input2["agent_type"]);
-  const prompt = str5(input2["prompt"]);
+  const agentType = str6(input2["agent_type"]);
+  const prompt = str6(input2["prompt"]);
   if (config === null || prompt === void 0 || agentType !== void 0 && neverSubagent(agentType)) return "";
   const terms = promptTerms(prompt);
   if (terms.length < MIN_SHARED_TERMS) return "";
-  const cwd = str5(input2["cwd"]) ?? process.cwd();
+  const cwd = str6(input2["cwd"]) ?? process.cwd();
   const context = resolveContext(cwd, config, currentConfigDir());
   if (context.tenant === null || context.repository === null || context.owner === null) return "";
-  const session = str5(input2["session_id"]) ?? "unknown";
-  const agent = str5(input2["agent_id"]) ?? MAIN_AGENT;
+  const session = str6(input2["session_id"]) ?? "unknown";
+  const agent = str6(input2["agent_id"]) ?? MAIN_AGENT;
   const base2 = { session, agent, via: "prompt", at: (/* @__PURE__ */ new Date()).toISOString() };
   try {
     const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
@@ -8159,11 +8204,15 @@ var USAGE = `usage: memory <command>
       on 127.0.0.1 only; any other --host is refused. Prints the address with this run's token; stop it with Ctrl-C.
       It can apply instruction-file edits, so it starts only from a terminal, as conflicts apply does, unless
       --yes-non-interactive is given (put an ask rule on it)
-  session-start
-      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
+  hooks --agent codex
+      print the hooks.json fragment for Codex (~/.codex/hooks.json or <repo>/.codex/hooks.json) that runs session-start,
+      point-of-action (on apply_patch) and failure-recall (on Bash) with --agent codex, and capture at Stop. Writes nothing
+  session-start [--agent codex]
+      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget.
+      --agent codex (also on point-of-action and failure-recall) reads Codex's payload and logs the agent as codex
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
-  point-of-action
+  point-of-action [--agent codex]
       the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
       agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
   prompt-recall
@@ -8171,7 +8220,7 @@ var USAGE = `usage: memory <command>
       as memory_search ranks, not in the session slice and not shown to the agent before, within 120 tokens per prompt
       and 600 per agent per session. Nothing for a slash command or a prompt under four words. Never stores or logs the
       prompt. Off unless promptRecall is true in config.json
-  failure-recall
+  failure-recall [--agent codex]
       the PostToolUseFailure hook on Bash: the failure patterns and repair recipes whose signature (the statement up to ' => ') the error carries, once
       per agent and fingerprint, within 120 tokens. A repeat after that counts as a contradiction. Needs no opt-in; stores no error text
   command-passed
@@ -9067,14 +9116,43 @@ function hookInput() {
     return {};
   }
 }
+function agentInput(data, args, via) {
+  const input2 = hookInput();
+  if (args.length === 0) return input2;
+  const mapped = args.length === 2 && args[0] === "--agent" && args[1] === CODEX ? fromCodex(input2) : null;
+  if (mapped !== null) return mapped;
+  try {
+    const config = loadConfig(data);
+    if (config !== null && covers(config, "injections")) {
+      const session = typeof input2["session_id"] === "string" && input2["session_id"] !== "" ? input2["session_id"] : "unknown";
+      appendInjections(data, [`${JSON.stringify({ event: "skipped", session, agent: args[1] ?? "unknown", via, reason: "unknown payload", at: (/* @__PURE__ */ new Date()).toISOString() })}
+`]);
+    }
+  } catch {
+  }
+  return null;
+}
+function hooksCommand(args) {
+  const { values } = parseArgs({ args, options: { agent: { type: "string" } } });
+  if (values.agent !== CODEX) throw new Refusal("name the agent: memory hooks --agent codex", 2);
+  const command = (name, timeout) => ({ type: "command", command: `node ${JSON.stringify(process.argv[1])} ${name}`, timeout });
+  const hooks = {
+    SessionStart: [{ matcher: "startup|resume|clear|compact", hooks: [command("session-start --agent codex", 10)] }],
+    PreToolUse: [{ matcher: "apply_patch", hooks: [command("point-of-action --agent codex", 2)] }],
+    PostToolUse: [{ matcher: "Bash", hooks: [command("failure-recall --agent codex", 2)] }],
+    Stop: [{ hooks: [command("capture", 10)] }]
+  };
+  console.log(JSON.stringify({ hooks }, null, 2));
+}
 function hookSlice(data, config, input2, budget, withheld = []) {
   const cwd = typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd();
   const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld);
   return sessionSlice(items, budget, config.pointOfAction === true);
 }
-function sessionStart(data) {
+function sessionStart(data, args) {
   try {
-    const input2 = hookInput();
+    const input2 = agentInput(data, args, "session-start");
+    if (input2 === null) return;
     if (typeof input2["agent_type"] === "string" && neverSubagent(input2["agent_type"])) return;
     const config = loadConfig(data);
     if (!recallOn(config)) return;
@@ -9086,7 +9164,7 @@ function sessionStart(data) {
     }
     const withheld = [];
     process.stdout.write(hookSlice(data, config, input2, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, withheld).text);
-    logWithheld(data, config, "session-start", typeof input2["session_id"] === "string" ? input2["session_id"] : "unknown", withheld);
+    logWithheld(data, config, "session-start", typeof input2["session_id"] === "string" ? input2["session_id"] : "unknown", withheld, args.length > 0 ? CODEX : void 0);
     try {
       if (providerConfig(data) !== void 0) {
         const child = spawn2(process.execPath, [process.argv[1], "anchors", "refresh"], { cwd: typeof input2["cwd"] === "string" && input2["cwd"] !== "" ? input2["cwd"] : process.cwd(), detached: true, stdio: "ignore" });
@@ -9133,9 +9211,11 @@ function subagentStart(data) {
   } catch {
   }
 }
-function pointOfActionHook(data) {
+function pointOfActionHook(data, args) {
   try {
-    process.stdout.write(pointOfAction(data, hookInput(), (lines2) => appendInjections(data, lines2.map((l) => `${JSON.stringify(l)}
+    const input2 = agentInput(data, args, "point-of-action");
+    if (input2 === null) return;
+    process.stdout.write(pointOfAction(data, input2, (lines2) => appendInjections(data, lines2.map((l) => `${JSON.stringify(l)}
 `))));
   } catch {
   }
@@ -9147,15 +9227,16 @@ function promptRecallHook(data) {
   } catch {
   }
 }
-function failureRecallHook(data) {
-  const input2 = hookInput();
+function failureRecallHook(data, args) {
+  const input2 = agentInput(data, args, "failure-recall");
+  if (input2 === null) return;
   try {
     process.stdout.write(failureRecall(data, input2, (lines2) => appendInjections(data, lines2.map((l) => `${JSON.stringify(l)}
-`))));
+`)), args.length > 0 ? "PostToolUse" : void 0));
   } catch {
   }
   try {
-    recordEpisode(data, input2);
+    if (input2["exit_unknown"] !== true) recordEpisode(data, input2);
   } catch {
   }
 }
@@ -9487,16 +9568,18 @@ async function main(argv) {
       return uiCommand(rest, data, process.cwd());
     case "mcp":
       return serve(data, process.cwd(), pluginVersion());
+    case "hooks":
+      return hooksCommand(rest);
     case "session-start":
-      return sessionStart(data);
+      return sessionStart(data, rest);
     case "subagent-start":
       return subagentStart(data);
     case "point-of-action":
-      return pointOfActionHook(data);
+      return pointOfActionHook(data, rest);
     case "prompt-recall":
       return promptRecallHook(data);
     case "failure-recall":
-      return failureRecallHook(data);
+      return failureRecallHook(data, rest);
     case "command-passed":
       return commandPassedHook(data);
     case "ci":

@@ -196,7 +196,7 @@ export function afterCompaction(data: string, input: Input): void {
   const db = openStore(tenantFile(data, context.tenant), false, HOOK_BUSY_MS);
   if (db === null) return;
   try {
-    resetMain(db, session);
+    resetMain(db, session, str(input['agent_id']));
   } finally {
     db.close();
   }

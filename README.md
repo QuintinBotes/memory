@@ -255,6 +255,35 @@ count a contradiction. The ledger holds the fingerprint's hash and item ids,
 never the error, and goes with an item on a purge. Shown items are logged by
 id as for point-of-action recall.
 
+### Recall in Codex
+
+Codex CLI runs the same hooks. Print the fragment and paste it into
+`~/.codex/hooks.json` (or a trusted repository's `.codex/hooks.json`), then
+trust it with `/hooks` in Codex:
+
+```bash
+memory hooks --agent codex
+```
+
+It writes nothing. It runs `session-start`, `point-of-action` (on
+`apply_patch`) and `failure-recall` (on Bash's `PostToolUse`, as Codex has no
+`PostToolUseFailure`) with `--agent codex`, and `capture` at `Stop`, by this
+bundle's absolute path: print it again after the plugin updates. With
+`--agent codex` a hook reads Codex's payload: an `apply_patch` update is read
+as an edit of each hunk's old lines (only the patch's first file), an added or
+deleted file as a Write, and a shell command that did not exit 0 as the error.
+codex-cli 0.172 sends no exit code for Bash, so its output is read as the error
+and the signature decides whether a recipe shows (once per fingerprint); as the
+command may have passed, a repeat never counts as a contradiction and no
+failing-command episode is recorded. The slice is plain stdout, which Codex adds as
+developer context; the other hooks answer with `additionalContext` and never a
+permission decision. Budgets, the fence, tenants, consent and the automation
+check are the same. Injections and the shown-once ledger name the agent
+`codex`, so a Codex session and a Claude Code session each see an item once,
+and a session start after a Codex compaction shows its items again. A payload
+the adapter does not know prints nothing and logs a `skipped` line. Codex's
+`PreCompact` cannot add context, so it is not wired.
+
 An agent can run the command line itself. To be asked before it remembers
 anything, add an ask rule such as `Bash(*memory.mjs*remember*)` to your
 Claude Code permissions.
@@ -750,7 +779,8 @@ repository that matches no tenant is skipped: no model call, nothing written.
   `memory capture` from the agent's own end-of-session hook with JSON on stdin
   that names `transcript_path`, `session_id` and `cwd`. A log in a format no
   adapter knows is skipped, never guessed at: the run reports it and
-  `logs/capture.jsonl` records it as `skipped`. An agent with no adapter can
+  `logs/capture.jsonl` records it as `skipped`. `memory hooks --agent codex`
+  wires it for Codex with the recall hooks (Recall in Codex). An agent with no adapter can
   still write through the MCP tools; each proposal's evidence names the client
   that wrote it (`mcp:<clientInfo name>`).
 

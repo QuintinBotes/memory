@@ -66,6 +66,7 @@ import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './c
 import { scanReverts } from './capture/reverts.ts';
 import { failureRecall, weakSignature } from './hooks/failure.ts';
 import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
+import { CODEX, fromCodex } from './hooks/agent.ts';
 import { promptRecall } from './hooks/prompt.ts';
 import { capture, captureWanted } from './capture/capture.ts';
 import { costReport } from './capture/cost.ts';
@@ -196,11 +197,15 @@ const USAGE = `usage: memory <command>
       on 127.0.0.1 only; any other --host is refused. Prints the address with this run's token; stop it with Ctrl-C.
       It can apply instruction-file edits, so it starts only from a terminal, as conflicts apply does, unless
       --yes-non-interactive is given (put an ask rule on it)
-  session-start
-      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
+  hooks --agent codex
+      print the hooks.json fragment for Codex (~/.codex/hooks.json or <repo>/.codex/hooks.json) that runs session-start,
+      point-of-action (on apply_patch) and failure-recall (on Bash) with --agent codex, and capture at Stop. Writes nothing
+  session-start [--agent codex]
+      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget.
+      --agent codex (also on point-of-action and failure-recall) reads Codex's payload and logs the agent as codex
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
-  point-of-action
+  point-of-action [--agent codex]
       the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
       agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
   prompt-recall
@@ -208,7 +213,7 @@ const USAGE = `usage: memory <command>
       as memory_search ranks, not in the session slice and not shown to the agent before, within 120 tokens per prompt
       and 600 per agent per session. Nothing for a slash command or a prompt under four words. Never stores or logs the
       prompt. Off unless promptRecall is true in config.json
-  failure-recall
+  failure-recall [--agent codex]
       the PostToolUseFailure hook on Bash: the failure patterns and repair recipes whose signature (the statement up to ' => ') the error carries, once
       per agent and fingerprint, within 120 tokens. A repeat after that counts as a contradiction. Needs no opt-in; stores no error text
   command-passed
@@ -1203,6 +1208,41 @@ function hookInput(): Record<string, unknown> {
   }
 }
 
+/**
+ * The hook's payload through its agent's adapter: with no arguments Claude Code's, as it is; with `--agent codex`
+ * Codex's, read as Claude Code's. Anything else, or a payload the adapter does not know, is null and logs `skipped`.
+ */
+function agentInput(data: string, args: string[], via: string): Record<string, unknown> | null {
+  const input = hookInput();
+  if (args.length === 0) return input;
+  const mapped = args.length === 2 && args[0] === '--agent' && args[1] === CODEX ? fromCodex(input) : null;
+  if (mapped !== null) return mapped;
+  try {
+    const config = loadConfig(data);
+    if (config !== null && covers(config, 'injections')) {
+      const session = typeof input['session_id'] === 'string' && input['session_id'] !== '' ? input['session_id'] : 'unknown';
+      appendInjections(data, [`${JSON.stringify({ event: 'skipped', session, agent: args[1] ?? 'unknown', via, reason: 'unknown payload', at: new Date().toISOString() })}\n`]);
+    }
+  } catch {
+    // A busy log costs the line, never the session.
+  }
+  return null;
+}
+
+/** `memory hooks --agent codex`: the hooks.json fragment that runs memory's own hook commands for Codex's events. Writes nothing. */
+function hooksCommand(args: string[]): void {
+  const { values } = parseArgs({ args, options: { agent: { type: 'string' } } });
+  if (values.agent !== CODEX) throw new Refusal('name the agent: memory hooks --agent codex', 2);
+  const command = (name: string, timeout: number) => ({ type: 'command', command: `node ${JSON.stringify(process.argv[1]!)} ${name}`, timeout });
+  const hooks = {
+    SessionStart: [{ matcher: 'startup|resume|clear|compact', hooks: [command('session-start --agent codex', 10)] }],
+    PreToolUse: [{ matcher: 'apply_patch', hooks: [command('point-of-action --agent codex', 2)] }],
+    PostToolUse: [{ matcher: 'Bash', hooks: [command('failure-recall --agent codex', 2)] }],
+    Stop: [{ hooks: [command('capture', 10)] }],
+  };
+  console.log(JSON.stringify({ hooks }, null, 2));
+}
+
 /** The slice for the hook's working directory: the subagent's own, for a subagent, so its tenant is resolved there. */
 function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number, withheld: Withheld[] = []) {
   const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
@@ -1215,9 +1255,10 @@ function hookSlice(data: string, config: Config, input: Record<string, unknown>,
  * bytes for the same store. It never fails the session: anything that goes
  * wrong prints nothing, so a broken store costs no tokens and no error.
  */
-function sessionStart(data: string): void {
+function sessionStart(data: string, args: string[]): void {
   try {
-    const input = hookInput();
+    const input = agentInput(data, args, 'session-start');
+    if (input === null) return;
     // A session started with --agent names its agent; one that may never get the slice gets none here either.
     if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
@@ -1231,7 +1272,7 @@ function sessionStart(data: string): void {
     }
     const withheld: Withheld[] = [];
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, withheld).text);
-    logWithheld(data, config, 'session-start', typeof input['session_id'] === 'string' ? input['session_id'] : 'unknown', withheld);
+    logWithheld(data, config, 'session-start', typeof input['session_id'] === 'string' ? input['session_id'] : 'unknown', withheld, args.length > 0 ? CODEX : undefined);
     // The anchor refresh talks to another program, so it never runs here: a detached job, as capture is.
     try {
       if (providerConfig(data) !== undefined) {
@@ -1292,9 +1333,11 @@ function subagentStart(data: string): void {
 }
 
 /** The PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit; see `pointOfAction`. Silent on any failure. */
-function pointOfActionHook(data: string): void {
+function pointOfActionHook(data: string, args: string[]): void {
   try {
-    process.stdout.write(pointOfAction(data, hookInput(), (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+    const input = agentInput(data, args, 'point-of-action');
+    if (input === null) return;
+    process.stdout.write(pointOfAction(data, input, (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
   } catch {
     // Silent by design: advisory memory never costs a tool call.
   }
@@ -1310,15 +1353,18 @@ function promptRecallHook(data: string): void {
 }
 
 /** The PostToolUseFailure hook on Bash: failure recall, then the failing-command episode when its opt-in is on. Silent on any failure. */
-function failureRecallHook(data: string): void {
-  const input = hookInput();
+function failureRecallHook(data: string, args: string[]): void {
+  const input = agentInput(data, args, 'failure-recall');
+  if (input === null) return;
   try {
-    process.stdout.write(failureRecall(data, input, (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+    // Codex has no PostToolUseFailure: the hook runs on its PostToolUse and answers as one.
+    process.stdout.write(failureRecall(data, input, (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`)), args.length > 0 ? 'PostToolUse' : undefined));
   } catch {
     // A hook never fails the tool call.
   }
   try {
-    recordEpisode(data, input);
+    // A command that may have passed is no failing-command episode.
+    if (input['exit_unknown'] !== true) recordEpisode(data, input);
   } catch {
     // A busy or unreadable store loses one episode, never the command.
   }
@@ -1680,16 +1726,18 @@ async function main(argv: string[]): Promise<void> {
       return uiCommand(rest, data, process.cwd());
     case 'mcp':
       return serve(data, process.cwd(), pluginVersion());
+    case 'hooks':
+      return hooksCommand(rest);
     case 'session-start':
-      return sessionStart(data);
+      return sessionStart(data, rest);
     case 'subagent-start':
       return subagentStart(data);
     case 'point-of-action':
-      return pointOfActionHook(data);
+      return pointOfActionHook(data, rest);
     case 'prompt-recall':
       return promptRecallHook(data);
     case 'failure-recall':
-      return failureRecallHook(data);
+      return failureRecallHook(data, rest);
     case 'command-passed':
       return commandPassedHook(data);
     case 'ci':
