@@ -71,6 +71,7 @@ import { costReport } from './capture/cost.ts';
 import { HOOK_BUSY_MS, openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
+import { doctor, renderChecks } from './doctor.ts';
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
 import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
@@ -96,6 +97,9 @@ const USAGE = `usage: memory <command>
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
       conflicts with one queues a supersession in review; --supersedes replaces that item at once
+  doctor [--json]
+      why memory does or does not recall and capture here: one line per check, ok, off (by choice) or fail with the
+      command that fixes it. Read only, and never prints an item's text. Exits 1 when any check fails
   list [--repo <owner/repo> | --all-repos]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
@@ -596,6 +600,13 @@ function list(args: string[], data: string, cwd: string): void {
   // On stderr, so a script reading stdout still sees nothing (#122).
   if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
   process.stdout.write(renderAll(items));
+}
+
+async function doctorCommand(args: string[], data: string): Promise<void> {
+  const { values } = parseArgs({ args, options: { json: { type: 'boolean' } } });
+  const checks = await doctor(data, process.cwd(), currentConfigDir());
+  process.stdout.write(renderChecks(checks, values.json === true));
+  if (checks.some((c) => c.status === 'fail')) process.exitCode = 1;
 }
 
 /** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
@@ -1536,6 +1547,8 @@ async function main(argv: string[]): Promise<void> {
       return remember(rest, data, process.cwd());
     case 'list':
       return list(rest, data, process.cwd());
+    case 'doctor':
+      return doctorCommand(rest, data);
     case 'export':
       return exportCommand(rest, data, process.cwd());
     case 'import':

@@ -92,6 +92,7 @@ only`, or from a terminal:
 ```bash
 memory remember --scope repository --type convention -- 'Releases are cut from the main branch only'
 memory remember --scope person --type preference -- 'Explain changes in plain English'
+memory doctor                           # why memory does or does not recall and capture here
 memory list
 memory list --repo acme/web             # that repository's items, its owner's organisation items, and person/global items learned in it
 memory list --all-repos                 # every item of the tenant bound here, and the person file
@@ -151,6 +152,27 @@ session started as one with `--agent`, and naming one there is refused. Each ite
 file paths, the session and agent ids, its estimated tokens and the time,
 never its text. A purge removes the lines of the items it deletes;
 `--older-than` removes lines older than its cut-off, and `--all` the file.
+
+### When memory does nothing
+
+Memory fails closed and stays quiet, so when nothing is recalled or captured
+run `memory doctor` (or `/memory:doctor` in a session) from that directory.
+It prints one line per check, each `ok`, `off` (by your choice) or `fail` with
+the command that fixes it: the Node version, the data directory and its file
+system, the installed plugin version against the marketplace's checkout, the
+consent plan and each category not yet agreed, the repository's remote and
+the tenant it resolves to, whether this Claude Code config is bound to it, an
+automation session, the hooks the plugin registers, whether the MCP server
+answers, capture (enabled, a key or `claude` on PATH, and the last run from
+`logs/capture.jsonl`), recall (on, or off after two reverts),
+`pointOfAction`, the embedder and reranker when configured, the code anchor
+provider, and how many items this repository and the person file hold, by
+status. `--json` prints one object per check with `id`, `status`, `detail`
+and `fix`.
+
+It is read only: it writes no file, opens no store but the tenant bound here
+and the person file, and never prints an item's text. It exits 1 when any
+check fails.
 
 ### Recall at the point of action
 

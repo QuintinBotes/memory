@@ -2,9 +2,9 @@
 
 // src/cli.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync16, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
-import { basename as basename4, isAbsolute as isAbsolute9, join as join19, normalize as normalize4 } from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { existsSync as existsSync15, readFileSync as readFileSync17, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
+import { basename as basename4, isAbsolute as isAbsolute9, join as join20, normalize as normalize4 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { parseArgs } from "node:util";
 
 // src/warnings.ts
@@ -124,10 +124,10 @@ function loadConfig(data) {
   }
   const capture2 = c.capture;
   if (capture2 !== void 0) {
-    const ok = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
-    const { enabled: enabled2, model, maxCandidates, apiModel, maxCallsPerDay, maxTokensPerDay, skipTainted } = ok ? capture2 : {};
+    const ok2 = typeof capture2 === "object" && capture2 !== null && !Array.isArray(capture2);
+    const { enabled: enabled2, model, maxCandidates, apiModel, maxCallsPerDay, maxTokensPerDay, skipTainted } = ok2 ? capture2 : {};
     const cap = (n) => n === void 0 || Number.isInteger(n) && n >= 1;
-    if (!ok || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || skipTainted !== void 0 && typeof skipTainted !== "boolean" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20) || !cap(maxCallsPerDay) || !cap(maxTokensPerDay)) {
+    if (!ok2 || enabled2 !== void 0 && typeof enabled2 !== "boolean" || model !== void 0 && typeof model !== "string" || apiModel !== void 0 && typeof apiModel !== "string" || skipTainted !== void 0 && typeof skipTainted !== "boolean" || maxCandidates !== void 0 && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20) || !cap(maxCallsPerDay) || !cap(maxTokensPerDay)) {
       throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, maxCallsPerDay and maxTokensPerDay: whole numbers of 1 or more, skipTainted: true|false }');
     }
   }
@@ -148,15 +148,15 @@ function loadConfig(data) {
   }
   const tm = c.transcriptModel;
   if (tm !== void 0) {
-    const ok = typeof tm === "object" && tm !== null && !Array.isArray(tm);
-    const { url, model, command } = ok ? tm : {};
+    const ok2 = typeof tm === "object" && tm !== null && !Array.isArray(tm);
+    const { url, model, command } = ok2 ? tm : {};
     const http = (u) => URL.canParse(u) && ["http:", "https:"].includes(new URL(u).protocol) && new URL(u).username === "" && new URL(u).password === "";
-    if (!ok || url !== void 0 && !(typeof url === "string" && http(url)) || model !== void 0 && !(typeof model === "string" && model !== "") || command !== void 0 && !(isList(command) && command.length > 0 && isAbsolute(command[0]))) {
+    if (!ok2 || url !== void 0 && !(typeof url === "string" && http(url)) || model !== void 0 && !(typeof model === "string" && model !== "") || command !== void 0 && !(isList(command) && command.length > 0 && isAbsolute(command[0]))) {
       throw new ConfigError('transcriptModel must be {"url"?: an http(s) address without credentials, "model"?: a name, "command"?: [absolute program path, arguments...]}');
     }
   }
-  const off = c.recallOff;
-  if (off !== void 0 && !(typeof off === "object" && off !== null && typeof off.reason === "string" && typeof off.at === "string")) {
+  const off2 = c.recallOff;
+  if (off2 !== void 0 && !(typeof off2 === "object" && off2 !== null && typeof off2.reason === "string" && typeof off2.at === "string")) {
     throw new ConfigError("recallOff must be { reason: text, at: a time }");
   }
   return {
@@ -175,7 +175,7 @@ function loadConfig(data) {
     ...impact2 !== void 0 ? { impactProvider: impact2 } : {},
     ...scf !== void 0 ? { scf } : {},
     ...tm !== void 0 ? { transcriptModel: tm } : {},
-    ...off !== void 0 ? { recallOff: off } : {}
+    ...off2 !== void 0 ? { recallOff: off2 } : {}
   };
 }
 function saveConfig(data, config) {
@@ -411,7 +411,7 @@ function isPlaceholder(value) {
   return value.length >= 4 && value === value.charAt(0).repeat(value.length);
 }
 function redact(input2) {
-  const counts = {};
+  const counts2 = {};
   let text5 = input2;
   for (const { label, pattern, group = 0 } of SECRET_PATTERNS) {
     pattern.lastIndex = 0;
@@ -423,7 +423,7 @@ function redact(input2) {
       if (isPlaceholder(captured)) continue;
       const span2 = match.indices?.[group];
       if (span2 === void 0) throw new Error(`the ${label} pattern lacks the d flag`);
-      counts[label] = (counts[label] ?? 0) + 1;
+      counts2[label] = (counts2[label] ?? 0) + 1;
       redacted += `${text5.slice(copied, span2[0])}[REDACTED:${label}]`;
       copied = span2[1];
     }
@@ -431,7 +431,7 @@ function redact(input2) {
   }
   return {
     text: text5,
-    counts,
+    counts: counts2,
     sourceHash: hash(input2),
     redactedHash: hash(text5),
     version: REDACTION_VERSION
@@ -2128,11 +2128,11 @@ var MAX_BYTES = 256 * 1024;
 var MAX_IMPORT_DEPTH = 5;
 var PROMOTE_SUPPORT = 3;
 var PROMOTABLE = /* @__PURE__ */ new Set(["convention", "preference", "decision"]);
-var inside2 = (root, path) => path === root || path.startsWith(root.endsWith(sep2) ? root : root + sep2);
-function readInside(path, root) {
+var inside2 = (root2, path) => path === root2 || path.startsWith(root2.endsWith(sep2) ? root2 : root2 + sep2);
+function readInside(path, root2) {
   try {
     const real = realpathSync2(path);
-    if (!inside2(realpathSync2(root), real) || !statSync2(real).isFile()) return null;
+    if (!inside2(realpathSync2(root2), real) || !statSync2(real).isFile()) return null;
     return readFileSync6(real).subarray(0, MAX_BYTES).toString("utf8");
   } catch {
     return null;
@@ -2182,18 +2182,18 @@ function loadInstructions(cwd, configDir) {
   const lines2 = [];
   const allowed = /* @__PURE__ */ new Set();
   const seen = /* @__PURE__ */ new Set();
-  const read2 = (path, root, depth) => {
+  const read2 = (path, root2, depth) => {
     const abs = resolve3(path);
     if (seen.has(abs)) return;
     seen.add(abs);
-    const text5 = readInside(abs, root);
+    const text5 = readInside(abs, root2);
     if (text5 === null) return;
     allowed.add(abs);
     lines2.push(...linesOf(abs, text5));
     if (depth >= MAX_IMPORT_DEPTH) return;
     for (const target of importsOf(text5)) {
       const to = target.startsWith("~/") ? join4(homedir2(), target.slice(2)) : isAbsolute2(target) ? target : resolve3(dirname5(abs), target);
-      read2(to, root, depth + 1);
+      read2(to, root2, depth + 1);
     }
   };
   const userTarget = join4(configDir, "CLAUDE.md");
@@ -2905,7 +2905,7 @@ function costReport(data, since) {
     if (since !== void 0 && day < since) continue;
     days.set(day, [...days.get(day) ?? [], l]);
   }
-  const counts = (keys) => [...keys.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), /* @__PURE__ */ new Map())].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, n]) => `${k} ${n}`).join(", ");
+  const counts2 = (keys) => [...keys.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), /* @__PURE__ */ new Map())].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, n]) => `${k} ${n}`).join(", ");
   return [...days.keys()].sort().map((day) => {
     const lines2 = days.get(day);
     const runs = lines2.filter(isRun);
@@ -2913,8 +2913,8 @@ function costReport(data, since) {
     const sum = (k) => runs.reduce((n, l) => n + (l[k] ?? 0), 0);
     return [
       day,
-      `runs ${runs.length}${runs.length > 0 ? ` (${counts(runs.map((l) => l.via ?? "unrecorded"))})` : ""}`,
-      `skipped ${skips.length}${skips.length > 0 ? ` (${counts(skips)})` : ""}`,
+      `runs ${runs.length}${runs.length > 0 ? ` (${counts2(runs.map((l) => l.via ?? "unrecorded"))})` : ""}`,
+      `skipped ${skips.length}${skips.length > 0 ? ` (${counts2(skips)})` : ""}`,
       `input ${sum("inputTokens")}`,
       `output ${sum("outputTokens")}`
     ].join("  ");
@@ -4024,29 +4024,29 @@ async function handle(line, data, cwd, version, client) {
   }
   const { id, method, params } = message;
   if (id === void 0 || id === null) return null;
-  const ok = (result) => ({ jsonrpc: "2.0", id, result });
+  const ok2 = (result) => ({ jsonrpc: "2.0", id, result });
   switch (method) {
     case "initialize":
       client.agent = clientName(params?.["clientInfo"]);
-      return ok({
+      return ok2({
         protocolVersion: PROTOCOL_VERSIONS.includes(params?.["protocolVersion"]) ? params["protocolVersion"] : PROTOCOL_VERSIONS.at(-1),
         capabilities: { tools: {} },
         serverInfo: { name: "memory", version },
         instructions: INSTRUCTIONS
       });
     case "ping":
-      return ok({});
+      return ok2({});
     case "tools/list":
-      return ok({ tools: TOOLS });
+      return ok2({ tools: TOOLS });
     case "tools/call": {
       const args = params?.["arguments"] ?? {};
       try {
         if (typeof args !== "object" || args === null || Array.isArray(args)) throw new ToolError("arguments is an object");
-        return ok({ content: [{ type: "text", text: await call(params?.["name"], args, data, cwd, client.agent) }] });
+        return ok2({ content: [{ type: "text", text: await call(params?.["name"], args, data, cwd, client.agent) }] });
       } catch (error) {
         const known = error instanceof ToolError || error instanceof ConfigError;
         if (!known) console.error(`memory: ${error.message}`);
-        return ok({ content: [{ type: "text", text: known ? error.message : "memory could not answer this call" }], isError: true });
+        return ok2({ content: [{ type: "text", text: known ? error.message : "memory could not answer this call" }], isError: true });
       }
     }
     default:
@@ -4948,8 +4948,8 @@ function executePurge(db, scope) {
     db.prepare("DELETE FROM item_vectors WHERE item_id NOT IN (SELECT id FROM items WHERE status = 'active')").run();
     db.prepare("DELETE FROM audit_events WHERE subject_type = 'item' AND subject_id NOT IN (SELECT id FROM items)").run();
     const audited = scope.source === void 0 ? scope : { ...scope, source: "withheld" };
-    const { returnedToProposedIds: _ids, episodesByRepository: _by, ...counts } = preview;
-    recordAudit(db, "purge", null, { scope: audited, removed: counts });
+    const { returnedToProposedIds: _ids, episodesByRepository: _by, ...counts2 } = preview;
+    recordAudit(db, "purge", null, { scope: audited, removed: counts2 });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -5050,8 +5050,8 @@ function jsonLines(text5, each) {
       entry = JSON.parse(raw);
     } catch {
     }
-    const ok = typeof entry === "object" && entry !== null && !Array.isArray(entry) && each(entry, i + 1);
-    if (!ok) unreadable.push(i + 1);
+    const ok2 = typeof entry === "object" && entry !== null && !Array.isArray(entry) && each(entry, i + 1);
+    if (!ok2) unreadable.push(i + 1);
   });
   return unreadable;
 }
@@ -5276,12 +5276,12 @@ function orbitFindings(path) {
 
 // src/import/import.ts
 var ORBIT_STORE = ".orbit/knowledge.sqlite";
-function readInside2(path, root) {
+function readInside2(path, root2) {
   try {
     if (!existsSync9(path)) return { reason: "not there" };
     const link2 = lstatSync3(path).isSymbolicLink();
     const real = realpathSync4(path);
-    const top = realpathSync4(root);
+    const top = realpathSync4(root2);
     if (!real.startsWith(top + sep3)) return { reason: link2 ? "a symbolic link outside its folder" : "outside its folder" };
     if (!statSync4(real).isFile()) return { reason: "not a file" };
     return { text: readFileSync11(real, "utf8") };
@@ -5299,7 +5299,7 @@ function namedRepositories(config, text5) {
   }
   return named;
 }
-function checkoutOf(project, root = sep3) {
+function checkoutOf(project, root2 = sep3) {
   const parts2 = project.split("-").slice(1);
   const walk = (dir, rest) => {
     if (rest.length === 0) return existsSync9(join10(dir, ".git")) ? dir : null;
@@ -5313,7 +5313,7 @@ function checkoutOf(project, root = sep3) {
     }
     return null;
   };
-  return parts2.length === 0 ? null : walk(root, parts2);
+  return parts2.length === 0 ? null : walk(root2, parts2);
 }
 function joins(parts2) {
   if (parts2[0] === "") return parts2.length < 2 ? [] : joins(parts2.slice(1)).map((n) => `.${n}`);
@@ -5324,8 +5324,8 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
   const report = { dryRun, files: [], danglingLinks: [], skippedFiles: [], refused: [], skippedNotes: 0 };
   const candidates = [];
   const terms = organisationTerms(config, null);
-  const read2 = (path, root, parse) => {
-    const file = readInside2(path, root);
+  const read2 = (path, root2, parse) => {
+    const file = readInside2(path, root2);
     if ("reason" in file) {
       report.skippedFiles.push({ path, reason: file.reason });
       return null;
@@ -5495,7 +5495,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
     }
   }
   if (dryRun) return report;
-  const counts = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0, merged: 0, supersessions: 0 };
+  const counts2 = { proposed: 0, tombstones: 0, alreadyKnown: 0, rejectedBefore: 0, quarantined: 0, merged: 0, supersessions: 0 };
   candidates.sort((a, b) => Number(b.status === "rejected") - Number(a.status === "rejected"));
   const byFile = /* @__PURE__ */ new Map();
   for (const c of candidates) {
@@ -5514,7 +5514,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
             if (was !== void 0 && was.status === "proposed") {
               reject.run(c.validTo ?? (/* @__PURE__ */ new Date()).toISOString(), c.statusReason ?? null, was.id);
               added.tombstones++;
-            } else if (was !== void 0) counts[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
+            } else if (was !== void 0) counts2[was.status === "rejected" ? "rejectedBefore" : "alreadyKnown"]++;
             else {
               insertItem(db, c);
               added.tombstones++;
@@ -5524,24 +5524,24 @@ function importSilos(config, data, configDir, dryRun, orbit = false) {
         }
         const stored = addItem(db, c);
         if (c.orbit !== void 0 && stored.kind !== "rejected") keepOrbit(db, stored.id, c.orbit);
-        if (stored.kind === "rejected") counts.rejectedBefore++;
-        else if (stored.kind === "known") counts.alreadyKnown++;
-        else if (stored.kind === "merged") counts.merged++;
+        if (stored.kind === "rejected") counts2.rejectedBefore++;
+        else if (stored.kind === "known") counts2.alreadyKnown++;
+        else if (stored.kind === "merged") counts2.merged++;
         else {
           if (stored.kind === "inserted") added.proposed++;
-          if (stored.kind === "inserted" && stored.supersedes !== void 0) counts.supersessions++;
-          if (quarantineOf(c) !== null) counts.quarantined++;
+          if (stored.kind === "inserted" && stored.supersedes !== void 0) counts2.supersessions++;
+          if (quarantineOf(c) !== null) counts2.quarantined++;
         }
       }
-      counts.proposed += added.proposed;
-      counts.tombstones += added.tombstones;
+      counts2.proposed += added.proposed;
+      counts2.tombstones += added.tombstones;
       recordAudit(db, "import", null, added);
       reduceTombstones(db);
     } finally {
       db.close();
     }
   }
-  Object.assign(report, counts);
+  Object.assign(report, counts2);
   return report;
 }
 function keepOrbit(db, id, f) {
@@ -5706,14 +5706,14 @@ function scfClient(base2, key2, timeoutMs = SCF_TIMEOUT_MS) {
   let failed = null;
   const call2 = async (method, path, body2) => {
     if (failed !== null) throw failed;
-    const fail = (message) => {
+    const fail2 = (message) => {
       failed = new ScfError(message);
       throw failed;
     };
     let res;
     try {
       const target = new URL(`${scfEndpoint(base2)}${path}`);
-      if (target.origin !== base2.origin) return fail(`SCF at ${base2.host}: a request would leave its origin`);
+      if (target.origin !== base2.origin) return fail2(`SCF at ${base2.host}: a request would leave its origin`);
       res = await fetch(target, {
         method,
         headers: { authorization: `Bearer ${key2}`, ...body2 === void 0 ? {} : { "content-type": "application/json" } },
@@ -5722,21 +5722,21 @@ function scfClient(base2, key2, timeoutMs = SCF_TIMEOUT_MS) {
         signal: AbortSignal.timeout(timeoutMs)
       });
     } catch {
-      return fail(`SCF at ${base2.host} is unreachable or too slow`);
+      return fail2(`SCF at ${base2.host} is unreachable or too slow`);
     }
-    if (!res.ok) return fail(`SCF at ${base2.host} answered ${res.status}`);
+    if (!res.ok) return fail2(`SCF at ${base2.host} answered ${res.status}`);
     try {
       const chunks = [];
       let size = 0;
       for await (const chunk of res.body ?? []) {
         size += chunk.byteLength;
-        if (size > MAX_ANSWER) return fail(`SCF at ${base2.host} answered too much`);
+        if (size > MAX_ANSWER) return fail2(`SCF at ${base2.host} answered too much`);
         chunks.push(chunk);
       }
       return JSON.parse(Buffer.concat(chunks).toString("utf8"));
     } catch (error) {
       if (error === failed) throw error;
-      return fail(`SCF at ${base2.host} sent an answer memory cannot read`);
+      return fail2(`SCF at ${base2.host} sent an answer memory cannot read`);
     }
   };
   return { get: (path) => call2("GET", path), post: (path, body2) => call2("POST", path, body2) };
@@ -5974,8 +5974,8 @@ import { existsSync as existsSync11, readFileSync as readFileSync13 } from "node
 import { join as join12 } from "node:path";
 var ORBIT_ITEMS = 3;
 var ORBIT_EXPIRY_DAYS = 28;
-function lessonsInPrompts(root) {
-  const file = join12(root, ".orbit", "config.yaml");
+function lessonsInPrompts(root2) {
+  const file = join12(root2, ".orbit", "config.yaml");
   if (!existsSync11(file)) return false;
   let sections = 0;
   let inKnowledge = false;
@@ -6008,8 +6008,8 @@ function lessonsInPrompts(root) {
   return seen["lessons_in_prompts"] === true && seen["enabled"] !== false;
 }
 function orbitRecall(data, context, cwd, ask) {
-  const root = git(cwd, "rev-parse", "--show-toplevel")?.trim() ?? cwd;
-  if (!lessonsInPrompts(root) || context.tenant === null || context.repository === null) return "";
+  const root2 = git(cwd, "rev-parse", "--show-toplevel")?.trim() ?? cwd;
+  if (!lessonsInPrompts(root2) || context.tenant === null || context.repository === null) return "";
   const today = Date.parse((/* @__PURE__ */ new Date()).toISOString().slice(0, 10));
   const visible2 = visibleItems(data, context, cwd);
   const db = openStore(tenantFile(data, context.tenant), false);
@@ -6058,11 +6058,11 @@ function recordOutcome(db, id, outcome, cost, source) {
 }
 function routeToolsets(db, task) {
   const toolsets = personItems(db).filter((i) => i.type === "toolset");
-  const counts = db.prepare(
+  const counts2 = db.prepare(
     `SELECT count(*) FILTER (WHERE outcome = 'accepted') AS accepted, count(*) FILTER (WHERE outcome = 'rejected') AS rejected,
        coalesce(sum(cost), 0) AS cost FROM evidence WHERE item_id = ?`
   );
-  const hits = rank(withTextRatio(toolsets, textMatches(db, searchTerms(task))), []).map((h) => ({ ...h, ...counts.get(h.item.id) })).sort((a, b) => b.score - a.score || b.accepted - a.accepted || a.rejected - b.rejected);
+  const hits = rank(withTextRatio(toolsets, textMatches(db, searchTerms(task))), []).map((h) => ({ ...h, ...counts2.get(h.item.id) })).sort((a, b) => b.score - a.score || b.accepted - a.accepted || a.rejected - b.rejected);
   if (hits.length === 0) return "";
   return fence(ITEMS_LABEL, hits.map((h) => `${leanRow(h.item, h.why)} \xB7 accepted ${h.accepted} \xB7 rejected ${h.rejected} \xB7 cost ${h.cost}
 `).join(""));
@@ -6346,8 +6346,8 @@ function scrubFailure(text5, names) {
 }
 function signatureOf(scrubbed, exitCode) {
   const { fingerprint, signature } = fingerprintFailure(scrubbed, exitCode);
-  const ok = signature.map((l) => l.replace(/\[REDACTED:[A-Z_]+\]/g, " ").replace(/\s+/g, " ").trim()).filter((l) => l.length <= MAX_SIGNATURE && !l.includes(SIGNATURE_END) && !l.startsWith("exit:") && !weakSignature(l) && refusal(l) === null).sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length);
-  return { fingerprint, signature: ok[0] ?? null };
+  const ok2 = signature.map((l) => l.replace(/\[REDACTED:[A-Z_]+\]/g, " ").replace(/\s+/g, " ").trim()).filter((l) => l.length <= MAX_SIGNATURE && !l.includes(SIGNATURE_END) && !l.startsWith("exit:") && !weakSignature(l) && refusal(l) === null).sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length);
+  return { fingerprint, signature: ok2[0] ?? null };
 }
 function proposeRepair(db, context, r) {
   const statement = `${r.signature}${SIGNATURE_END}${r.how} after the fix at ${r.fix}`;
@@ -6564,9 +6564,9 @@ function locate(abs) {
   while (!existsSync12(dir) && dirname11(dir) !== dir) dir = dirname11(dir);
   const top = git(dir, "rev-parse", "--show-toplevel")?.trim();
   if (top === void 0 || top === "") return null;
-  const root = realpathSync5(top);
-  const path = relative5(root, join13(realpathSync5(dir), relative5(dir, abs)));
-  return path.startsWith("..") || isAbsolute8(path) ? null : { root, path: path.split(sep4).join("/") };
+  const root2 = realpathSync5(top);
+  const path = relative5(root2, join13(realpathSync5(dir), relative5(dir, abs)));
+  return path.startsWith("..") || isAbsolute8(path) ? null : { root: root2, path: path.split(sep4).join("/") };
 }
 function touched2(input2, cwd) {
   const tool = input2["tool_name"];
@@ -6616,12 +6616,12 @@ function anchorHit(a, t, file) {
     return name !== void 0 && old.includes(name.split(/[.:]+/).pop());
   });
 }
-function anchored(items, root, t) {
+function anchored(items, root2, t) {
   let text5;
   const read2 = () => {
     if (text5 === void 0) {
       try {
-        text5 = readFileSync14(resolve6(root, t.path), "utf8");
+        text5 = readFileSync14(resolve6(root2, t.path), "utf8");
       } catch {
         text5 = null;
       }
@@ -6704,8 +6704,197 @@ function afterCompaction(data, input2) {
   }
 }
 
-// src/eval/scorecard.ts
+// src/doctor.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
+import { accessSync, constants as constants2, existsSync as existsSync13, readFileSync as readFileSync15 } from "node:fs";
+import { delimiter, dirname as dirname12, join as join14 } from "node:path";
+import { DatabaseSync as DatabaseSync4 } from "node:sqlite";
+import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
+var ok = (id, detail) => ({ id, status: "ok", detail, fix: null });
+var off = (id, detail, fix = null) => ({ id, status: "off", detail, fix });
+var fail = (id, detail, fix) => ({ id, status: "fail", detail, fix });
+var root = join14(dirname12(fileURLToPath2(import.meta.url)), "..");
+var readJson = (file) => {
+  try {
+    return JSON.parse(readFileSync15(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+};
+function onPath(program, env) {
+  const names = process.platform === "win32" ? [`${program}.exe`, `${program}.cmd`] : [program];
+  return (env["PATH"] ?? "").split(delimiter).some(
+    (dir) => dir !== "" && names.some((n) => {
+      try {
+        accessSync(join14(dir, n), constants2.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+  );
+}
+function versionCheck(configDir) {
+  const running = pluginVersion();
+  const plugins = readJson(join14(configDir, "plugins", "installed_plugins.json"))?.plugins ?? {};
+  const key2 = Object.keys(plugins).find((k) => k.startsWith("memory@"));
+  const installed = key2 === void 0 ? void 0 : plugins[key2]?.[0]?.version;
+  if (key2 === void 0 || installed === void 0) return off("version", `running ${running}; not installed from a marketplace in this Claude Code config`);
+  const market = key2.slice("memory@".length);
+  const held2 = readJson(join14(configDir, "plugins", "marketplaces", market, ".claude-plugin", "plugin.json"))?.version;
+  if (typeof held2 !== "string") return fail("version", `installed ${installed}; the ${market} marketplace checkout was not found`, `/plugin marketplace update ${market}`);
+  if (held2 !== installed) return fail("version", `installed ${installed}, the ${market} marketplace holds ${held2}`, `/plugin update ${key2}`);
+  return ok("version", `installed ${installed}, as the ${market} marketplace holds; running ${running}`);
+}
+function hooksCheck() {
+  const hooks = readJson(join14(root, "hooks", "hooks.json"))?.hooks;
+  if (hooks === void 0) return fail("hooks", `no hooks/hooks.json in ${root}`, "/plugin update memory@memory");
+  return ok("hooks", Object.keys(hooks).join(", "));
+}
+function mcpCheck(cwd) {
+  const init2 = { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "memory-doctor", version: "0" } } };
+  const r = spawnSync3(process.execPath, [process.argv[1], "mcp"], { cwd, input: `${JSON.stringify(init2)}
+`, encoding: "utf8", timeout: 1e4, stdio: ["pipe", "pipe", "ignore"] });
+  const answer2 = (r.stdout ?? "").split("\n").flatMap((l) => {
+    try {
+      return [JSON.parse(l)];
+    } catch {
+      return [];
+    }
+  }).find((m) => m.id === 0 && m.result !== void 0);
+  if (answer2 === void 0) return fail("mcp", `the server did not answer initialize${r.error === void 0 ? "" : ` (${r.error.message})`}`, "/plugin update memory@memory, then restart Claude Code");
+  return ok("mcp", `answers initialize (memory ${answer2.result.serverInfo?.version ?? "unknown"})`);
+}
+function lastCapture(data) {
+  const lines2 = existsSync13(join14(data, "logs", "capture.jsonl")) ? readFileSync15(join14(data, "logs", "capture.jsonl"), "utf8").trim().split("\n") : [];
+  let last;
+  try {
+    last = JSON.parse(lines2.at(-1) ?? "");
+  } catch {
+    return "no run logged yet";
+  }
+  const what = typeof last.skipped === "string" ? `skipped, ${last.skipped}` : `kept ${Number(last.saved ?? 0)}, merged ${Number(last.merged ?? 0)}`;
+  return `last run ${String(last.at)}: ${what}`;
+}
+function captureCheck(config, data, env) {
+  const settings = captureSettings(config);
+  const last = lastCapture(data);
+  if (!settings.enabled) return off("capture", `capture.enabled is false in config.json; ${last}`, `set "capture": { "enabled": true } in ${configPath(data)}`);
+  if (uncovered(config).some((c) => c.id === "capture")) return fail("capture", `your consent does not cover capture yet; ${last}`, "memory init --confirm");
+  if (settings.model !== "haiku") return ok("capture", `filter ${settings.model}; ${last}`);
+  if ((env["ANTHROPIC_API_KEY"] ?? "") !== "") return ok("capture", `ANTHROPIC_API_KEY set; ${last}`);
+  if (onPath("claude", env)) return ok("capture", `through the Claude Code login (claude on PATH); ${last}`);
+  return fail("capture", `no ANTHROPIC_API_KEY and no claude on PATH; ${last}`, "set ANTHROPIC_API_KEY, or put Claude Code's claude on PATH");
+}
+async function reachable(id, url) {
+  try {
+    const res = await fetch(new URL("api/tags", url.endsWith("/") ? url : `${url}/`), { signal: AbortSignal.timeout(2e3) });
+    return res.ok ? ok(id, `Ollama answers at ${url}`) : fail(id, `Ollama at ${url} answered ${res.status}`, `start Ollama at ${url}`);
+  } catch {
+    return fail(id, `nothing answers at ${url}`, `start Ollama at ${url}`);
+  }
+}
+var OLLAMA = "http://127.0.0.1:11434";
+async function embedderChecks(config, env) {
+  const e = config.embeddings;
+  const embed = e === void 0 ? off("embeddings", "no embedder in config.json; search uses words and paths") : e.provider === "ollama" ? await reachable("embeddings", e.url ?? OLLAMA) : e.provider === "voyage" ? (env["VOYAGE_API_KEY"] ?? "") !== "" ? ok("embeddings", "voyage, VOYAGE_API_KEY set") : fail("embeddings", "voyage needs VOYAGE_API_KEY", "set VOYAGE_API_KEY") : ok("embeddings", e.provider);
+  const rerank2 = config.rerank === void 0 ? off("rerank", "no reranker in config.json") : await reachable("rerank", config.rerank.url ?? OLLAMA);
+  return [embed, rerank2];
+}
+function anchorsCheck(config) {
+  const command = config.impactProvider?.command;
+  if (command === void 0) return off("anchors", "no impactProvider in config.json; anchors are checked by path and hash (docs/provider.md)");
+  try {
+    accessSync(command[0], constants2.X_OK);
+    return ok("anchors", command[0]);
+  } catch {
+    return fail("anchors", `${command[0]} is not an executable file`, `fix impactProvider.command in config.json (docs/provider.md)`);
+  }
+}
+function counts(file, where2, ...args) {
+  if (!existsSync13(file)) return "no store yet";
+  const live = existsSync13(`${file}-wal`) && existsSync13(`${file}-shm`);
+  const url = pathToFileURL(file);
+  if (!live) url.searchParams.set("immutable", "1");
+  let db;
+  try {
+    db = new DatabaseSync4(url, { readOnly: true });
+  } catch (error) {
+    return `not read (${error.message})`;
+  }
+  try {
+    const current = `status = 'active' AND valid_to IS NULL`;
+    const r = db.prepare(
+      `SELECT count(CASE WHEN ${current} AND NOT ${READS_EXPIRED} THEN 1 END) AS active, count(CASE WHEN status = 'proposed' THEN 1 END) AS proposed,
+              count(CASE WHEN status = 'stale' THEN 1 END) AS stale, count(CASE WHEN ${current} AND ${READS_EXPIRED} THEN 1 END) AS expired
+         FROM items WHERE ${where2}`
+    ).get(...args);
+    return `${r["active"]} active, ${r["proposed"]} proposed, ${r["stale"]} stale, ${r["expired"]} expired`;
+  } finally {
+    db.close();
+  }
+}
+async function doctor(data, cwd, configDir, env = process.env) {
+  const checks = [];
+  const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
+  checks.push(major > 22 || major === 22 && minor >= 13 ? ok("node", process.versions.node) : fail("node", `${process.versions.node}; memory needs 22.13 or later`, "install Node 22.13 or later"));
+  const network = networkFilesystem(data);
+  checks.push(network !== void 0 ? fail("data", `${data} is on a network file system (${network})`, "set MEMORY_DATA_DIR to a local disk") : ok("data", `${data}, local disk`));
+  checks.push(versionCheck(configDir));
+  let config = null;
+  try {
+    config = loadConfig(data);
+    const agreed = config === null ? [] : uncovered(config);
+    if (config === null) checks.push(fail("consent", "memory is not set up", "memory init --tenant <name>=<owner>/* --bind <name> --confirm"));
+    else if (!consented(config)) checks.push(fail("consent", "the configuration changed since you agreed to it; memory is inert", "memory init --confirm"));
+    else if (agreed.length > 0) checks.push(fail("consent", `agreed to plan version ${config.consent?.version ?? 1} of ${PLAN_VERSION}; not yet agreed: ${agreed.map((k) => k.id).join(", ")}`, "memory init --confirm"));
+    else checks.push(ok("consent", `plan version ${PLAN_VERSION}, every category agreed`));
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    checks.push(fail("consent", error.message, `correct ${configPath(data)}`));
+  }
+  const c = config ?? emptyConfig();
+  const context = resolveContext(cwd, c, configDir);
+  const url = git(cwd, "config", "--get", "remote.origin.url")?.trim();
+  if (context.repository === null) checks.push(off("tenant", `${context.reason}; only the person file applies`));
+  else {
+    const [owner, repo] = context.repository.split("/");
+    const tenants = matchingTenants(c, owner, repo);
+    const bound = c.configs[configDir] ?? [];
+    if (tenants.length === 0) {
+      const name = TENANT_NAME.test(owner) && owner !== "person" ? owner : "work";
+      const patterns = [...c.tenants[name] ?? [], `${owner}/*`].join(",");
+      checks.push(fail("tenant", `${context.repository} (remote ${url}) matches no tenant`, `memory init --tenant ${name}=${patterns} --bind ${[.../* @__PURE__ */ new Set([...bound, name])].join(",")} --confirm`));
+    } else if (tenants.length > 1) checks.push(fail("tenant", `${context.repository} matches tenants ${tenants.join(", ")}`, `keep ${context.repository} in one tenant's patterns in ${configPath(data)}`));
+    else checks.push(ok("tenant", `${context.repository} is tenant ${tenants[0]}`));
+    if (tenants.length === 1) {
+      const t = tenants[0];
+      checks.push(bound.includes(t) ? ok("binding", `${configDir} is bound to ${t}`) : fail("binding", `${configDir} is not bound to ${t}`, `memory init --bind ${[...bound, t].join(",")} --confirm`));
+    }
+  }
+  const automated = automationReason(env);
+  checks.push(automated === null ? ok("automation", "a person's session") : c.automation === true ? ok("automation", `started by automation (${automated}); the consent plan names automation sessions`) : off("automation", `started by automation (${automated}); it neither captures nor proposes`, "memory init --automation on --confirm"));
+  checks.push(hooksCheck());
+  checks.push(mcpCheck(cwd));
+  checks.push(captureCheck(c, data, env));
+  checks.push(c.recallOff !== void 0 ? fail("recall", `off since ${c.recallOff.at}: ${c.recallOff.reason}`, "memory init --recall on --confirm") : ok("recall", "on"));
+  checks.push(c.pointOfAction === true ? ok("pointOfAction", "on") : off("pointOfAction", "off; items anchored to code appear only at session start", `set "pointOfAction": true in ${configPath(data)}`));
+  checks.push(...await embedderChecks(c, env));
+  checks.push(anchorsCheck(c));
+  const here = context.tenant === null || context.repository === null ? "" : `${context.repository}: ${counts(tenantFile(data, context.tenant), TENANT_SCOPE, context.tenant, context.repository, context.owner)}; `;
+  checks.push(ok("items", `${here}person file: ${counts(personFile(data), PERSON_SCOPE)}`));
+  return checks;
+}
+function renderChecks(checks, json) {
+  if (json) return checks.map((k) => `${JSON.stringify({ id: k.id, status: k.status, detail: k.detail, fix: k.fix })}
+`).join("");
+  return checks.map((k) => `${k.status.padEnd(4)}  ${k.id.padEnd(13)} ${k.detail}
+${k.fix === null ? "" : `${" ".repeat(20)}fix: ${k.fix}
+`}`).join("");
+}
+
+// src/eval/scorecard.ts
+import { spawnSync as spawnSync4 } from "node:child_process";
 var row3 = (version, m, arm, status, fields, switches = arm === "on" ? m.on : []) => ({
   measure: m.measure,
   arm,
@@ -6723,7 +6912,7 @@ var seededRecall = (version) => notRun(
   ["recall"]
 );
 function orbitArm(version) {
-  const r = spawnSync3("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
+  const r = spawnSync4("orbit", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 });
   const found = r.status === 0 ? r.stdout.trim().split("\n")[0] : void 0;
   const note = r.error?.code === "ENOENT" ? "Orbit is not installed (no orbit on PATH), so its arm is skipped" : found === void 0 ? "orbit --version failed, so its arm is skipped" : `Orbit ${found} is installed, but its benchmark has no memory switch until QuintinBotes/orbit#233; a live run calls a model and spends money, which this harness never does`;
   return notRun(
@@ -6748,9 +6937,9 @@ function parseLog(text5) {
     } catch {
       throw new Error(`line ${i + 1} is not JSON`);
     }
-    const ok = e?.event === "injected" ? isText(e.session) && isText(e.item) && isText(e.via) && isPaths(e.anchors) : e?.event === "touched" ? isText(e.session) && isPaths(e.paths) : e?.event === "feedback" ? isText(e.session) && isText(e.item) && ["helped", "wrong", "stale"].includes(e.signal) : null;
-    if (ok === false) throw new Error(`line ${i + 1}: a ${String(e.event)} event lacks a field it needs`);
-    if (ok === true) out.push(e);
+    const ok2 = e?.event === "injected" ? isText(e.session) && isText(e.item) && isText(e.via) && isPaths(e.anchors) : e?.event === "touched" ? isText(e.session) && isPaths(e.paths) : e?.event === "feedback" ? isText(e.session) && isText(e.item) && ["helped", "wrong", "stale"].includes(e.signal) : null;
+    if (ok2 === false) throw new Error(`line ${i + 1}: a ${String(e.event)} event lacks a field it needs`);
+    if (ok2 === true) out.push(e);
   });
   return out;
 }
@@ -6794,7 +6983,7 @@ function falseRecall(version, events) {
 // src/eval/replay.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var isText2 = (v) => typeof v === "string" && v.trim() !== "";
 function parsePulls(text5) {
   const doc = JSON.parse(text5);
@@ -6821,9 +7010,9 @@ var TENANT = "replay";
 var REPOSITORY2 = "replay/replay";
 function held(learned, repeats2) {
   if (learned.length === 0 || repeats2.length === 0) return 0;
-  const dir = mkdtempSync2(join14(tmpdir3(), "memory-replay-"));
+  const dir = mkdtempSync2(join15(tmpdir3(), "memory-replay-"));
   try {
-    const db = openStore(join14(dir, "replay.sqlite"), true);
+    const db = openStore(join15(dir, "replay.sqlite"), true);
     try {
       const finding = /* @__PURE__ */ new Map();
       for (const f of learned) {
@@ -6877,7 +7066,7 @@ function replay(version, pulls, since) {
 // src/eval/poison.ts
 import { mkdtempSync as mkdtempSync3, rmSync as rmSync4 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 var TENANT2 = "acme";
 var REPO = "acme/api";
 var OWNER = "acme";
@@ -7004,8 +7193,8 @@ var renderings = (db) => {
   };
 };
 function withStore(use) {
-  const dir = mkdtempSync3(join15(tmpdir4(), "memory-poison-"));
-  const db = openStore(join15(dir, "poison.sqlite"), true);
+  const dir = mkdtempSync3(join16(tmpdir4(), "memory-poison-"));
+  const db = openStore(join16(dir, "poison.sqlite"), true);
   try {
     return use(db);
   } finally {
@@ -7081,20 +7270,20 @@ function poison(version) {
 }
 
 // src/eval/lab.ts
-import { spawnSync as spawnSync4 } from "node:child_process";
-import { cpSync, existsSync as existsSync13, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync15, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
+import { spawnSync as spawnSync5 } from "node:child_process";
+import { cpSync, existsSync as existsSync14, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readFileSync as readFileSync16, readdirSync as readdirSync2, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { dirname as dirname12, join as join16 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { dirname as dirname13, join as join17 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 var LAB = { measure: "session-lab", on: ["memory plugin"], bar: "pass rate with memory on no lower than off" };
 var RUNS = 3;
-var ROOT = dirname12(dirname12(fileURLToPath2(import.meta.url)));
-var TASKS = join16(ROOT, "lab", "tasks");
-var BUNDLE = join16(ROOT, "dist", "memory.mjs");
+var ROOT = dirname13(dirname13(fileURLToPath3(import.meta.url)));
+var TASKS = join17(ROOT, "lab", "tasks");
+var BUNDLE = join17(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", "types"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync13(join16(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync14(join17(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -7104,14 +7293,14 @@ function check(what, r) {
   if (r.status !== 0) throw new Error(`the lab could not ${what}: ${String(r.stderr ?? r.error ?? "").trim()}`);
 }
 function fixtureRepository(task, repo) {
-  cpSync(join16(TASKS, task, "repo"), repo, { recursive: true });
+  cpSync(join17(TASKS, task, "repo"), repo, { recursive: true });
   const env = cleanEnv(GIT_ENV);
   for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", task], ["remote", "add", "origin", "https://github.com/acme/lab.git"]]) {
-    check(`set up ${task}'s repository`, spawnSync4("git", args, { cwd: repo, env, encoding: "utf8" }));
+    check(`set up ${task}'s repository`, spawnSync5("git", args, { cwd: repo, env, encoding: "utf8" }));
   }
 }
 function seed(task, t, repo, data) {
-  const memory = (args) => check(`seed ${task}'s memory`, spawnSync4(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
+  const memory = (args) => check(`seed ${task}'s memory`, spawnSync5(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: "utf8" }));
   memory(["init", "--tenant", "lab=acme/*", "--bind", "lab", "--confirm"]);
   for (const m of t.memory) memory(["remember", "--scope", m.scope, "--type", m.type, ...m.anchor === void 0 ? [] : ["--anchor", m.anchor], "--", m.statement]);
 }
@@ -7123,7 +7312,7 @@ var jsonLines2 = (text5) => text5.split("\n").flatMap((l) => {
     return [];
   }
 });
-var readLines = (file) => existsSync13(file) ? jsonLines2(readFileSync15(file, "utf8")) : [];
+var readLines = (file) => existsSync14(file) ? jsonLines2(readFileSync16(file, "utf8")) : [];
 var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 function usage(events) {
   const result = events.findLast((e) => e.type === "result");
@@ -7137,10 +7326,10 @@ function usage(events) {
   };
 }
 function runOnce(task, t, arm, n, agent, model, plugin, base2) {
-  const dir = mkdtempSync4(join16(base2, "run-"));
-  const repo = join16(dir, "repo");
-  const data = join16(dir, "data");
-  const out = join16(dir, "out");
+  const dir = mkdtempSync4(join17(base2, "run-"));
+  const repo = join17(dir, "repo");
+  const data = join17(dir, "data");
+  const out = join17(dir, "out");
   mkdirSync9(data);
   mkdirSync9(out);
   fixtureRepository(task, repo);
@@ -7155,7 +7344,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   if (arm === "on") env["MEMORY_LAB_PLUGIN"] = plugin;
   else delete env["MEMORY_LAB_PLUGIN"];
-  const r = spawnSync4("/bin/sh", ["-c", agent], {
+  const r = spawnSync5("/bin/sh", ["-c", agent], {
     cwd: repo,
     env,
     input: t.prompt,
@@ -7165,16 +7354,16 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     stdio: ["pipe", "pipe", "inherit"]
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
-  const hidden = join16(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join16(hidden, f));
-  const grade2 = agentFailed ? null : spawnSync4(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
+  const hidden = join17(TASKS, task, "hidden");
+  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join17(hidden, f));
+  const grade2 = agentFailed ? null : spawnSync5(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
     agentFailed,
     passed: grade2?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
-    hooks: readLines(join16(out, "session.jsonl")).flatMap((e) => {
+    hooks: readLines(join17(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
       return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
     }),
@@ -7203,19 +7392,19 @@ function figures(runs) {
   };
 }
 function lab(version, agent, model, only) {
-  const base2 = mkdtempSync4(join16(tmpdir5(), "memory-lab-"));
+  const base2 = mkdtempSync4(join17(tmpdir5(), "memory-lab-"));
   try {
-    const plugin = join16(base2, "plugin");
-    for (const part of PLUGIN_PARTS) if (existsSync13(join16(ROOT, part))) cpSync(join16(ROOT, part), join16(plugin, part), { recursive: true });
+    const plugin = join17(base2, "plugin");
+    for (const part of PLUGIN_PARTS) if (existsSync14(join17(ROOT, part))) cpSync(join17(ROOT, part), join17(plugin, part), { recursive: true });
     return (only === void 0 ? labTasks() : [only]).flatMap((task) => {
-      const t = JSON.parse(readFileSync15(join16(TASKS, task, "task.json"), "utf8"));
+      const t = JSON.parse(readFileSync16(join17(TASKS, task, "task.json"), "utf8"));
       const arms = ["off", "on"].map((arm) => figures(Array.from({ length: RUNS }, (_, i) => runOnce(task, t, arm, i + 1, agent, model, plugin, base2))));
-      const [off, on] = arms;
+      const [off2, on] = arms;
       return [
-        row3(version, LAB, "off", "measured", { task, model, ...off }),
+        row3(version, LAB, "off", "measured", { task, model, ...off2 }),
         // A run that failed to start counts as failed, but the bar is not judged on it: a lab whose agent never ran,
         // or whose off arm lost runs, would otherwise show memory no worse.
-        on.samples.agent_failed + off.samples.agent_failed > 0 ? row3(version, LAB, "on", "measured", { task, model, ...on, meets_bar: null, note: "a run failed to start, so the bar is not judged; run the lab again" }) : row3(version, LAB, "on", "measured", { task, model, ...on, meets_bar: on.pass_rate >= off.pass_rate })
+        on.samples.agent_failed + off2.samples.agent_failed > 0 ? row3(version, LAB, "on", "measured", { task, model, ...on, meets_bar: null, note: "a run failed to start, so the bar is not judged; run the lab again" }) : row3(version, LAB, "on", "measured", { task, model, ...on, meets_bar: on.pass_rate >= off2.pass_rate })
       ];
     });
   } finally {
@@ -7311,19 +7500,19 @@ function buildReplaySet(h, since) {
 
 // src/eval/head-to-head/scorecard.ts
 import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 import { performance } from "node:perf_hooks";
 
 // src/eval/head-to-head/arms.ts
 import { spawn } from "node:child_process";
 import { mkdtempSync as mkdtempSync5, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 import { createInterface as createInterface2 } from "node:readline";
 var TYPE = { decision: "decision", correction: "convention", lesson: "precedent", hazard: "hazard", failure: "failure-pattern", "code-change": "" };
 function memoryArm() {
-  const dir = mkdtempSync5(join17(tmpdir6(), "memory-head-to-head-"));
-  const db = openStore(join17(dir, "arm.sqlite"), true);
+  const dir = mkdtempSync5(join18(tmpdir6(), "memory-head-to-head-"));
+  const db = openStore(join18(dir, "arm.sqlite"), true);
   let set;
   const item = /* @__PURE__ */ new Map();
   const evidence = /* @__PURE__ */ new Map();
@@ -7423,11 +7612,11 @@ function externalArm(name, spec) {
     let timer;
     while (replies.length === 0) {
       if (failed !== void 0) throw failed;
-      await new Promise((ok) => {
-        waiting = ok;
+      await new Promise((ok2) => {
+        waiting = ok2;
         timer = setTimeout(() => {
           failed = new ArmFailed(`${name} crashed: no reply within ${ms / 1e3} s`);
-          ok();
+          ok2();
         }, ms);
       });
       clearTimeout(timer);
@@ -7706,11 +7895,11 @@ async function headToHead(version, set, external, checked, out) {
     vocabulary_misses: vocabulary,
     memory_misses_found_elsewhere: elsewhere,
     vocabulary_miss_share: share,
-    matcher_precision: precision(sampled, checked, join18(out, "sample.jsonl"))
+    matcher_precision: precision(sampled, checked, join19(out, "sample.jsonl"))
   };
   rows.push(...latency, verdict2);
   mkdirSync10(out, { recursive: true, mode: 448 });
-  const write = (file, text5) => writeFileSync6(join18(out, file), text5, { mode: 384 });
+  const write = (file, text5) => writeFileSync6(join19(out, file), text5, { mode: 384 });
   const lines2 = (xs) => xs.map((x) => `${JSON.stringify(x)}
 `).join("");
   write("replay-set.json", `${JSON.stringify(set, null, 1)}
@@ -7723,7 +7912,7 @@ async function headToHead(version, set, external, checked, out) {
 `);
   return { rows, last };
 }
-var headToHeadDir = (data, tenant) => join18(data, "eval", "head-to-head", tenant);
+var headToHeadDir = (data, tenant) => join19(data, "eval", "head-to-head", tenant);
 
 // src/cli.ts
 suppressSqliteExperimentalWarning();
@@ -7742,6 +7931,9 @@ var USAGE = `usage: memory <command>
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
       conflicts with one queues a supersession in review; --supersedes replaces that item at once
+  doctor [--json]
+      why memory does or does not recall and capture here: one line per check, ok, off (by choice) or fail with the
+      command that fixes it. Read only, and never prints an item's text. Exits 1 when any check fails
   list [--repo <owner/repo> | --all-repos]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
@@ -8217,6 +8409,12 @@ function list(args, data, cwd) {
   if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
   process.stdout.write(renderAll(items));
 }
+async function doctorCommand(args, data) {
+  const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
+  const checks = await doctor(data, process.cwd(), currentConfigDir());
+  process.stdout.write(renderChecks(checks, values.json === true));
+  if (checks.some((c) => c.status === "fail")) process.exitCode = 1;
+}
 async function exportCommand(args, data, cwd) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: "string" }, to: { type: "string" }, ...REACH_OPTIONS } });
   if (values.to !== void 0) {
@@ -8253,7 +8451,7 @@ function scfSetUp(config, data, cwd) {
   const key2 = process.env["SCF_API_KEY"];
   if (key2 === void 0 || key2 === "") throw new Refusal("SCF_API_KEY is not set");
   const file = tenantFile(data, tenant);
-  if (!existsSync14(file)) throw new Refusal(`tenant ${tenant} has no items yet`);
+  if (!existsSync15(file)) throw new Refusal(`tenant ${tenant} has no items yet`);
   const url = scfUrl(address.url);
   return { tenant, client: scfClient(url, key2), endpoint: scfEndpoint(url), file };
 }
@@ -8629,7 +8827,7 @@ function correctionsCommand(data, cwd) {
     throw new Refusal("the model pass is off: it needs the transcripts opt-in (memory init --transcripts on) and transcriptModel in config.json, with the plan that lists it agreed to");
   }
   const { url, model } = { ...MODEL_DEFAULTS, ...settings };
-  const command = settings.command ?? [process.execPath, fileURLToPath3(import.meta.url), "model-client"];
+  const command = settings.command ?? [process.execPath, fileURLToPath4(import.meta.url), "model-client"];
   const ask = (turns) => {
     const r = runProvider(command, cwd, { op: "corrections", url, model, turns }, modelTimeoutMs());
     return r.ok ? parseCorrections(r.stdout) : { failed: r.reason };
@@ -8656,11 +8854,11 @@ function correctionsCommand(data, cwd) {
   }
 }
 async function modelClient() {
-  process.stdout.write(await ollamaClient(readFileSync16(0, "utf8")));
+  process.stdout.write(await ollamaClient(readFileSync17(0, "utf8")));
 }
 function hookInput() {
   try {
-    const v = JSON.parse(readFileSync16(0, "utf8"));
+    const v = JSON.parse(readFileSync17(0, "utf8"));
     return typeof v === "object" && v !== null ? v : {};
   } catch {
     return {};
@@ -8820,7 +9018,7 @@ async function captureCommand(args, data) {
 }
 function pruneLog(data, files, before) {
   const file = injectionLog(data);
-  if (!existsSync14(file)) return;
+  if (!existsSync15(file)) return;
   const held2 = /* @__PURE__ */ new Set();
   for (const f of files) {
     const db = openStore(f, false);
@@ -8834,7 +9032,7 @@ function pruneLog(data, files, before) {
   const done = withFileLock(
     injectionLock(data),
     () => {
-      const kept = readFileSync16(file, "utf8").split("\n").filter((line) => {
+      const kept = readFileSync17(file, "utf8").split("\n").filter((line) => {
         if (line.trim() === "") return false;
         try {
           const e = JSON.parse(line);
@@ -8889,8 +9087,8 @@ function purge(args, data, cwd) {
     before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
     all: values.all
   };
-  const tenantsDir = join19(data, "tenants");
-  const every = existsSync14(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const tenantsDir = join20(data, "tenants");
+  const every = existsSync15(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);
@@ -8941,7 +9139,7 @@ ${residue.join("\n")}`);
 var MEASURES = ["replay", "false-recall", "orbit", "lab"];
 function input(file, parse) {
   try {
-    return parse(readFileSync16(file, "utf8"));
+    return parse(readFileSync17(file, "utf8"));
   } catch (error) {
     throw new Refusal(`${file}: ${error.message}`, 2);
   }
@@ -9034,6 +9232,8 @@ async function main(argv) {
       return remember(rest, data, process.cwd());
     case "list":
       return list(rest, data, process.cwd());
+    case "doctor":
+      return doctorCommand(rest, data);
     case "export":
       return exportCommand(rest, data, process.cwd());
     case "import":
