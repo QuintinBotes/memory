@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,8 @@ import { row, type Measure, type Row } from './scorecard.ts';
  * The session lab (#6): fixture tasks run by an agent command, memory's plugin off and on, three runs per arm, each
  * graded by hidden tests. Each task is a directory of `lab/tasks`:
  *
- *   task.json   {"about": "...", "prompt": "...", "memory": [{"scope", "type", "statement", "anchor"?}]}
+ *   task.json   {"about": "...", "prompt": "...", "memory": [{"scope", "type", "statement", "anchor"?}], "config"?: {...}}
+ *               (`config` is merged into the on arm's config.json, to turn a switch on or shrink a budget)
  *   repo/       the fixture repository, copied to a temporary directory for every run
  *   hidden/     *.test.mjs, run with node --test after the agent exits, with LAB_REPO naming the run's copy
  *
@@ -35,6 +36,7 @@ const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_
 interface Task {
   prompt: string;
   memory: { scope: string; type: string; statement: string; anchor?: string }[];
+  config?: Record<string, unknown>;
 }
 
 interface Run {
@@ -72,6 +74,10 @@ function seed(task: string, t: Task, repo: string, data: string): void {
   const memory = (args: string[]) =>
     check(`seed ${task}'s memory`, spawnSync(process.execPath, [BUNDLE, ...args], { cwd: repo, env: cleanEnv({ MEMORY_DATA_DIR: data }), encoding: 'utf8' }));
   memory(['init', '--tenant', 'lab=acme/*', '--bind', 'lab', '--confirm']);
+  if (t.config !== undefined) {
+    const path = join(data, 'config.json');
+    writeFileSync(path, JSON.stringify({ ...(JSON.parse(readFileSync(path, 'utf8')) as object), ...t.config }));
+  }
   for (const m of t.memory) memory(['remember', '--scope', m.scope, '--type', m.type, ...(m.anchor === undefined ? [] : ['--anchor', m.anchor]), '--', m.statement]);
 }
 

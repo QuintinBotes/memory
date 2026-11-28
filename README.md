@@ -199,6 +199,29 @@ characters of the items shown this session, and a session start after a
 compaction lets the main agent be shown its items again. Edits made through
 Bash bypass the hook; diff recall still sees them at review.
 
+### Recall at the prompt
+
+Off by default, and not yet recommended: the session lab's `prompt-decision`
+task measures it first. With `"promptRecall": true` in `config.json`, a
+`UserPromptSubmit` hook adds, as context beside the owner's prompt, the active
+items of the repository's tenant (repository and organisation scope) that
+carry no anchor and share at least two of the prompt's words. The prompt's
+words are the query, ranked by `memory_search`'s keyword ranking alone: no
+model, no network, no embeddings. Words that only make a question ("how",
+"what", "we", "here") count toward nothing. An item already in the session
+slice, or already shown to this agent in this session (at the prompt or at the
+point of action, the same ledger), is not shown again. Rows are whole, best
+first, within 120 tokens per prompt and the ledger's 600 per agent per
+session, inside the advisory fence. A prompt of fewer than four words, a slash
+command, and a session of `Explore`, `Plan` or a Review Voice agent get
+nothing; so does a prompt that clears the bar for no item, which prints zero
+bytes. If the store is busy past 250 ms, the hook prints nothing and logs a
+`skipped` line. Each item shown is logged in `logs/injections.jsonl` with
+`via: "prompt"`, so `memory eval false-recall` judges it. The prompt itself is
+never stored or logged. Person and global items are left out: the ledger that
+keeps an item to once per agent lives in the tenant's file. A compaction lets
+the main agent be shown its items again, and `PreCompact` lists them.
+
 ### Recall at a failing command
 
 No switch and no extra consent: it stores no error text. A `PostToolUseFailure`
@@ -925,12 +948,13 @@ each proposal's statement in quotes.
 | Session start, and after a compaction | 300 tokens |
 | Start of an allowed subagent | 300 tokens |
 | Reading or editing anchored code | 120 tokens per injection, 600 per agent per session |
+| The owner's prompt, with `promptRecall` on | 120 tokens per prompt, within the same 600 per agent per session |
 | A failing command that matches a known failure | 120 tokens |
 | A diff, at review or commit | 600 tokens |
 
 A hook with nothing to say prints nothing. The slice at session start, after
 a compaction and at a subagent's start, a diff at review, a failing
-command and, with `pointOfAction` on, reading or editing anchored code exist so far; the other
+command, with `pointOfAction` on, reading or editing anchored code and, with `promptRecall` on, the owner's prompt exist so far; the other
 moments arrive with later slices.
 
 ## Measuring memory
@@ -1001,11 +1025,22 @@ never given to the agent: not in its directory, its environment or its
 plugin copy. Each run gets a temporary copy of
 the task's repository and its own empty data directory; on the on arm that
 directory is consented and holds the task's items, so no run reads or writes
-your store. The six tasks: a seeded hazard on a symbol the task must change
+your store. The seven tasks: a seeded hazard on a symbol the task must change
 (`hazard-change`) and on one it must not (`hazard-keep`), the
 [orbit#133](https://github.com/QuintinBotes/orbit/issues/133) environment
 (`failure-env`), a task long enough to compact (`compaction`), one that
-spawns a subagent (`subagent`), and a change-reach task (`change-reach`).
+spawns a subagent (`subagent`), a change-reach task (`change-reach`), and an
+unanchored decision the task depends on with a session slice too small to
+hold it (`prompt-decision`, which turns `promptRecall` on in its on arm). A
+task's `config` in `task.json` is merged into the on arm's `config.json`.
+To judge false recall over a real run's injection log, keep each run's log
+with a wrapper, since the lab removes the run's data directory:
+
+```bash
+memory eval lab --task prompt-decision --model claude-sonnet-5 \
+  --agent "node $PWD/lab/claude-agent.mjs; s=\$?; cat \"\$MEMORY_DATA_DIR/logs/injections.jsonl\" >> $PWD/lab-injections.jsonl 2>/dev/null; exit \$s"
+memory eval false-recall --log lab-injections.jsonl
+```
 
 ```bash
 # Run from a memory checkout. The agent runs in each run's copy, so its paths are absolute: $PWD expands here.

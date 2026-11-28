@@ -107,3 +107,15 @@ test('a git URL rewrite cannot turn another host into a tenant', () => {
   assert.doesNotMatch(out, new RegExp(ORG_ITEM));
   assert.match(out, new RegExp(PERSON_ITEM));
 });
+
+test('recall at the prompt (#136) shows a tenant item only in its own repository, tenant and config', () => {
+  const s = seeded();
+  const cfgPath = join(s.data, 'config.json');
+  writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(readFileSync(cfgPath, 'utf8')), promptRecall: true, sessionBudget: 0 }));
+  const ask = (cwd, config) =>
+    run(['prompt-recall'], { cwd, data: s.data, config, input: JSON.stringify({ session_id: `s-${Math.random()}`, prompt: 'Does every service we run expose a health endpoint?', cwd }) }).stdout;
+  assert.match(ask(s.acmeWeb, s.configA), new RegExp(ORG_ITEM), 'control: the organisation item reaches a sibling');
+  for (const [cwd, config] of [[s.betaWeb, s.configA], [s.loose, s.configA], [s.noRemote, s.configA], [s.base, s.configA], [s.acmeApi, s.configB]]) {
+    assert.equal(ask(cwd, config), '', cwd);
+  }
+});

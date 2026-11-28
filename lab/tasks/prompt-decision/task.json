@@ -1,0 +1,8 @@
+{
+  "about": "An unanchored decision the task depends on, with a session slice too small to hold it: only recall at the prompt can deliver it.",
+  "prompt": "Add a function toCents(mills) to src/money.mjs that rounds an amount of money given in mills (tenths of a cent) to whole cents. Keep the change small.",
+  "config": { "promptRecall": true, "sessionBudget": 30 },
+  "memory": [
+    { "scope": "repository", "type": "decision", "statement": "Money in mills is rounded to cents half to even (banker's rounding: 125 mills is 12 cents, 135 is 14), never half up; agreed with finance after the audit drift in PR #40" }
+  ]
+}

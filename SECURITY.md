@@ -92,6 +92,12 @@ no tenant, or in a Claude Code config not bound to that tenant.
 - **Organisation-free person items.** Person and global items are refused when
   they name code, a path, a tenant, an owner or a repository. This is a
   heuristic; names of one character are not matched.
+- **Recall at the prompt reads the prompt and keeps nothing of it.** With
+  `promptRecall` on (off by default), the `UserPromptSubmit` hook reads the
+  owner's prompt on this machine to find items sharing its words. The prompt
+  is not stored, logged or sent anywhere; the injection log gets the shown
+  items' ids only. It shows only the active items of the repository's own
+  tenant, as every other hook does.
 - **Advisory only.** Items are printed as cited facts. Memory never blocks a
   tool call or grants a permission.
 - **Local store.** Nothing else is uploaded. Files are created with mode 0600 in a 0700

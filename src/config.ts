@@ -42,6 +42,8 @@ export interface Config {
   automation?: boolean;
   /** Recall at the point of action (#14): items anchored where an agent reads or edits; off unless true. */
   pointOfAction?: boolean;
+  /** Recall at the prompt (#136): active unanchored items whose words the owner's prompt shares; off unless true. */
+  promptRecall?: boolean;
   /** The code anchor provider `memory recall --diff` asks for a change's impact (#16): a command, run without a shell. */
   impactProvider?: { command: string[] };
   /** The SCF each tenant exports its proposals to (#13), by tenant name; a tenant without an entry sends nothing. Part of the consent plan. */
@@ -221,6 +223,7 @@ export function loadConfig(data: string): Config | null {
   }
   if (c.automation !== undefined && typeof c.automation !== 'boolean') throw new ConfigError('automation must be true or false');
   if (c.pointOfAction !== undefined && typeof c.pointOfAction !== 'boolean') throw new ConfigError('pointOfAction must be true or false');
+  if (c.promptRecall !== undefined && typeof c.promptRecall !== 'boolean') throw new ConfigError('promptRecall must be true or false');
   const impact = c.impactProvider;
   if (
     impact !== undefined &&
@@ -269,6 +272,7 @@ export function loadConfig(data: string): Config | null {
     ...(capture !== undefined ? { capture } : {}),
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
+    ...(c.promptRecall !== undefined ? { promptRecall: c.promptRecall } : {}),
     ...(impact !== undefined ? { impactProvider: impact } : {}),
     ...(scf !== undefined ? { scf } : {}),
     ...(tm !== undefined ? { transcriptModel: tm } : {}),
