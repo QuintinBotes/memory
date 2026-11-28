@@ -160,7 +160,7 @@ function versions(asOf?: string): { select: string; at: string[] } {
   const at = new Date(asOf).toISOString();
   return {
     select: `${COLUMNS}, valid_from, valid_to FROM items WHERE status IN ('active', 'superseded') AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)
-      AND coalesce(reinforced_at, valid_from) >= strftime('%Y-%m-%dT%H:%M:%fZ', ?, '-${EXPIRY_DAYS} days')`,
+      AND (pinned_at IS NOT NULL OR coalesce(reinforced_at, valid_from) >= strftime('%Y-%m-%dT%H:%M:%fZ', ?, '-${EXPIRY_DAYS} days'))`,
     at: [at, at, at],
   };
 }

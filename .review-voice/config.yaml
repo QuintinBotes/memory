@@ -9,3 +9,6 @@ review:
   linked_issues: false
 writes:
   github_posting_enabled: true
+verdict:
+  # Actions may not approve pull requests here, and approval belongs to the owner: post COMMENT instead.
+  never_approve: true
