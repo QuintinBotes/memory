@@ -52,9 +52,9 @@ export function shownIn(db: DatabaseSync, session: string): { id: string; statem
 }
 
 /** A compaction wipes the main agent's context, so it may be shown its items again. */
-export function resetMain(db: DatabaseSync, session: string): void {
+export function resetMain(db: DatabaseSync, session: string, agent = MAIN_AGENT): void {
   inTransaction(db, () => {
     db.exec(CREATE);
-    db.prepare('DELETE FROM ledger WHERE session = ? AND agent = ?').run(session, MAIN_AGENT);
+    db.prepare('DELETE FROM ledger WHERE session = ? AND agent = ?').run(session, agent);
   });
 }

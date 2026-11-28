@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { setup, remember, sessionStart, run, tools } from './helpers.mjs';
+import { setup, remember, sessionStart, run, tools, commit } from './helpers.mjs';
 
 const sha = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
 const REPEATED = 'Always use the shared logger for diagnostics';
@@ -314,8 +314,83 @@ test('40.9 a v9 store upgrades to v10, and a v8 store goes 8 to 9 to 10, with bo
     db.close();
     assert.match(run(['list'], { cwd: s.repo, data: s.data, config: s.configA }).stdout, /shared logger/);
     const after = new DatabaseSync(file, { readOnly: true });
-    assert.equal(after.prepare('PRAGMA user_version').get().user_version, 18, `from ${from}`);
+    assert.equal(after.prepare('PRAGMA user_version').get().user_version, 19, `from ${from}`);
     assert.deepEqual(tables(after), ['instruction_edits', 'item_anchors'], `from ${from}`);
     after.close();
+  }
+});
+
+// #144: the rules directories agents load.
+const RULE = 'Wrap every database call in a retry helper';
+const rules = () => {
+  const s = setup();
+  commit(s.acmeApi, { 'src/api/x.ts': 'export const x = 1;\n', 'src/web/y.ts': 'export const y = 1;\n' });
+  return { ...s, repo: s.acmeApi };
+};
+const write = (path, text) => {
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, text);
+};
+const configure = (s, patch) => {
+  const path = join(s.data, 'config.json');
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), ...patch }));
+};
+const shown = (s) => {
+  const [found] = tools(s.repo, s.data, s.configA, [['memory_search', { query: 'database call retry helper' }]]);
+  return `${slice(s)}\n${found.text}`;
+};
+
+test('#144 SC1 an item a .claude/rules file repeats is withheld from the slice and search, logged, and returns when the line goes', () => {
+  const s = rules();
+  assert.equal(remember(s.repo, s.data, s.configA, RULE, '--type', 'convention').status, 0);
+  assert.match(shown(s), /retry helper/);
+  const file = join(s.repo, '.claude', 'rules', 'testing.md');
+  write(file, `# Testing\n\n- ${RULE}.\n`);
+  assert.doesNotMatch(shown(s), /retry helper/);
+  assert.ok(logLines(s).some((l) => l.event === 'withheld' && l.reason === 'repeats'));
+  writeFileSync(file, '# Testing\n');
+  assert.match(shown(s), /retry helper/);
+});
+
+test('#144 SC2 a rule with paths: frontmatter withholds an item anchored under it, and not one anchored elsewhere', () => {
+  for (const [anchor, withheld] of [['src/api/x.ts', true], ['src/web/y.ts', false]]) {
+    const s = rules();
+    write(join(s.repo, '.claude', 'rules', 'api.md'), `---\npaths: ["src/api/**"]\n---\n\n- ${RULE}.\n`);
+    const r = remember(s.repo, s.data, s.configA, RULE, '--type', 'convention', '--anchor', anchor);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(/retry helper/.test(slice(s)), !withheld, anchor);
+  }
+});
+
+test('#144 SC3 instructionFiles adds .cursor/rules: its .mdc line withholds a repeating item, and without the key it does not', () => {
+  const s = rules();
+  write(join(s.repo, '.cursor', 'rules', 'style.mdc'), `---\ndescription: style\nalwaysApply: true\n---\n\n- ${RULE}.\n`);
+  assert.equal(remember(s.repo, s.data, s.configA, RULE, '--type', 'convention').status, 0);
+  assert.match(slice(s), /retry helper/);
+  configure(s, { instructionFiles: ['.cursor/rules'] });
+  assert.doesNotMatch(slice(s), /retry helper/);
+});
+
+test('#144 SC4 memory_propose of a line a rules file says is refused, naming the file and line', () => {
+  const s = rules();
+  write(join(s.repo, '.claude', 'rules', 'testing.md'), `# Testing\n\n- ${RULE}.\n`);
+  const [res] = tools(s.repo, s.data, s.configA, [['memory_propose', { statement: RULE, scope: 'repository', type: 'convention', evidence: { source: 'https://example.com/pr/1' } }]]);
+  assert.match(res.text, /not proposed: duplicates \.claude\/rules\/testing\.md:3/);
+});
+
+test('#144 SC5 an instructionFiles link out of the repository is not read, and an absolute or climbing entry is refused', () => {
+  const s = rules();
+  const outside = join(s.base, 'outside-rules');
+  write(join(outside, 'style.md'), `- ${RULE}.\n`);
+  symlinkSync(outside, join(s.repo, 'linked'));
+  symlinkSync(join(outside, 'style.md'), join(s.repo, 'linked.md'));
+  assert.equal(remember(s.repo, s.data, s.configA, RULE, '--type', 'convention').status, 0);
+  configure(s, { instructionFiles: ['linked', 'linked.md'] });
+  assert.match(slice(s), /retry helper/);
+  for (const bad of [join(outside, 'style.md'), '../outside-rules']) {
+    configure(s, { instructionFiles: [bad] });
+    const r = run(['list'], { cwd: s.repo, data: s.data, config: s.configA });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /instructionFiles must be a list of paths relative to the repository root/);
   }
 });

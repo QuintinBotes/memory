@@ -2,11 +2,11 @@ import { recheck } from '../anchors.ts';
 import { managedBy } from '../anchors/refresh.ts';
 import { withRefreshLock } from '../store/refresh-lock.ts';
 import { narrowerWins } from '../consolidate.ts';
-import type { Context, Reach } from '../context.ts';
+import { ownerOf, type Context, type Reach } from '../context.ts';
 import { allTenantItems, personItems, tenantItems, textMatches, type Visible } from '../items.ts';
 import { openStore, WRITE_BUSY_MS } from '../store/db.ts';
 import { personFile, tenantFile } from '../store/paths.ts';
-import { currentConfigDir } from '../config.ts';
+import { currentConfigDir, loadConfig } from '../config.ts';
 import { loadInstructions, screen, type Withheld } from '../instructions.ts';
 
 /** `items` of one file, each that matched carrying its text ratio: bm25 depends on the file's own word counts, so a match is measured against the best in its file. */
@@ -35,7 +35,7 @@ export function withTextRatio(items: Visible[], matches: Map<string, number>): V
 export function visibleItems(data: string, context: Context, cwd: string, terms: readonly string[] = [], busyMs = WRITE_BUSY_MS, withheld: Withheld[] | null = [], reach?: Reach, asOf?: string): Visible[] {
   const out: Visible[] = [];
   const other = reach !== undefined && reach !== 'all' && reach.repository !== context.repository;
-  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
+  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir(), loadConfig(data)?.instructionFiles);
   const add = (items: Visible[], matches: Map<string, number>): void => void out.push(...withTextRatio(items, matches));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const file = tenantFile(data, context.tenant);
@@ -45,7 +45,7 @@ export function visibleItems(data: string, context: Context, cwd: string, terms:
         // A refresh already running elsewhere does the work; this hook goes on without waiting for it.
         if (!other) withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { managed: managedBy(data, context.repository) }));
         const named = reach !== undefined && reach !== 'all' ? reach.repository : undefined;
-        const items = reach === 'all' ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === undefined ? context.owner : named.split('/')[0]!, asOf);
+        const items = reach === 'all' ? allTenantItems(db, context.tenant, asOf) : tenantItems(db, context.tenant, named ?? context.repository, named === undefined ? context.owner : ownerOf(named), asOf);
         add(instructions === null ? items : screen(db, items, instructions, false, withheld!), textMatches(db, terms));
       } finally {
         db.close();

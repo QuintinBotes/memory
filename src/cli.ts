@@ -26,11 +26,11 @@ import {
   subagentAllowed,
   type Config,
 } from './config.ts';
-import { filterRepository, git, resolveContext, type Context, type Reach } from './context.ts';
+import { filterRepository, git, repositoryKey, resolveContext, type Context, type Reach } from './context.ts';
 import { Refusal, refusal } from './gate.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import { SCOPES, TYPES, closeQuestion, sha256, type Anchor, type Scope } from './items.ts';
-import { chooseSlice, estimate, renderAll, row } from './slice.ts';
+import { estimate, renderAll, row, sessionSlice } from './slice.ts';
 import { fileLines, headReader, rangeHash, recheck } from './anchors.ts';
 import { ForeignAnswer, ProviderError, impactOf, openProvider, resolveKey, symbolAt, testsFor } from './anchors/provider.ts';
 import { adoptCandidate, atHead, logAnchors, managedBy, providerConfig, refreshAnchors, setProviderFailed, symbolAnchor, undoMove, withJobLock } from './anchors/refresh.ts';
@@ -51,13 +51,14 @@ import { importSilos } from './import/import.ts';
 import { SYMBOL_KEY } from './import/silos.ts';
 import { renderReport, tenantReport, testCoverage } from './report/report.ts';
 import { exportMarkdown, foreignRepository } from './export/markdown.ts';
+import { share } from './export/shared.ts';
 import { ScfError, exportToScf, heldInScf, importFromScf, remoteProposals, scfClient, type Remote, type ScfClient } from './export/scf.ts';
 import { withFileLockAsync } from './store/refresh-lock.ts';
 import { diffRecall } from './recall/diff.ts';
 import { orbitRecall } from './recall/orbit.ts';
 import { related, relatedTarget } from './recall/related.ts';
 import { OUTCOMES, recordOutcome, routeToolsets, type Outcome } from './recall/toolsets.ts';
-import { decideById, proposalStores, proposals, renderProposals, type Proposal } from './review/review.ts';
+import { decideById, expiring, proposalStores, proposals, renderExpiring, renderProposals, renew, setPin, type Expiring, type Proposal } from './review/review.ts';
 import { MODEL_DEFAULTS, expireTranscripts, modelTranscripts, ollamaClient, parseCorrections, processTranscripts, recordTranscript, transcriptsOn, type Ask } from './capture/transcripts.ts';
 import { modelTimeoutMs, runProvider } from './provider/run.ts';
 import { addItem, supersedeNow, sweep, sweepIfDue, undo } from './consolidate.ts';
@@ -67,10 +68,14 @@ import { commandPassed, expireEpisodes, recordEpisode, revertMessage } from './c
 import { scanReverts } from './capture/reverts.ts';
 import { failureRecall, weakSignature } from './hooks/failure.ts';
 import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
+import { CODEX, fromCodex } from './hooks/agent.ts';
+import { promptRecall } from './hooks/prompt.ts';
 import { capture, captureWanted } from './capture/capture.ts';
+import { costReport } from './capture/cost.ts';
 import { HOOK_BUSY_MS, openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
+import { doctor, renderChecks } from './doctor.ts';
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
 import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
@@ -83,43 +88,61 @@ suppressSqliteExperimentalWarning();
 
 const USAGE = `usage: memory <command>
 
-  init [--tenant <name>=<owner/*|owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
+  init [--tenant <name>=<[host/]owner/*|[host/]owner/repo>[,...]]... [--bind <tenant>[,...]] [--automation on|off]
        [--failing-commands on|off] [--transcripts on|off] [--recall on] [--scf <tenant>=<url|off>]... [--confirm]
-      show the consent plan; with --confirm, save it. --bind binds this Claude Code config. --automation on lets
-      sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
+      show the consent plan; with --confirm, save it. A pattern without a host is on github.com; gitlab.com/acme/*
+      takes acme's repositories on gitlab.com, nested groups included. --bind binds this Claude Code config.
+      --automation on lets sessions started by automation (headless runs, CI jobs) capture and propose; off is the default.
       --failing-commands on keeps failed Bash commands as scrubbed episodes, 30 days, so the same command passing
       later becomes a repair proposal; off is the default. --transcripts on records each session's transcript path
       at its end and turns your corrections in it into quoted proposals at the next session start or sweep; off is
       the default. --recall on turns recall back on after memory turned it
       off itself, when two memory-linked reverts came within seven days
   remember [--scope repository|organisation|person|global] [--type <type>]
-           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
+           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] [--pin] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
-      conflicts with one queues a supersession in review; --supersedes replaces that item at once
-  list [--repo <owner/repo> | --all-repos]
+      conflicts with one queues a supersession in review; --supersedes replaces that item at once; --pin pins it
+  doctor [--json]
+      why memory does or does not recall and capture here: one line per check, ok, off (by choice) or fail with the
+      command that fixes it. Read only, and never prints an item's text. Exits 1 when any check fails
+  list [--repo <[host/]owner/repo> | --all-repos | --expired]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
-      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read
-  export --to scf [--repo <owner/repo> | --all-repos]
+      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read.
+      --expired: the active items of this repository's tenant and the person file that read as expired, which no recall shows
+  export --to scf [--repo <[host/]owner/repo> | --all-repos]
       send this repository's tenant's proposed repository and organisation items to the SCF set for it with memory init
       --scf <tenant>=<url> (key in SCF_API_KEY), as world proposals of layer memory with their evidence; nothing in
       the person file, no other tenant, nothing redaction would change. Run twice, it sends nothing new. An SCF that does
       not answer leaves memory as it was. memory import --scf then brings back SCF's approvals and rejections and the
       outcomes of runs that used the items, counted once each as helped or wrong
-  export --markdown <dir> [--repo <owner/repo> | --all-repos]
+  export --markdown <dir> [--repo <[host/]owner/repo> | --all-repos]
       write this repository's tenant and the person file as Markdown, one file per item and an index, the same bytes
       for the same store; read only, nothing reads the folder back. Refuses a folder inside another tenant's repository.
       --repo limits it as list --repo does; --all-repos is what it writes without either
   report [--tenant <name>]
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
-  import [--dry-run] [--orbit]
-      read the silos (each bound config's auto memory, and the files under "imports" in config.json)
-      and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
+  import [--dry-run] [--orbit | --shared]
+      read the silos (each bound config's auto memory, Codex's memories under $CODEX_HOME or ~/.codex, and
+      the files under "imports" in config.json) and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
       read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
-      read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals
-  review
-      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
+      read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals. With
+      --shared, read only this repository's .memory/shared.jsonl as committed at HEAD (never the working copy), each
+      line a proposal with team trust and the taint shared:<owner/repo>; refused in a repository of no tenant here
+  share [--dry-run] [--yes-non-interactive]
+      write this repository's active, unquarantined repository items to .memory/shared.jsonl, one line each, the
+      same bytes for the same store, for memory import --shared on another machine. Person, organisation and global
+      items are never written; an item that redaction would change, or that names a committer, is withheld and
+      counted. From a terminal, as promote --apply; --dry-run writes nothing. Nothing is committed or pushed
+  review [--json]
+      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate, and under
+      "Expiring soon" the active items that expire within 14 days or expired in the last 30
+  renew <id>...
+      reset an item's reinforcement date, so its 90 days start again; support is unchanged. Undo with memory undo
+  pin <id> | unpin <id>
+      pin an item you stated or approved so it never expires, or take the pin back. A pinned item still goes stale,
+      can be superseded or rejected, and counts against the budgets. No MCP tool can renew or pin
   approve <id> [--scope repository|organisation|person|global]
       make a proposal active
   reject <id> [--reason <text>]
@@ -134,7 +157,7 @@ const USAGE = `usage: memory <command>
       stores the proposals and lists them; --apply, from a terminal, writes exactly the line shown, marks the item
       promoted and takes it out of recall; --reject keeps the proposal as a tombstone. Nothing is committed or pushed
   undo <audit-id>
-      reverse one merge or supersession, by the audit id its command printed
+      reverse one merge, supersession or renew, by the audit id its command printed
   sweep
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
@@ -184,14 +207,23 @@ const USAGE = `usage: memory <command>
       on 127.0.0.1 only; any other --host is refused. Prints the address with this run's token; stop it with Ctrl-C.
       It can apply instruction-file edits, so it starts only from a terminal, as conflicts apply does, unless
       --yes-non-interactive is given (put an ask rule on it)
-  session-start
-      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget
+  hooks --agent codex
+      print the hooks.json fragment for Codex (~/.codex/hooks.json or <repo>/.codex/hooks.json) that runs session-start,
+      point-of-action (on apply_patch) and failure-recall (on Bash) with --agent codex, and capture at Stop. Writes nothing
+  session-start [--agent codex]
+      the SessionStart hook, at startup and after a compaction: the slice for this repository and config, within budget.
+      --agent codex (also on point-of-action and failure-recall) reads Codex's payload and logs the agent as codex
   subagent-start
       the SubagentStart hook: the same slice for an allowed subagent type, within 300 tokens, logged by item id
-  point-of-action
+  point-of-action [--agent codex]
       the PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit: items anchored where the call lands, once per
       agent per session, within 120 tokens each time and 600 per agent. Off unless pointOfAction is true in config.json
-  failure-recall
+  prompt-recall
+      the UserPromptSubmit hook: active unanchored items of the tenant sharing at least two of the prompt's words, ranked
+      as memory_search ranks, not in the session slice and not shown to the agent before, within 120 tokens per prompt
+      and 600 per agent per session. Nothing for a slash command or a prompt under four words. Never stores or logs the
+      prompt. Off unless promptRecall is true in config.json
+  failure-recall [--agent codex]
       the PostToolUseFailure hook on Bash: the failure patterns and repair recipes whose signature (the statement up to ' => ') the error carries, once
       per agent and fingerprint, within 120 tokens. A repeat after that counts as a contradiction. Needs no opt-in; stores no error text
   command-passed
@@ -200,7 +232,7 @@ const USAGE = `usage: memory <command>
       counts as a contradiction of them, and two within seven days turn recall off. Any other command does nothing
   ci
       read this repository's CI runs with gh: a failed run followed by a passing run on another commit becomes a repair
-      proposal with the fingerprint, the fix commit and both runs as evidence
+      proposal with the fingerprint, the fix commit and both runs as evidence. Off github.com it does nothing
   seed --git [--since <date>] [--dry-run]
       read this repository's commit history with git log (the last 12 months by default; no merges, no bots' commits):
       a commit whose message gives a reason (a revert with a body, because or so that, or a rule with must or never)
@@ -217,8 +249,12 @@ const USAGE = `usage: memory <command>
       or a compaction's redacted summary as an episode; the next session start or sweep reads the corrections
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
-      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
-  purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
+      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports.
+      Past capture.maxCallsPerDay or maxTokensPerDay in a local day it makes no model call and logs a daily cap skip
+  capture --cost [--since <YYYY-MM-DD>]
+      what capture cost, per local day, from logs/capture.jsonl alone: runs (api key or Claude Code login), skips by
+      reason, input and output tokens
+  purge (--tenant <name> | --repo <[host/]owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
       learned in that repository. --source reaches this repository's tenant and the person file: an item left without
       evidence returns to proposed, or with --with-derived is deleted
@@ -273,7 +309,7 @@ function init(args: string[], data: string): void {
     }
     const list = patterns.split(',').map((p) => p.trim());
     const bad = list.find((p) => !TENANT_PATTERN.test(p));
-    if (bad !== undefined) throw new Refusal(`"${bad}" is not an owner/* or owner/repo pattern`, 2);
+    if (bad !== undefined) throw new Refusal(`"${bad}" is not an owner/*, owner/repo, host/group/* or host/group/repo pattern`, 2);
     config.tenants[name] = list;
   }
   if (values.bind !== undefined) {
@@ -501,6 +537,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       rationale: { type: 'string' },
       source: { type: 'string' },
       supersedes: { type: 'string' },
+      pin: { type: 'boolean' },
     },
   });
   const scope = values.scope as Scope;
@@ -555,6 +592,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, 'item_remembered', { type: 'item', id: done.id }, { scope });
       console.log(`remembered ${done.id} (${where}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      if (values.pin === true) console.log(pinSaid(done.id, setPin(db, done.id, true)));
       await embedAfterWrite(db, config, tenant);
       return;
     }
@@ -569,6 +607,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
     } else {
       throw new Refusal('this statement was already placed as superseded');
     }
+    if (values.pin === true) console.log(pinSaid(stored.id, setPin(db, stored.id, true)));
     await embedAfterWrite(db, config, tenant);
   } finally {
     db.close();
@@ -576,7 +615,7 @@ async function remember(args: string[], data: string, cwd: string): Promise<void
 }
 
 /**
- * `--repo <owner/repo>` or `--all-repos`, as the read they name, or undefined for neither. A `--repo` of any tenant but the one
+ * `--repo <[host/]owner/repo>` or `--all-repos`, as the read they name, or undefined for neither. A `--repo` of any tenant but the one
  * bound here is refused before any store is opened.
  */
 function reachOf(values: { repo?: string | undefined; 'all-repos'?: boolean | undefined }, config: Config, context: Context): Reach | undefined {
@@ -591,21 +630,35 @@ function reachOf(values: { repo?: string | undefined; 'all-repos'?: boolean | un
 const REACH_OPTIONS = { repo: { type: 'string' }, 'all-repos': { type: 'boolean' } } as const;
 
 function list(args: string[], data: string, cwd: string): void {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: REACH_OPTIONS });
-  if (positionals.length > 0) throw new Refusal('usage: memory list [--repo <owner/repo> | --all-repos]', 2);
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...REACH_OPTIONS, expired: { type: 'boolean' } } });
+  if (positionals.length > 0 || (values.expired === true && (values.repo !== undefined || values['all-repos'] === true))) {
+    throw new Refusal('usage: memory list [--repo <[host/]owner/repo> | --all-repos | --expired]', 2);
+  }
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
+  if (values.expired === true) {
+    const gone = expiringHere(data, context, true);
+    if (gone.length === 0) return void console.error('No expired items here.');
+    return void process.stdout.write(`Expired: ${gone.length}. ${RENEW_HINT}\n${fence(PROPOSALS_LABEL, renderExpiring(gone))}`);
+  }
   const items = visibleItems(data, context, cwd, [], undefined, null, reachOf(values, config, context));
   // On stderr, so a script reading stdout still sees nothing (#122).
   if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
   process.stdout.write(renderAll(items));
 }
 
+async function doctorCommand(args: string[], data: string): Promise<void> {
+  const { values } = parseArgs({ args, options: { json: { type: 'boolean' } } });
+  const checks = await doctor(data, process.cwd(), currentConfigDir());
+  process.stdout.write(renderChecks(checks, values.json === true));
+  if (checks.some((c) => c.status === 'fail')) process.exitCode = 1;
+}
+
 /** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
 async function exportCommand(args: string[], data: string, cwd: string): Promise<void> {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { markdown: { type: 'string' }, to: { type: 'string' }, ...REACH_OPTIONS } });
   if (values.to !== undefined) {
-    if (values.to !== 'scf' || values.markdown !== undefined || positionals.length > 0) throw new Refusal('usage: memory export --to scf [--repo <owner/repo> | --all-repos]', 2);
+    if (values.to !== 'scf' || values.markdown !== undefined || positionals.length > 0) throw new Refusal('usage: memory export --to scf [--repo <[host/]owner/repo> | --all-repos]', 2);
     const config = setUp(data);
     return scfExport(config, data, cwd, reachOf(values, config, resolveContext(cwd, config, currentConfigDir())));
   }
@@ -705,13 +758,23 @@ function reportCommand(args: string[], data: string): void {
 }
 
 async function importCommand(args: string[], data: string): Promise<void> {
-  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' }, scf: { type: 'boolean' } } });
+  const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' }, orbit: { type: 'boolean' }, scf: { type: 'boolean' }, shared: { type: 'boolean' } } });
   if (values.scf === true) {
-    if (values['dry-run'] === true || values.orbit === true) throw new Refusal('usage: memory import --scf', 2);
+    if (values['dry-run'] === true || values.orbit === true || values.shared === true) throw new Refusal('usage: memory import --scf', 2);
     return scfImport(setUp(data), data, process.cwd());
   }
+  if (values.orbit === true && values.shared === true) throw new Refusal('usage: memory import [--dry-run] [--orbit | --shared]', 2);
   const dryRun = values['dry-run'] === true;
-  console.log(JSON.stringify(importSilos(setUp(data), data, currentConfigDir(), dryRun, values.orbit === true), null, 2));
+  const config = setUp(data);
+  let shared: { top: string; tenant: string; repository: string } | undefined;
+  if (values.shared === true) {
+    // Before any store is opened: a file of another tenant's repository, or of none, is not read.
+    const context = resolveContext(process.cwd(), config, currentConfigDir());
+    const top = git(process.cwd(), 'rev-parse', '--show-toplevel')?.trim();
+    if (context.tenant === null || context.repository === null || top === undefined) throw new Refusal(`not imported: ${context.reason}`);
+    shared = { top, tenant: context.tenant, repository: context.repository };
+  }
+  console.log(JSON.stringify(importSilos(config, data, currentConfigDir(), dryRun, values.orbit === true, shared), null, 2));
   if (dryRun) console.error('Nothing was written. Run memory import without --dry-run to store these as proposals.');
 }
 
@@ -758,14 +821,71 @@ function review(args: string[], data: string, cwd: string): void {
   if (held.length > 0) {
     process.stdout.write(`Accepted in SCF, but the evidence was purged here, so they stay proposed until you decide (memory purge --item <id> removes one): ${held.length}.\n${fence(PROPOSALS_LABEL, held.join(''))}`);
   }
-  if (all.length === 0) return waiting.length > 0 || held.length > 0 ? undefined : void console.error('No proposals to review here.');
-  const quarantined = all.filter((p) => p.quarantine !== null).length;
-  const stale = all.filter((p) => p.status !== 'proposed').length;
-  process.stdout.write(
-    `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. ` +
-      'Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.\n' +
-      fence(PROPOSALS_LABEL, renderProposals(all)),
-  );
+  const soon = expiringHere(data, context);
+  if (all.length === 0 && waiting.length === 0 && held.length === 0 && soon.length === 0) return void console.error('No proposals to review here.');
+  if (all.length > 0) {
+    const quarantined = all.filter((p) => p.quarantine !== null).length;
+    const stale = all.filter((p) => p.status !== 'proposed').length;
+    process.stdout.write(
+      `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. ` +
+        'Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.\n' +
+        fence(PROPOSALS_LABEL, renderProposals(all)),
+    );
+  }
+  // Only when there is one, so a review with nothing near expiry prints what it always did.
+  if (soon.length > 0) process.stdout.write(`Expiring soon: ${soon.length}. ${RENEW_HINT}\n${fence(PROPOSALS_LABEL, renderExpiring(soon))}`);
+}
+
+const RENEW_HINT = 'An item expires 90 days after its last approval, remember or helped report; memory renew <id> starts its 90 days again, memory pin <id> keeps it from expiring.';
+
+/** The items near or past expiry in the stores this repository may review (`expiring`), the tenant's first. */
+function expiringHere(data: string, context: Context, expired = false): Expiring[] {
+  const out: Expiring[] = [];
+  for (const { file, tenant } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      out.push(...expiring(db, tenant, expired));
+    } finally {
+      db.close();
+    }
+  }
+  return out;
+}
+
+/** What `memory pin` and `remember --pin` say, or a refusal when the item may not be pinned. */
+function pinSaid(id: string, done: ReturnType<typeof setPin>): string {
+  if (done === 'missing') throw new Refusal(`no active item ${id} here to pin`);
+  if (typeof done === 'object') throw new Refusal(`not pinned: ${id} has ${done.trust} trust; only an item you stated or approved can be pinned, so approve or remember it first`);
+  return done === 'already' ? `${id} is already pinned` : `pinned ${id}: it does not expire until memory unpin ${id}`;
+}
+
+/** `memory renew <id>...`, `memory pin <id>` and `memory unpin <id>`: the owner's say over expiry (#142), never an MCP tool's. */
+function expiryCommand(args: string[], data: string, cwd: string, verb: 'renew' | 'pin' | 'unpin'): void {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length === 0 || (verb !== 'renew' && positionals.length !== 1)) throw new Refusal(verb === 'renew' ? 'give one or more item ids' : 'give one item id', 2);
+  const stores = proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()));
+  for (const id of positionals) {
+    let said: string | null = null;
+    for (const { file } of stores) {
+      const db = openStore(file, false);
+      if (db === null) continue;
+      try {
+        if (verb === 'renew') {
+          const audit = renew(db, id);
+          if (audit !== null) said = `renewed ${id}: its 90 days start again; undo with memory undo ${audit}`;
+        } else {
+          const done = setPin(db, id, verb === 'pin');
+          if (done !== 'missing') said = verb === 'pin' ? pinSaid(id, done) : done === 'already' ? `${id} is not pinned` : `unpinned ${id}: it expires 90 days after its last reinforcement again`;
+        }
+      } finally {
+        db.close();
+      }
+      if (said !== null) break;
+    }
+    if (said === null) throw new Refusal(`no active item ${id} here; memory list and memory review list them`);
+    console.log(said);
+  }
 }
 
 /**
@@ -780,8 +900,9 @@ function conflictsCommand(args: string[], data: string, cwd: string): void {
     throw new Refusal('usage: memory conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]', 2);
   }
   if ((values.confirm === true || values['yes-non-interactive'] === true) && verb !== 'apply') throw new Refusal('--confirm and --yes-non-interactive go with apply', 2);
-  const context = resolveContext(cwd, setUp(data), currentConfigDir());
-  const ins = loadInstructions(cwd, currentConfigDir());
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const ins = loadInstructions(cwd, currentConfigDir(), config.instructionFiles);
   let listed = 0;
   for (const { file } of proposalStores(data, context)) {
     const db = openStore(file, false);
@@ -877,6 +998,27 @@ function promoteCommand(args: string[], data: string, cwd: string): void {
   } finally {
     db.close();
   }
+}
+
+/** `memory share [--dry-run] [--yes-non-interactive]`: this repository's approved items into .memory/shared.jsonl, never committed. */
+function shareCommand(args: string[], data: string, cwd: string): void {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { 'dry-run': { type: 'boolean' }, 'yes-non-interactive': { type: 'boolean' } } });
+  if (positionals.length > 0) throw new Refusal('usage: memory share [--dry-run] [--yes-non-interactive]', 2);
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const top = git(cwd, 'rev-parse', '--show-toplevel')?.trim();
+  if (context.tenant === null || context.repository === null || top === undefined) throw new Refusal(`not shared: ${context.reason}`);
+  const dryRun = values['dry-run'] === true;
+  if (!dryRun) ownerTerminal(values['yes-non-interactive'], 'nothing was written: share is');
+  const db = openStore(tenantFile(data, context.tenant), false);
+  try {
+    console.log(JSON.stringify(share(db, context.tenant, context.repository, top, dryRun), null, 2));
+  } catch (error) {
+    throw new Refusal((error as Error).message);
+  } finally {
+    db?.close();
+  }
+  console.error(dryRun ? 'Nothing was written. Run memory share without --dry-run to write the file.' : 'Nothing was committed: review .memory/shared.jsonl and commit it yourself.');
 }
 
 const realpathOrSelf = (path: string): string => {
@@ -996,7 +1138,7 @@ function undoCommand(args: string[], data: string, cwd: string): void {
       db.close();
     }
   }
-  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge or supersession here, or it was already undone`);
+  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge, supersession or renew here, or it was already undone`);
 }
 
 /** `memory recheck [<id>]`: check this repository's anchored items, stale ones included, and restore what holds. */
@@ -1157,14 +1299,46 @@ function hookInput(): Record<string, unknown> {
   }
 }
 
+/**
+ * The hook's payload through its agent's adapter: with no arguments Claude Code's, as it is; with `--agent codex`
+ * Codex's, read as Claude Code's. Anything else, or a payload the adapter does not know, is null and logs `skipped`.
+ */
+function agentInput(data: string, args: string[], via: string): Record<string, unknown> | null {
+  const input = hookInput();
+  if (args.length === 0) return input;
+  const mapped = args.length === 2 && args[0] === '--agent' && args[1] === CODEX ? fromCodex(input) : null;
+  if (mapped !== null) return mapped;
+  try {
+    const config = loadConfig(data);
+    if (config !== null && covers(config, 'injections')) {
+      const session = typeof input['session_id'] === 'string' && input['session_id'] !== '' ? input['session_id'] : 'unknown';
+      appendInjections(data, [`${JSON.stringify({ event: 'skipped', session, agent: args[1] ?? 'unknown', via, reason: 'unknown payload', at: new Date().toISOString() })}\n`]);
+    }
+  } catch {
+    // A busy log costs the line, never the session.
+  }
+  return null;
+}
+
+/** `memory hooks --agent codex`: the hooks.json fragment that runs memory's own hook commands for Codex's events. Writes nothing. */
+function hooksCommand(args: string[]): void {
+  const { values } = parseArgs({ args, options: { agent: { type: 'string' } } });
+  if (values.agent !== CODEX) throw new Refusal('name the agent: memory hooks --agent codex', 2);
+  const command = (name: string, timeout: number) => ({ type: 'command', command: `node ${JSON.stringify(process.argv[1]!)} ${name}`, timeout });
+  const hooks = {
+    SessionStart: [{ matcher: 'startup|resume|clear|compact', hooks: [command('session-start --agent codex', 10)] }],
+    PreToolUse: [{ matcher: 'apply_patch', hooks: [command('point-of-action --agent codex', 2)] }],
+    PostToolUse: [{ matcher: 'Bash', hooks: [command('failure-recall --agent codex', 2)] }],
+    Stop: [{ hooks: [command('capture', 10)] }],
+  };
+  console.log(JSON.stringify({ hooks }, null, 2));
+}
+
 /** The slice for the hook's working directory: the subagent's own, for a subagent, so its tenant is resolved there. */
 function hookSlice(data: string, config: Config, input: Record<string, unknown>, budget: number, withheld: Withheld[] = []) {
   const cwd = typeof input['cwd'] === 'string' && input['cwd'] !== '' ? input['cwd'] : process.cwd();
   const items = visibleItems(data, resolveContext(cwd, config, currentConfigDir()), cwd, [], HOOK_BUSY_MS, withheld);
-  // With recall at the point of action on, anchored items wait for the code they are anchored to; the slice counts them.
-  if (config.pointOfAction !== true) return chooseSlice(items, budget);
-  const unanchored = items.filter((i) => i.anchors.length === 0);
-  return chooseSlice(unanchored, budget, items.length - unanchored.length);
+  return sessionSlice(items, budget, config.pointOfAction === true);
 }
 
 /**
@@ -1172,9 +1346,10 @@ function hookSlice(data: string, config: Config, input: Record<string, unknown>,
  * bytes for the same store. It never fails the session: anything that goes
  * wrong prints nothing, so a broken store costs no tokens and no error.
  */
-function sessionStart(data: string): void {
+function sessionStart(data: string, args: string[]): void {
   try {
-    const input = hookInput();
+    const input = agentInput(data, args, 'session-start');
+    if (input === null) return;
     // A session started with --agent names its agent; one that may never get the slice gets none here either.
     if (typeof input['agent_type'] === 'string' && neverSubagent(input['agent_type'])) return;
     const config = loadConfig(data);
@@ -1188,7 +1363,7 @@ function sessionStart(data: string): void {
     }
     const withheld: Withheld[] = [];
     process.stdout.write(hookSlice(data, config, input, config.sessionBudget ?? DEFAULT_SESSION_BUDGET, withheld).text);
-    logWithheld(data, config, 'session-start', typeof input['session_id'] === 'string' ? input['session_id'] : 'unknown', withheld);
+    logWithheld(data, config, 'session-start', typeof input['session_id'] === 'string' ? input['session_id'] : 'unknown', withheld, args.length > 0 ? CODEX : undefined);
     // The anchor refresh talks to another program, so it never runs here: a detached job, as capture is.
     try {
       if (providerConfig(data) !== undefined) {
@@ -1249,24 +1424,38 @@ function subagentStart(data: string): void {
 }
 
 /** The PreToolUse hook on Read, Edit, Write, MultiEdit and NotebookEdit; see `pointOfAction`. Silent on any failure. */
-function pointOfActionHook(data: string): void {
+function pointOfActionHook(data: string, args: string[]): void {
   try {
-    process.stdout.write(pointOfAction(data, hookInput(), (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+    const input = agentInput(data, args, 'point-of-action');
+    if (input === null) return;
+    process.stdout.write(pointOfAction(data, input, (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
   } catch {
     // Silent by design: advisory memory never costs a tool call.
   }
 }
 
-/** The PostToolUseFailure hook on Bash: failure recall, then the failing-command episode when its opt-in is on. Silent on any failure. */
-function failureRecallHook(data: string): void {
-  const input = hookInput();
+/** The UserPromptSubmit hook; see `promptRecall`. Silent on any failure. */
+function promptRecallHook(data: string): void {
   try {
-    process.stdout.write(failureRecall(data, input, (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+    process.stdout.write(promptRecall(data, hookInput(), (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`))));
+  } catch {
+    // Silent by design: advisory memory never costs a prompt.
+  }
+}
+
+/** The PostToolUseFailure hook on Bash: failure recall, then the failing-command episode when its opt-in is on. Silent on any failure. */
+function failureRecallHook(data: string, args: string[]): void {
+  const input = agentInput(data, args, 'failure-recall');
+  if (input === null) return;
+  try {
+    // Codex has no PostToolUseFailure: the hook runs on its PostToolUse and answers as one.
+    process.stdout.write(failureRecall(data, input, (lines) => appendInjections(data, lines.map((l) => `${JSON.stringify(l)}\n`)), args.length > 0 ? 'PostToolUse' : undefined));
   } catch {
     // A hook never fails the tool call.
   }
   try {
-    recordEpisode(data, input);
+    // A command that may have passed is no failing-command episode.
+    if (input['exit_unknown'] !== true) recordEpisode(data, input);
   } catch {
     // A busy or unreadable store loses one episode, never the command.
   }
@@ -1326,7 +1515,15 @@ const LOG_LOCK_PURGE_MS = 10_000;
 
 /** The Stop and SessionEnd hook. Never fails the session: it hands the work to a detached process and returns. */
 async function captureCommand(args: string[], data: string): Promise<void> {
-  const { values } = parseArgs({ args, options: { foreground: { type: 'boolean' } } });
+  const { values } = parseArgs({ args, options: { foreground: { type: 'boolean' }, cost: { type: 'boolean' }, since: { type: 'string' } } });
+  if (values.cost === true || values.since !== undefined) {
+    if (values.cost !== true || values.foreground === true) throw new Refusal('usage: memory capture --cost [--since <YYYY-MM-DD>]', 2);
+    if (values.since !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(values.since)) throw new Refusal('--since takes a date as YYYY-MM-DD', 2);
+    const lines = costReport(data, values.since);
+    if (lines.length === 0) console.error('no capture runs logged');
+    for (const line of lines) console.log(line);
+    return;
+  }
   const input = hookInput();
   if (values.foreground === true) {
     try {
@@ -1410,10 +1607,8 @@ function purge(args: string[], data: string, cwd: string): void {
   if (values.tenant !== undefined && !TENANT_NAME.test(values.tenant)) throw new Refusal(`no tenant named "${values.tenant}"`, 2);
   if (values.item !== undefined && !/^m-[0-9a-f]+$/.test(values.item)) throw new Refusal(`"${values.item}" is not an item id`, 2);
   if (values.source !== undefined && values.source.trim() === '') throw new Refusal('--source takes a source reference', 2);
-  const repository = values.repo?.toLowerCase();
-  if (repository !== undefined && !/^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(repository)) {
-    throw new Refusal('--repo takes owner/repo', 2);
-  }
+  const repository = values.repo === undefined ? undefined : repositoryKey(values.repo) ?? undefined;
+  if (values.repo !== undefined && repository === undefined) throw new Refusal('--repo takes owner/repo or host/group/repo', 2);
   const scope: PurgeScope = {
     tenant: values.tenant,
     repository,
@@ -1573,6 +1768,8 @@ async function main(argv: string[]): Promise<void> {
       return remember(rest, data, process.cwd());
     case 'list':
       return list(rest, data, process.cwd());
+    case 'doctor':
+      return doctorCommand(rest, data);
     case 'export':
       return exportCommand(rest, data, process.cwd());
     case 'import':
@@ -1583,6 +1780,10 @@ async function main(argv: string[]): Promise<void> {
       return review(rest, data, process.cwd());
     case 'undo':
       return undoCommand(rest, data, process.cwd());
+    case 'renew':
+    case 'pin':
+    case 'unpin':
+      return expiryCommand(rest, data, process.cwd(), command);
     case 'approve':
     case 'reject':
       return decideCommand(rest, data, process.cwd(), command);
@@ -1590,6 +1791,8 @@ async function main(argv: string[]): Promise<void> {
       return conflictsCommand(rest, data, process.cwd());
     case 'promote':
       return promoteCommand(rest, data, process.cwd());
+    case 'share':
+      return shareCommand(rest, data, process.cwd());
     case 'sweep':
       return sweepCommand(data, process.cwd(), false);
     case 'corrections':
@@ -1614,14 +1817,18 @@ async function main(argv: string[]): Promise<void> {
       return uiCommand(rest, data, process.cwd());
     case 'mcp':
       return serve(data, process.cwd(), pluginVersion());
+    case 'hooks':
+      return hooksCommand(rest);
     case 'session-start':
-      return sessionStart(data);
+      return sessionStart(data, rest);
     case 'subagent-start':
       return subagentStart(data);
     case 'point-of-action':
-      return pointOfActionHook(data);
+      return pointOfActionHook(data, rest);
+    case 'prompt-recall':
+      return promptRecallHook(data);
     case 'failure-recall':
-      return failureRecallHook(data);
+      return failureRecallHook(data, rest);
     case 'command-passed':
       return commandPassedHook(data);
     case 'ci':

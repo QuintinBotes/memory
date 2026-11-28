@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { currentConfigDir, type Config } from '../config.ts';
 import { covers } from '../consent/plan.ts';
-import { resolveContext } from '../context.ts';
+import { hostOf, resolveContext } from '../context.ts';
 import { openStore } from '../store/db.ts';
 import { tenantFile } from '../store/paths.ts';
 import { committerNames, proposeRepair, scrubFailure, signatureOf } from './failures.ts';
@@ -48,6 +48,7 @@ export function repairedRuns(runs: Run[]): { failed: Run; passed: Run }[] {
 export function captureCi(data: string, config: Config, cwd: string, limit = 100): string[] {
   if (!covers(config, 'failures')) return ['your consent does not cover reading CI runs yet; run memory init and confirm'];
   const context = resolveContext(cwd, config, currentConfigDir());
+  if (context.repository !== null && hostOf(context.repository) !== 'github.com') return [`nothing captured: memory ci reads GitHub Actions through gh, which is not available on ${hostOf(context.repository)}`];
   if (context.tenant === null || context.repository === null) return [`nothing captured: ${context.reason}`];
   const repo = { tenant: context.tenant, repository: context.repository };
   let runs: Run[];

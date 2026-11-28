@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { run, sandbox } from './helpers.mjs';
 
 // `memory eval poison` (#22 FR-001 to FR-004): the red-team families replayed offline in a throwaway store.
-const FAMILIES = ['external-comments', 'query-only-injection', 'delayed-trigger', 'compositional', 'command-output', 'fence-escape', 'trust-laundering', 'role-spoofing'];
+const FAMILIES = ['external-comments', 'query-only-injection', 'delayed-trigger', 'compositional', 'command-output', 'fence-escape', 'trust-laundering', 'role-spoofing', 'shared-file'];
 
 function poison(args = []) {
   const { base } = sandbox();

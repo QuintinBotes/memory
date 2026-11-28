@@ -328,6 +328,13 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     const has = (db.prepare('PRAGMA table_info(evidence)').all() as { name: string }[]).some((c) => c.name === 'outcome');
     if (!has) db.exec("ALTER TABLE evidence ADD COLUMN outcome TEXT CHECK (outcome IN ('accepted', 'rejected')); ALTER TABLE evidence ADD COLUMN cost REAL;");
   },
+
+  // v19 - pins (#142): when the owner pinned an item so it never reads as expired, null when not pinned. Only `memory pin` and
+  // `remember --pin` set it. Skipped when the column is there, so a store rolled back by version alone still opens.
+  (db) => {
+    const has = (db.prepare('PRAGMA table_info(items)').all() as { name: string }[]).some((c) => c.name === 'pinned_at');
+    if (!has) db.exec('ALTER TABLE items ADD COLUMN pinned_at TEXT;');
+  },
 ];
 const SECURE_DELETE = 6;
 

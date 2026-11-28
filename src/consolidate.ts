@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { visibleText } from './codefree.ts';
-import { cleanTaint, insertItem, knownItem, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
+import { cleanTaint, insertItem, knownItem, organisationKey, sha256, statementKey, type Anchor, type NewItem, type Visible } from './items.ts';
 import { recordAudit } from './store/audit.ts';
 import { inTransaction } from './store/transaction.ts';
 
@@ -70,7 +70,7 @@ function place(db: DatabaseSync, c: NewItem, key: string, write: () => Stored): 
         `SELECT id, anchors_json FROM items WHERE tenant = ? AND statement_key = ? AND status IN ('active', 'proposed') AND statement != ''
            AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?)) ORDER BY created_at, id`,
       )
-      .all(c.tenant, key, c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as { id: string; anchors_json: string }[];
+      .all(c.tenant, key, c.scope, c.scopeKey, organisationKey(c)) as { id: string; anchors_json: string }[];
     const repeat = same.find((r) => anchorsOverlap(c.anchors, JSON.parse(r.anchors_json) as Anchor[]));
     return repeat === undefined ? write() : mergeEvidence(db, repeat.id, c);
   });
@@ -99,7 +99,7 @@ export function addItem(db: DatabaseSync, c: NewItem): Stored {
          AND (tenant = '' OR (scope = ? AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))
        ORDER BY created_at, id`,
     )
-    .all(c.tenant, c.scope, c.scopeKey, c.scopeKey.split('/')[0]!) as unknown as Related[];
+    .all(c.tenant, c.scope, c.scopeKey, organisationKey(c)) as unknown as Related[];
   let conflict: { row: Related; sim: number } | undefined;
   // A dated proposal older than a waiting proposal on the same subject: the older arrives superseded by it (#145).
   let newer: { row: Related; sim: number } | undefined;
@@ -184,12 +184,16 @@ export function undo(db: DatabaseSync, auditId: string): string | false {
   const e = db.prepare('SELECT action, subject_id, metadata_json FROM audit_events WHERE audit_id = ?').get(auditId) as
     | { action: string; subject_id: string; metadata_json: string }
     | undefined;
-  if (e === undefined || (e.action !== 'evidence_merged' && e.action !== 'supersession_applied')) return false;
+  if (e === undefined || (e.action !== 'evidence_merged' && e.action !== 'supersession_applied' && e.action !== 'item_renewed')) return false;
   const m = JSON.parse(e.metadata_json) as Record<string, unknown>;
   db.exec('BEGIN IMMEDIATE');
   try {
     let what: string | false;
-    if (e.action === 'evidence_merged') {
+    if (e.action === 'item_renewed') {
+      // Only while nothing has reinforced it since, so an undo never takes back a later approval or helped report.
+      const back = db.prepare('UPDATE items SET reinforced_at = ? WHERE id = ? AND reinforced_at = ?').run(m['was'] as string | null, e.subject_id, m['at'] as string);
+      what = back.changes === 1 ? `${e.subject_id} has its reinforcement date before the renew again` : false;
+    } else if (e.action === 'evidence_merged') {
       const gone = db.prepare('DELETE FROM evidence WHERE id = ? AND item_id = ?').run(m['evidenceId'] as string, e.subject_id);
       if (gone.changes === 1) db.prepare('UPDATE items SET support = support - ? WHERE id = ?').run(m['supportDelta'] as number, e.subject_id);
       what = gone.changes === 1 ? `removed the merged evidence from ${e.subject_id}` : false;

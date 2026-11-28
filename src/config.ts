@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
+import { inside } from './import/silos.ts';
 
 /**
  * Memory's one configuration file, machine-wide, in the data directory.
  *
- * `tenants` maps a tenant name to GitHub `owner/*` or `owner/repo` patterns.
+ * `tenants` maps a tenant name to `owner/*` or `owner/repo` patterns, on github.com unless they start with a host
+ * (`gitlab.com/acme/*`).
  * `configs` binds a Claude Code config directory to the tenants it may open.
  * `consent` holds the hash of the plan the owner confirmed; any change to
  * tenants, bindings or opt-ins changes the hash, and memory is inert until the
@@ -23,6 +25,8 @@ export interface Config {
   /** Subagent types, beyond general-purpose, that get the slice at their start. */
   subagentTypes?: string[];
   imports?: Record<string, RepositorySilos>;
+  /** Further instruction files or directories, relative to the repository root (#144), matched like CLAUDE.md and never stored. */
+  instructionFiles?: string[];
   /**
    * The semantic leg's embedder (#28), off when absent: a local Ollama at `url` (http://127.0.0.1:11434 unless set)
    * with an embedding model the owner installs, Voyage, or the offline test provider.
@@ -42,6 +46,8 @@ export interface Config {
   automation?: boolean;
   /** Recall at the point of action (#14): items anchored where an agent reads or edits; off unless true. */
   pointOfAction?: boolean;
+  /** Recall at the prompt (#136): active unanchored items whose words the owner's prompt shares; off unless true. */
+  promptRecall?: boolean;
   /** The code anchor provider `memory recall --diff` asks for a change's impact (#16): a command, run without a shell. */
   impactProvider?: { command: string[] };
   /** The SCF each tenant exports its proposals to (#13), by tenant name; a tenant without an entry sends nothing. Part of the consent plan. */
@@ -63,8 +69,13 @@ export interface CaptureConfig {
   model?: string;
   maxCandidates?: number;
   apiModel?: string;
+  /** Past either cap in a local calendar day, counted from logs/capture.jsonl, capture makes no model call (#140). */
+  maxCallsPerDay?: number;
+  maxTokensPerDay?: number;
+  /** Skip a session that read the web or another MCP server instead of labelling what it keeps (#143). */
+  skipTainted?: boolean;
 }
-export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-5-5' };
+export const DEFAULT_CAPTURE = { enabled: true, model: 'haiku', maxCandidates: 5, apiModel: 'claude-haiku-5-5', maxCallsPerDay: 100, maxTokensPerDay: 2_000_000, skipTainted: false };
 export const captureSettings = (config: Config): typeof DEFAULT_CAPTURE => ({ ...DEFAULT_CAPTURE, ...config.capture });
 
 /** `decisions` names a Review Voice store and `orbit` an Orbit knowledge store (default `.orbit/knowledge.sqlite`), SQLite files, absolute or relative to the checkout; the others are text files inside it. */
@@ -113,7 +124,8 @@ export function scfUrl(text: string): URL | string {
 export const scfEndpoint = (u: URL): string => `${u.origin}${u.pathname.replace(/\/$/, '')}`;
 
 export const TENANT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
-export const TENANT_PATTERN = /^[a-z0-9][a-z0-9_.-]*\/(?:\*|[a-z0-9_.-]+)$/i;
+/** `owner/*` or `owner/repo` on github.com, or a host holding a dot, then groups, then `*` or a repository: `gitlab.com/acme/platform/*`. */
+export const TENANT_PATTERN = /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[a-z0-9_][a-z0-9_.-]*)+|[a-z0-9][a-z0-9-]*)\/(?:\*|[a-z0-9_.-]+)$/i;
 
 export class ConfigError extends Error {}
 
@@ -173,6 +185,10 @@ export function loadConfig(data: string): Config | null {
   ) {
     throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(', ')}`);
   }
+  const ins = c.instructionFiles;
+  if (ins !== undefined && !(isList(ins) && ins.every((p) => p !== '' && inside(p)))) {
+    throw new ConfigError('instructionFiles must be a list of paths relative to the repository root, none absolute or climbing out with ..');
+  }
   const emb = c.embeddings;
   if (
     emb !== undefined &&
@@ -199,19 +215,24 @@ export function loadConfig(data: string): Config | null {
   const capture = c.capture;
   if (capture !== undefined) {
     const ok = typeof capture === 'object' && capture !== null && !Array.isArray(capture);
-    const { enabled, model, maxCandidates, apiModel } = ok ? capture : ({} as CaptureConfig);
+    const { enabled, model, maxCandidates, apiModel, maxCallsPerDay, maxTokensPerDay, skipTainted } = ok ? capture : ({} as CaptureConfig);
+    const cap = (n: unknown): boolean => n === undefined || (Number.isInteger(n) && (n as number) >= 1);
     if (
       !ok ||
       (enabled !== undefined && typeof enabled !== 'boolean') ||
       (model !== undefined && typeof model !== 'string') ||
       (apiModel !== undefined && typeof apiModel !== 'string') ||
-      (maxCandidates !== undefined && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20))
+      (skipTainted !== undefined && typeof skipTainted !== 'boolean') ||
+      (maxCandidates !== undefined && !(Number.isInteger(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 20)) ||
+      !cap(maxCallsPerDay) ||
+      !cap(maxTokensPerDay)
     ) {
-      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias }');
+      throw new ConfigError('capture must be { enabled: true|false, model: "haiku"|"fake", maxCandidates: 1 to 20, apiModel: a model alias, maxCallsPerDay and maxTokensPerDay: whole numbers of 1 or more, skipTainted: true|false }');
     }
   }
   if (c.automation !== undefined && typeof c.automation !== 'boolean') throw new ConfigError('automation must be true or false');
   if (c.pointOfAction !== undefined && typeof c.pointOfAction !== 'boolean') throw new ConfigError('pointOfAction must be true or false');
+  if (c.promptRecall !== undefined && typeof c.promptRecall !== 'boolean') throw new ConfigError('promptRecall must be true or false');
   const impact = c.impactProvider;
   if (
     impact !== undefined &&
@@ -254,12 +275,14 @@ export function loadConfig(data: string): Config | null {
     ...(budget !== undefined ? { sessionBudget: budget } : {}),
     ...(types !== undefined ? { subagentTypes: types } : {}),
     ...(imports !== undefined ? { imports } : {}),
+    ...(ins !== undefined ? { instructionFiles: ins } : {}),
     ...(emb !== undefined ? { embeddings: emb } : {}),
     ...(rr !== undefined ? { rerank: rr } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),
     ...(capture !== undefined ? { capture } : {}),
     ...(c.automation !== undefined ? { automation: c.automation } : {}),
     ...(c.pointOfAction !== undefined ? { pointOfAction: c.pointOfAction } : {}),
+    ...(c.promptRecall !== undefined ? { promptRecall: c.promptRecall } : {}),
     ...(impact !== undefined ? { impactProvider: impact } : {}),
     ...(scf !== undefined ? { scf } : {}),
     ...(tm !== undefined ? { transcriptModel: tm } : {}),

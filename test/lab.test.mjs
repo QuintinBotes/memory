@@ -10,7 +10,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const tasksDir = join(root, 'lab', 'tasks');
 const fixtures = join(root, 'test', 'fixtures');
 const replay = `"${process.execPath}" "${join(root, 'lab', 'replay-agent.mjs')}" "${join(fixtures, 'lab')}"`;
-const TASKS = ['change-reach', 'compaction', 'failure-env', 'hazard-change', 'hazard-keep', 'subagent'];
+const TASKS = ['change-reach', 'compaction', 'failure-env', 'hazard-change', 'hazard-keep', 'prompt-decision', 'subagent'];
 
 /** A stand-in for memory's hooks, which write the injection log in a real run: one recall of 42 tokens on the on arm. */
 const logged = (agent) =>
@@ -73,7 +73,7 @@ test('the seeded-hazard task runs three times per arm, and each row reports pass
   assert.equal(on.turns, 3);
   // Only memory's own hooks are timed; the transcript's other hook is not memory's.
   assert.deepEqual(off.hook_ms, {});
-  assert.deepEqual(on.hook_ms, { SessionStart: { count: 3, p95: 96 } });
+  assert.deepEqual(on.hook_ms, { SessionStart: { count: 3, p95: 96 }, Stop: { count: 3, p95: 140 } });
   assert.deepEqual(off.injected, { items: 0, tokens: 0 });
   assert.deepEqual(on.injected, { items: 3, tokens: 126 });
   assert.equal(r.called, false, 'the lab ran gh, claude or curl');
@@ -152,11 +152,11 @@ test("the lab's git never reaches the repository it was run from, even when GIT_
   assert.match(r.stdout, /"pass_rate":1/);
 });
 
-test('a full capability run, six tasks, two arms and three runs each, completes unattended', () => {
+test('a full capability run, seven tasks, two arms and three runs each, completes unattended', () => {
   const r = evaluate(['lab', '--model', 'fixture-model', '--agent', replay]);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(readdirSync(tasksDir).sort(), TASKS);
-  assert.equal(r.rows.length, 12);
+  assert.equal(r.rows.length, 14);
   for (const task of TASKS) {
     const off = r.row(task, 'off');
     const on = r.row(task, 'on');
@@ -169,6 +169,7 @@ test('a full capability run, six tasks, two arms and three runs each, completes 
   // subagent start is timed beside its session start.
   assert.equal(r.row('compaction', 'on').hook_ms.SessionStart.count, 6);
   assert.deepEqual(Object.keys(r.row('subagent', 'on').hook_ms).sort(), ['SessionStart', 'SubagentStart']);
+  assert.deepEqual(Object.keys(r.row('prompt-decision', 'on').hook_ms).sort(), ['SessionStart', 'UserPromptSubmit']);
   assert.equal(r.called, false);
 });
 

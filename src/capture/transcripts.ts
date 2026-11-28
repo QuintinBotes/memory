@@ -73,7 +73,7 @@ export interface Candidate {
 const NOT_TYPED = /^</;
 
 /** Stands in for text inside a private span; a sentence holding it is never a correction. */
-const HIDDEN = '\uE000';
+export const HIDDEN = '\uE000';
 
 /** Where the private-span scan stands: the nesting depth, and a possible start of a tag cut off at the end of the last piece. */
 interface Spans {
@@ -162,6 +162,31 @@ function* writtenStrings(row: string): Generator<{ path: (string | number)[]; te
       } else if (!stack.some((f) => f.skip)) yield { path: pathOf(), text, key: false };
     } else i++;
   }
+}
+
+/**
+ * Each line of a JSONL log parsed, with every string's private-span text replaced by HIDDEN, the span state run across
+ * the whole log in written order as ownerTurns runs it (#143); null for a line that is not a JSON object.
+ */
+export function hidePrivateRecords(raw: string): (Record<string, any> | null)[] {
+  const state: Spans = { depth: 0, held: '' };
+  return raw.split('\n').map((row) => {
+    let o: unknown;
+    try {
+      o = JSON.parse(row);
+    } catch {
+      hidePrivate(row, state);
+      return null;
+    }
+    for (const t of writtenStrings(row)) {
+      const visible = hidePrivate(t.text, state);
+      if (t.key || t.path.length === 0) continue;
+      let at: any = o;
+      for (const k of t.path.slice(0, -1)) at = at?.[k];
+      if (typeof at === 'object' && at !== null) at[t.path.at(-1)!] = visible;
+    }
+    return typeof o === 'object' && o !== null ? (o as Record<string, any>) : null;
+  });
 }
 
 /**

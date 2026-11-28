@@ -54,7 +54,7 @@ const TOOLS = [
       properties: {
         query: { type: 'string', description: 'Words of the task.' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Files or directories in play, relative to the repository root.' },
-        repository: { type: 'string', description: 'owner/repo of another repository of the same tenant, to search its items instead of this checkout\'s. Paths then do not match anchors. Refused for a repository of any other tenant.' },
+        repository: { type: 'string', description: 'owner/repo (host/group/repo off github.com) of another repository of the same tenant, to search its items instead of this checkout\'s. Paths then do not match anchors. Refused for a repository of any other tenant.' },
         as_of: { type: 'string', description: 'An ISO date, such as 2026-03-01, to search the versions that applied then instead of the current ones. Each row then says when its version was valid.' },
       },
       required: ['query'],
@@ -176,7 +176,7 @@ async function search(args: Args, data: string, config: Config, context: Context
   const top = paths.some((p) => isAbsolute(p)) ? git(cwd, 'rev-parse', '--show-toplevel')?.trim() : undefined;
   const relativePaths = paths.map((p) => (isAbsolute(p) && top !== undefined ? relative(top, p) : p));
   const asked = args['repository'];
-  if (asked !== undefined && typeof asked !== 'string') throw new ToolError('repository is a string, owner/repo');
+  if (asked !== undefined && typeof asked !== 'string') throw new ToolError('repository is a string, owner/repo or host/group/repo');
   let reach: { repository: string } | undefined;
   if (asked !== undefined) {
     const found = filterRepository(config, context, asked);
@@ -314,7 +314,7 @@ function propose(args: Args, data: string, config: Config, context: Context, cwd
     if (why !== null) throw new ToolError(`not proposed: ${what} is refused because ${why}`);
   }
   // A statement a loaded instruction file already says is closed here, naming the line: it never reaches the owner's queue.
-  const ins = loadInstructions(cwd, currentConfigDir());
+  const ins = loadInstructions(cwd, currentConfigDir(), config.instructionFiles);
   const said = judge(ins, statement);
   if (said?.kind === 'repeats') return `not proposed: duplicates ${displayPath(ins, said.line.file)}:${said.line.line}, which the agent already loads`;
   const tenant = personal ? '' : context.tenant!;
