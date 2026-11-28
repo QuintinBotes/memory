@@ -92,6 +92,7 @@ only`, or from a terminal:
 ```bash
 memory remember --scope repository --type convention -- 'Releases are cut from the main branch only'
 memory remember --scope person --type preference -- 'Explain changes in plain English'
+memory doctor                           # why memory does or does not recall and capture here
 memory list
 memory list --repo acme/web             # that repository's items, its owner's organisation items, and person/global items learned in it
 memory list --all-repos                 # every item of the tenant bound here, and the person file
@@ -151,6 +152,27 @@ session started as one with `--agent`, and naming one there is refused. Each ite
 file paths, the session and agent ids, its estimated tokens and the time,
 never its text. A purge removes the lines of the items it deletes;
 `--older-than` removes lines older than its cut-off, and `--all` the file.
+
+### When memory does nothing
+
+Memory fails closed and stays quiet, so when nothing is recalled or captured
+run `memory doctor` (or `/memory:doctor` in a session) from that directory.
+It prints one line per check, each `ok`, `off` (by your choice) or `fail` with
+the command that fixes it: the Node version, the data directory and its file
+system, the installed plugin version against the marketplace's checkout, the
+consent plan and each category not yet agreed, the repository's remote and
+the tenant it resolves to, whether this Claude Code config is bound to it, an
+automation session, the hooks the plugin registers, whether the MCP server
+answers, capture (enabled, a key or `claude` on PATH, and the last run from
+`logs/capture.jsonl`), recall (on, or off after two reverts),
+`pointOfAction`, the embedder and reranker when configured, the code anchor
+provider, and how many items this repository and the person file hold, by
+status. `--json` prints one object per check with `id`, `status`, `detail`
+and `fix`.
+
+It is read only: it writes no file, opens no store but the tenant bound here
+and the person file, and never prints an item's text. It exits 1 when any
+check fails.
 
 ### Recall at the point of action
 
@@ -367,18 +389,22 @@ request link as the source. The store holds every repository's findings, so
 reading it is its own consent category (`decisions`, plan version 5): import
 skips it, and says why, until you run `memory init --confirm` again. Finding
 text was written by a model, so text that reads as an instruction arrives
-quarantined with agent trust. A strong dismissal a teammate made, with no owner
-row for it, arrives with team trust, and one with no `decided_by` with agent
-trust. Review Voice keeps its own precedents; memory never writes
+quarantined with agent trust. A strong dismissal with no owner row for it
+depends on who made it. If it was the checkout's owner (`identity.owner_reviewer`
+in `.review-voice/config.yaml`, for example a reply on the pull request), it
+arrives as the owner's decision. If it was anyone else, it arrives with team
+trust. One with no `decided_by` arrives with agent trust. Review Voice keeps its own precedents; memory never writes
 back, and never imports the review comments other tools made.
 
 A notes file holds one JSON object per line, `{"kind": "gotcha", "text":
 "...", "symbol": "path#qualified_name#kind"}`; only `gotcha`, `invariant` and
 `decision` notes are imported. A line of the rejections file arrives as a
-tombstone. An auto memory statement goes to the tenant of the repository it
-names, as `owner/repo`, when the config it came from is bound to that tenant,
-or to person scope when it is organisation-free; anything else is reported
-and not stored. Auto memory and notes carry agent trust, since a model or a
+tombstone. An auto memory statement goes to the repository it names as
+`owner/repo`. Failing that, it goes to the checkout whose project folder it
+sits in, read back from the folder's name to the checkout's origin remote.
+Either way, the config it came from must be bound to that repository's tenant.
+Failing both, it goes to person scope when it is organisation-free. Anything
+else is reported and not stored. Auto memory and notes carry agent trust, since a model or a
 tool wrote them; standards, rejections and policies carry owner trust. A
 statement with agent trust that reads as an instruction arrives quarantined
 (see below), and the report counts it.
@@ -661,17 +687,36 @@ repository that matches no tenant is skipped: no model call, nothing written.
   on only PATH, HOME, USER, TMPDIR and CLAUDE_CONFIG_DIR. With neither the key
   nor a `claude` on PATH, capture reports it and does nothing.
 - **Cost:** one call per SessionEnd and per Stop with enough new text; each
-  run's tokens go to `logs/capture.jsonl` in the data directory (never the
-  transcript). Read it to see what capture costs you.
+  run's tokens, and whether it used the key or the Claude Code login, go to
+  `logs/capture.jsonl` in the data directory (never the transcript).
+  `memory capture --cost [--since <YYYY-MM-DD>]` prints, per local day, the
+  runs, the skips by reason and the input and output tokens; it reads only that
+  log.
+- **Daily cap:** at most `maxCallsPerDay` (100) model calls and
+  `maxTokensPerDay` (2,000,000) tokens a local calendar day, counted from
+  `logs/capture.jsonl`. Past either, capture makes no call, logs a `daily cap`
+  skip and says so once per session; the transcript is not marked read, so the
+  next day's first run reads that text.
 - **Consent:** capture is a data category of the consent plan. `memory init`
   proposes it on, but a consent given before it stays off for it until you run
   `memory init` and confirm.
 - **Off:** `"capture": { "enabled": false }` in `config.json`.
+- **Not this part:** text you wrap in `<private>` and `</private>` is taken
+  out before redaction and never sent; a sentence that touches the span is
+  dropped whole. A span opened anywhere in the transcript (a tool result too)
+  hides everything up to its close.
+- **Not this session:** a session in which you wrote `DO NOT INDEX THIS CHAT`
+  is not captured at all: no model call, and each Stop and SessionEnd records
+  a `skipped` line in `logs/capture.jsonl` naming the marker. The marker counts
+  only in a message you typed, not in agent text or a tool result. Both
+  markers work for a Codex session log too.
 - **Tainted sessions:** when the transcript shows the session read a web page
   or search (`WebFetch`, `WebSearch`) or called a tool of any MCP server but
   memory's own, what capture keeps is still saved active, labelled `tainted
   by web:<host>` or `mcp:<server>` in recall and review. Imperative text from
-  such a session is quarantined as usual.
+  such a session is quarantined as usual. With `"skipTainted": true` under
+  `capture` (off by default) such a session is not captured at all: no model
+  call, and a `skipped` line in `logs/capture.jsonl` names what it read.
 - **Automation sessions:** a session started by automation (`claude -p`, the
   SDK, a GitHub Actions job) neither captures nor proposes unless the consent plan names
   them: `memory init --automation on --confirm`. See SECURITY.md for how a
@@ -687,11 +732,12 @@ repository that matches no tenant is skipped: no model call, nothing written.
   that wrote it (`mcp:<clientInfo name>`).
 
 ```json
-{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5" } }
+{ "capture": { "enabled": true, "model": "haiku", "maxCandidates": 5, "apiModel": "claude-haiku-5-5", "maxCallsPerDay": 100, "maxTokensPerDay": 2000000 } }
 ```
 
 `model` is `haiku` (the Messages API by plain `fetch`, no SDK) or `fake`, the
-deterministic filter the tests use; `apiModel` is the Claude Haiku alias.
+deterministic filter the tests use; `apiModel` is the Claude Haiku alias;
+`skipTainted` (default `false`) is described above.
 
 ## What agents can do
 

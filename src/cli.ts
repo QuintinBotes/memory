@@ -67,9 +67,11 @@ import { scanReverts } from './capture/reverts.ts';
 import { failureRecall, weakSignature } from './hooks/failure.ts';
 import { afterCompaction, pointOfAction, preCompact } from './hooks/point-of-action.ts';
 import { capture, captureWanted } from './capture/capture.ts';
+import { costReport } from './capture/cost.ts';
 import { HOOK_BUSY_MS, openStore } from './store/db.ts';
 import { recordAudit } from './store/audit.ts';
 import { dataDirectory, injectionLog, personFile, tenantFile } from './store/paths.ts';
+import { doctor, renderChecks } from './doctor.ts';
 import { FALSE_RECALL, falseRecall, parseLog } from './eval/false-recall.ts';
 import { REPLAY, parsePulls, replay } from './eval/replay.ts';
 import { notRun, orbitArm, seededRecall, type Row } from './eval/scorecard.ts';
@@ -95,6 +97,9 @@ const USAGE = `usage: memory <command>
            [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] [--pin] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
       conflicts with one queues a supersession in review; --supersedes replaces that item at once; --pin pins it
+  doctor [--json]
+      why memory does or does not recall and capture here: one line per check, ok, off (by choice) or fail with the
+      command that fixes it. Read only, and never prints an item's text. Exits 1 when any check fails
   list [--repo <owner/repo> | --all-repos | --expired]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
@@ -216,7 +221,11 @@ const USAGE = `usage: memory <command>
       or a compaction's redacted summary as an episode; the next session start or sweep reads the corrections
   capture [--foreground]
       the Stop and SessionEnd hook: a filter model reads the redacted session transcript and keeps lessons and decisions
-      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports
+      as active items, merging repeats as evidence. Detaches at once so the hook returns; --foreground waits and reports.
+      Past capture.maxCallsPerDay or maxTokensPerDay in a local day it makes no model call and logs a daily cap skip
+  capture --cost [--since <YYYY-MM-DD>]
+      what capture cost, per local day, from logs/capture.jsonl alone: runs (api key or Claude Code login), skips by
+      reason, input and output tokens
   purge (--tenant <name> | --repo <owner/repo> | --item <id> | --source <ref> [--with-derived] | --older-than <days> | --all) [--confirm]
       preview, or with --confirm delete, leaving no recoverable bytes. --repo also takes the person and global items
       learned in that repository. --source reaches this repository's tenant and the person file: an item left without
@@ -608,6 +617,13 @@ function list(args: string[], data: string, cwd: string): void {
   // On stderr, so a script reading stdout still sees nothing (#122).
   if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
   process.stdout.write(renderAll(items));
+}
+
+async function doctorCommand(args: string[], data: string): Promise<void> {
+  const { values } = parseArgs({ args, options: { json: { type: 'boolean' } } });
+  const checks = await doctor(data, process.cwd(), currentConfigDir());
+  process.stdout.write(renderChecks(checks, values.json === true));
+  if (checks.some((c) => c.status === 'fail')) process.exitCode = 1;
 }
 
 /** `memory export --markdown <dir>`: every item of this repository's tenant and of the person file, as text a person reads and diffs. */
@@ -1350,7 +1366,15 @@ const LOG_LOCK_PURGE_MS = 10_000;
 
 /** The Stop and SessionEnd hook. Never fails the session: it hands the work to a detached process and returns. */
 async function captureCommand(args: string[], data: string): Promise<void> {
-  const { values } = parseArgs({ args, options: { foreground: { type: 'boolean' } } });
+  const { values } = parseArgs({ args, options: { foreground: { type: 'boolean' }, cost: { type: 'boolean' }, since: { type: 'string' } } });
+  if (values.cost === true || values.since !== undefined) {
+    if (values.cost !== true || values.foreground === true) throw new Refusal('usage: memory capture --cost [--since <YYYY-MM-DD>]', 2);
+    if (values.since !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(values.since)) throw new Refusal('--since takes a date as YYYY-MM-DD', 2);
+    const lines = costReport(data, values.since);
+    if (lines.length === 0) console.error('no capture runs logged');
+    for (const line of lines) console.log(line);
+    return;
+  }
   const input = hookInput();
   if (values.foreground === true) {
     try {
@@ -1597,6 +1621,8 @@ async function main(argv: string[]): Promise<void> {
       return remember(rest, data, process.cwd());
     case 'list':
       return list(rest, data, process.cwd());
+    case 'doctor':
+      return doctorCommand(rest, data);
     case 'export':
       return exportCommand(rest, data, process.cwd());
     case 'import':
