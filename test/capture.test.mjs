@@ -514,7 +514,7 @@ test('#126 SC3 a log in codex-cli 0.172\'s format (world_state, turn_context, to
 // #140: a daily cap on capture spend, and memory capture --cost.
 const FILLER = 'the ledger worker drained the queue and the batch was reconciled against the journal again. '.repeat(45);
 /** Appends a turn worth a Stop's model call (over 4,000 characters) holding one lesson. */
-// The leading 'ok' line: the watermark counts the trailing empty split, so the first line after a run is not read (#147).
+// The leading 'ok' line kept these tests independent of #147, now fixed.
 const turn = (file, lesson) => appendFileSync(file, [
   JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: 'ok' }] } }),
   JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: FILLER }] } }),
@@ -763,4 +763,20 @@ test('#143 SC7 the hook returns at once and never fails the session when it skip
   assert.equal(r.stdout, '');
   await until(() => existsSync(join(logs(s), 'capture.jsonl')));
   assert.equal(skips(s)[0].skipped, 'the owner wrote DO NOT INDEX THIS CHAT');
+});
+
+test('#147 the first record written after a capture run is read by the next run', () => {
+  const s = setup();
+  fakeModel(s);
+  const file = transcript(s, [`LESSON: ${LESSON}`]);
+  assert.match(capture(s, s.acmeApi, file).stderr, /captured 1/);
+  const msg = (text) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  appendFileSync(file, `${msg('LESSON: The first record after a run is read')}\n${msg('LESSON: So is the second')}\n`);
+  assert.match(capture(s, s.acmeApi, file).stderr, /captured 2/);
+  // A record still being written (no newline yet) is not counted read: it is read once it is finished.
+  appendFileSync(file, msg('LESSON: A record finished later is read too').slice(0, 30));
+  capture(s, s.acmeApi, file);
+  appendFileSync(file, `${msg('LESSON: A record finished later is read too').slice(30)}\n`);
+  assert.match(capture(s, s.acmeApi, file).stderr, /captured 1/);
+  assert.deepEqual(items(s).map((i) => i.statement).sort(), [LESSON, 'A record finished later is read too', 'So is the second', 'The first record after a run is read'].sort());
 });

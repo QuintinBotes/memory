@@ -3427,7 +3427,7 @@ function readLog(file) {
     if (flat.includes(HIDDEN)) flat = flat.split(/(?<=[.!?])\s+/).filter((s) => !s.includes(HIDDEN)).join(" ");
     return flat === "" ? "" : `L${i + 1} ${turn[0]}: ${flat}`;
   });
-  return { agent: adapter.agent, lines: lines2, optedOut };
+  return { agent: adapter.agent, lines: lines2, optedOut, complete: records.length - (records.at(-1) == null ? 1 : 0) };
 }
 var summarise = (data, record) => {
   mkdirSync6(join7(data, "logs"), { recursive: true, mode: 448 });
@@ -3568,7 +3568,7 @@ async function captureLocked(data, config, context, path, session, input2) {
     summarise(data, { session, skipped, saved: 0 });
     return `nothing captured: skipped ${skipped}`;
   }
-  const { agent, lines: lines2 } = log;
+  const { agent, lines: lines2, complete } = log;
   const taint = externalSources(path);
   const optOut = log.optedOut ? `the owner wrote ${OPT_OUT}` : captureSettings(config).skipTainted && taint.length > 0 ? `the session read ${taint.join(", ")} and skipTainted is on` : null;
   if (optOut !== null) {
@@ -3576,7 +3576,7 @@ async function captureLocked(data, config, context, path, session, input2) {
     return `nothing captured: ${optOut}`;
   }
   const seen = readState(data)[session] ?? 0;
-  let text5 = lines2.slice(seen).filter((l) => l !== "").join("\n");
+  let text5 = lines2.slice(seen, complete).filter((l) => l !== "").join("\n");
   if (text5.length > MAX_TRANSCRIPT_CHARS) text5 = text5.slice(text5.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, "");
   if (text5 === "") return "nothing new to read";
   if (input2["hook_event_name"] === "Stop" && text5.length < STOP_MIN_CHARS) {
@@ -3601,7 +3601,7 @@ async function captureLocked(data, config, context, path, session, input2) {
   const { saved, merged, queued } = kept;
   const usage2 = model.usage ?? { input: 0, output: 0 };
   summarise(data, { session, agent, model: settings.model === "haiku" ? settings.apiModel : settings.model, inputTokens: usage2.input, outputTokens: usage2.output, via: model.via, candidates: candidates.length, saved, merged });
-  commitWatermark(data, session, lines2.length);
+  commitWatermark(data, session, complete);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }
 

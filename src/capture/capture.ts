@@ -76,7 +76,7 @@ export const OPT_OUT = 'DO NOT INDEX THIS CHAT';
  * owner wrote OPT_OUT; null for a format no adapter knows. Text inside `<private>` spans is hidden first, and a sentence
  * that touches one is dropped whole.
  */
-function readLog(file: string): { agent: string; lines: string[]; optedOut: boolean } | null {
+function readLog(file: string): { agent: string; lines: string[]; optedOut: boolean; complete: number } | null {
   const raw = readFileSync(file, 'utf8');
   // shortcut: a tag split across records with no whole tag anywhere in the log is not seen; the plain parse keeps a log without spans byte-identical.
   const records: LogRecord[] = /<\/?private>/i.test(raw)
@@ -99,7 +99,8 @@ function readLog(file: string): { agent: string; lines: string[]; optedOut: bool
     if (flat.includes(HIDDEN)) flat = flat.split(/(?<=[.!?])\s+/).filter((s) => !s.includes(HIDDEN)).join(' ');
     return flat === '' ? '' : `L${i + 1} ${turn![0]}: ${flat}`;
   });
-  return { agent: adapter.agent, lines, optedOut };
+  // The watermark counts finished records only: not the empty piece after the last newline, nor a record still being written (#147).
+  return { agent: adapter.agent, lines, optedOut, complete: records.length - (records.at(-1) == null ? 1 : 0) };
 }
 
 const summarise = (data: string, record: Record<string, unknown>): void => {
@@ -285,7 +286,7 @@ async function captureLocked(
     summarise(data, { session, skipped, saved: 0 });
     return `nothing captured: skipped ${skipped}`;
   }
-  const { agent, lines } = log;
+  const { agent, lines, complete } = log;
   // The owner's opt-outs (#143), checked at every run before any model call.
   const taint = externalSources(path);
   const optOut = log.optedOut ? `the owner wrote ${OPT_OUT}` : captureSettings(config).skipTainted && taint.length > 0 ? `the session read ${taint.join(', ')} and skipTainted is on` : null;
@@ -294,7 +295,7 @@ async function captureLocked(
     return `nothing captured: ${optOut}`;
   }
   const seen = readState(data)[session] ?? 0;
-  let text = lines.slice(seen).filter((l) => l !== '').join('\n');
+  let text = lines.slice(seen, complete).filter((l) => l !== '').join('\n');
   if (text.length > MAX_TRANSCRIPT_CHARS) text = text.slice(text.length - MAX_TRANSCRIPT_CHARS).replace(/^[^\n]*\n/, '');
   if (text === '') return 'nothing new to read';
   // A Stop waits for enough to be worth a model call; the session's end reads it whatever its length (#126).
@@ -323,6 +324,6 @@ async function captureLocked(
   const { saved, merged, queued } = kept;
   const usage = model.usage ?? { input: 0, output: 0 };
   summarise(data, { session, agent, model: settings.model === 'haiku' ? settings.apiModel : settings.model, inputTokens: usage.input, outputTokens: usage.output, via: model.via, candidates: candidates.length, saved, merged });
-  commitWatermark(data, session, lines.length);
+  commitWatermark(data, session, complete);
   return `captured ${saved} (${queued} quarantined), merged ${merged} as evidence`;
 }
