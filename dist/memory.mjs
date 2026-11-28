@@ -829,7 +829,7 @@ function authorityViolations(text5) {
 import { posix } from "node:path";
 var CONFIDENCE = { base: 1, halfLifeDays: 90, low: 0.4, high: 0.7 };
 var EXPIRY_DAYS = 90;
-var READS_EXPIRED = `coalesce(reinforced_at, valid_from) < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${EXPIRY_DAYS} days')`;
+var READS_EXPIRED = `(pinned_at IS NULL AND coalesce(reinforced_at, valid_from) < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${EXPIRY_DAYS} days'))`;
 function confidence(item, now = Date.now()) {
   const age = Math.max(0, (now - Date.parse(item.reinforced)) / 864e5);
   return Math.min(1, CONFIDENCE.base * 0.5 ** (age / CONFIDENCE.halfLifeDays) * 1.1 ** item.helped * 0.8 ** item.wrong);
@@ -1043,7 +1043,7 @@ function versions(asOf) {
   const at3 = new Date(asOf).toISOString();
   return {
     select: `${COLUMNS}, valid_from, valid_to FROM items WHERE status IN ('active', 'superseded') AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)
-      AND coalesce(reinforced_at, valid_from) >= strftime('%Y-%m-%dT%H:%M:%fZ', ?, '-${EXPIRY_DAYS} days')`,
+      AND (pinned_at IS NOT NULL OR coalesce(reinforced_at, valid_from) >= strftime('%Y-%m-%dT%H:%M:%fZ', ?, '-${EXPIRY_DAYS} days'))`,
     at: [at3, at3, at3]
   };
 }
@@ -2029,12 +2029,15 @@ function supersedeNow(db, c, olderId) {
 }
 function undo(db, auditId) {
   const e = db.prepare("SELECT action, subject_id, metadata_json FROM audit_events WHERE audit_id = ?").get(auditId);
-  if (e === void 0 || e.action !== "evidence_merged" && e.action !== "supersession_applied") return false;
+  if (e === void 0 || e.action !== "evidence_merged" && e.action !== "supersession_applied" && e.action !== "item_renewed") return false;
   const m = JSON.parse(e.metadata_json);
   db.exec("BEGIN IMMEDIATE");
   try {
     let what;
-    if (e.action === "evidence_merged") {
+    if (e.action === "item_renewed") {
+      const back = db.prepare("UPDATE items SET reinforced_at = ? WHERE id = ? AND reinforced_at = ?").run(m["was"], e.subject_id, m["at"]);
+      what = back.changes === 1 ? `${e.subject_id} has its reinforcement date before the renew again` : false;
+    } else if (e.action === "evidence_merged") {
       const gone = db.prepare("DELETE FROM evidence WHERE id = ? AND item_id = ?").run(m["evidenceId"], e.subject_id);
       if (gone.changes === 1) db.prepare("UPDATE items SET support = support - ? WHERE id = ?").run(m["supportDelta"], e.subject_id);
       what = gone.changes === 1 ? `removed the merged evidence from ${e.subject_id}` : false;
@@ -2749,6 +2752,12 @@ var MIGRATIONS = [
   (db) => {
     const has = db.prepare("PRAGMA table_info(evidence)").all().some((c) => c.name === "outcome");
     if (!has) db.exec("ALTER TABLE evidence ADD COLUMN outcome TEXT CHECK (outcome IN ('accepted', 'rejected')); ALTER TABLE evidence ADD COLUMN cost REAL;");
+  },
+  // v19 - pins (#142): when the owner pinned an item so it never reads as expired, null when not pinned. Only `memory pin` and
+  // `remember --pin` set it. Skipped when the column is there, so a store rolled back by version alone still opens.
+  (db) => {
+    const has = db.prepare("PRAGMA table_info(items)").all().some((c) => c.name === "pinned_at");
+    if (!has) db.exec("ALTER TABLE items ADD COLUMN pinned_at TEXT;");
   }
 ];
 var SECURE_DELETE = 6;
@@ -2899,15 +2908,15 @@ function dailyCap(data, settings, session) {
   return reason === null ? null : { reason, told: lines2.some((l) => l.skipped === DAILY_CAP && l.session === session) };
 }
 function costReport(data, since) {
-  const days = /* @__PURE__ */ new Map();
+  const days2 = /* @__PURE__ */ new Map();
   for (const l of readCaptureLog(data)) {
     const day = localDay(l.at);
     if (since !== void 0 && day < since) continue;
-    days.set(day, [...days.get(day) ?? [], l]);
+    days2.set(day, [...days2.get(day) ?? [], l]);
   }
   const counts2 = (keys) => [...keys.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), /* @__PURE__ */ new Map())].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, n]) => `${k} ${n}`).join(", ");
-  return [...days.keys()].sort().map((day) => {
-    const lines2 = days.get(day);
+  return [...days2.keys()].sort().map((day) => {
+    const lines2 = days2.get(day);
     const runs = lines2.filter(isRun);
     const skips = lines2.filter((l) => l.skipped !== void 0).map((l) => l.skipped);
     const sum = (k) => runs.reduce((n, l) => n + (l[k] ?? 0), 0);
@@ -4187,6 +4196,48 @@ async function decideById(data, config, context, id, decision, options) {
   return null;
 }
 var isPendingSupersession = (p) => p.status === "active" && p.stale_reports === 0 && p.older !== null;
+var LEFT = `${EXPIRY_DAYS} - (julianday('now') - julianday(coalesce(reinforced_at, valid_from)))`;
+function expiring(db, tenant, expired = false) {
+  const rows = db.prepare(
+    `SELECT id, scope, scope_key, type, statement, ${LEFT} AS left FROM items
+       WHERE tenant = ? AND status = 'active' AND valid_to IS NULL AND pinned_at IS NULL AND ${LEFT} ${expired ? "< 0" : "BETWEEN -30 AND 14"}
+       ORDER BY left, id`
+  ).all(tenant);
+  return rows.map(({ left, ...r }) => ({ ...r, days_left: Math.ceil(left) + 0 }));
+}
+var days = (n) => `${n} day${n === 1 ? "" : "s"}`;
+function renderExpiring(list2) {
+  return list2.map((e) => {
+    const when = e.days_left > 0 ? `${days(e.days_left)} left` : e.days_left === 0 ? "expired today" : `expired ${days(-e.days_left)} ago`;
+    return `${safe(`- [${e.id}] ${e.type}, ${e.scope_key === "" ? e.scope : `${e.scope} ${e.scope_key}`}: ${JSON.stringify(safe(e.statement))}, ${when}`)}
+`;
+  }).join("");
+}
+var ACTIVE = "id = ? AND status = 'active' AND valid_to IS NULL";
+function renew(db, id) {
+  return inTransaction(db, () => {
+    const row4 = db.prepare(`SELECT reinforced_at FROM items WHERE ${ACTIVE}`).get(id);
+    if (row4 === void 0) return null;
+    const at3 = (/* @__PURE__ */ new Date()).toISOString();
+    db.prepare("UPDATE items SET reinforced_at = ? WHERE id = ?").run(at3, id);
+    return recordAudit(db, "item_renewed", { type: "item", id }, { was: row4.reinforced_at, at: at3 });
+  });
+}
+function setPin(db, id, pin) {
+  return inTransaction(db, () => {
+    const row4 = db.prepare(
+      `SELECT pinned_at, origin_trust, EXISTS (SELECT 1 FROM evidence e WHERE e.item_id = items.id AND e.author_role = 'owner')
+           OR EXISTS (SELECT 1 FROM audit_events a WHERE a.subject_id = items.id AND a.action = 'proposal_approved') AS owned
+         FROM items WHERE ${ACTIVE}`
+    ).get(id);
+    if (row4 === void 0) return "missing";
+    if (row4.pinned_at !== null === pin) return "already";
+    if (pin && row4.owned === 0) return { trust: row4.origin_trust };
+    db.prepare("UPDATE items SET pinned_at = ? WHERE id = ?").run(pin ? (/* @__PURE__ */ new Date()).toISOString() : null, id);
+    recordAudit(db, pin ? "item_pinned" : "item_unpinned", { type: "item", id });
+    return "done";
+  });
+}
 function declineSupersession(db, p) {
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -4586,13 +4637,14 @@ async function edit(input2, data, config, context) {
 }
 function reviewData(data, context, cwd) {
   const ins = loadInstructions(cwd, currentConfigDir());
-  const out = { proposals: [], edits: [] };
+  const out = { proposals: [], edits: [], expiring: [] };
   for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
       out.proposals.push(...proposals(db, tenant).map((p) => ({ ...p, shadow: shadow(p).decision })));
       out.edits.push(...edits(db).filter((e) => e.status === "open").map((e) => ({ ...e, file: displayPath(ins, e.file) })));
+      out.expiring.push(...expiring(db, tenant));
     } finally {
       db.close();
     }
@@ -7928,16 +7980,17 @@ var USAGE = `usage: memory <command>
       the default. --recall on turns recall back on after memory turned it
       off itself, when two memory-linked reverts came within seven days
   remember [--scope repository|organisation|person|global] [--type <type>]
-           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] -- <statement>
+           [--anchor <path>[:<start>[-<end>]]] [--rationale <text>] [--source <ref>] [--supersedes <id>] [--pin] -- <statement>
       remember one statement, active at once. A repeat of an item is merged into it as evidence; a statement that
-      conflicts with one queues a supersession in review; --supersedes replaces that item at once
+      conflicts with one queues a supersession in review; --supersedes replaces that item at once; --pin pins it
   doctor [--json]
       why memory does or does not recall and capture here: one line per check, ok, off (by choice) or fail with the
       command that fixes it. Read only, and never prints an item's text. Exits 1 when any check fails
-  list [--repo <owner/repo> | --all-repos]
+  list [--repo <owner/repo> | --all-repos | --expired]
       every item visible here. --repo: that repository's items, its owner's organisation items, and the person and
       global items learned in it. --all-repos: every item of the tenant bound here and the person file. --repo reaches
-      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read
+      only a repository of the tenant bound here; any other is refused and nothing of another tenant is read.
+      --expired: the active items of this repository's tenant and the person file that read as expired, which no recall shows
   export --to scf [--repo <owner/repo> | --all-repos]
       send this repository's tenant's proposed repository and organisation items to the SCF set for it with memory init
       --scf <tenant>=<url> (key in SCF_API_KEY), as world proposals of layer memory with their evidence; nothing in
@@ -7956,8 +8009,14 @@ var USAGE = `usage: memory <command>
       and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
       read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
       read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals
-  review
-      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate
+  review [--json]
+      the proposals this repository's tenant and the person file hold, with evidence and the shadow gate, and under
+      "Expiring soon" the active items that expire within 14 days or expired in the last 30
+  renew <id>...
+      reset an item's reinforcement date, so its 90 days start again; support is unchanged. Undo with memory undo
+  pin <id> | unpin <id>
+      pin an item you stated or approved so it never expires, or take the pin back. A pinned item still goes stale,
+      can be superseded or rejected, and counts against the budgets. No MCP tool can renew or pin
   approve <id> [--scope repository|organisation|person|global]
       make a proposal active
   reject <id> [--reason <text>]
@@ -7972,7 +8031,7 @@ var USAGE = `usage: memory <command>
       stores the proposals and lists them; --apply, from a terminal, writes exactly the line shown, marks the item
       promoted and takes it out of recall; --reject keeps the proposal as a tombstone. Nothing is committed or pushed
   undo <audit-id>
-      reverse one merge or supersession, by the audit id its command printed
+      reverse one merge, supersession or renew, by the audit id its command printed
   sweep
       the daily sweep, run now: of two active items that repeat each other, queue the newer as a supersession of the
       older in review. Applies nothing. The session start runs it at most once a day
@@ -8320,7 +8379,8 @@ async function remember(args, data, cwd) {
       anchor: { type: "string" },
       rationale: { type: "string" },
       source: { type: "string" },
-      supersedes: { type: "string" }
+      supersedes: { type: "string" },
+      pin: { type: "boolean" }
     }
   });
   const scope = values.scope;
@@ -8372,6 +8432,7 @@ async function remember(args, data, cwd) {
       if (done === null) throw new Refusal(`no active item ${values.supersedes} here to supersede`);
       recordAudit(db, "item_remembered", { type: "item", id: done.id }, { scope });
       console.log(`remembered ${done.id} (${where2}); it supersedes ${values.supersedes}, which stays on record; undo with memory undo ${done.audit}`);
+      if (values.pin === true) console.log(pinSaid(done.id, setPin(db, done.id, true)));
       await embedAfterWrite(db, config, tenant);
       return;
     }
@@ -8386,6 +8447,7 @@ async function remember(args, data, cwd) {
     } else {
       throw new Refusal("this statement was already placed as superseded");
     }
+    if (values.pin === true) console.log(pinSaid(stored.id, setPin(db, stored.id, true)));
     await embedAfterWrite(db, config, tenant);
   } finally {
     db.close();
@@ -8401,10 +8463,18 @@ function reachOf(values, config, context) {
 }
 var REACH_OPTIONS = { repo: { type: "string" }, "all-repos": { type: "boolean" } };
 function list(args, data, cwd) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: REACH_OPTIONS });
-  if (positionals.length > 0) throw new Refusal("usage: memory list [--repo <owner/repo> | --all-repos]", 2);
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { ...REACH_OPTIONS, expired: { type: "boolean" } } });
+  if (positionals.length > 0 || values.expired === true && (values.repo !== void 0 || values["all-repos"] === true)) {
+    throw new Refusal("usage: memory list [--repo <owner/repo> | --all-repos | --expired]", 2);
+  }
   const config = setUp(data);
   const context = resolveContext(cwd, config, currentConfigDir());
+  if (values.expired === true) {
+    const gone = expiringHere(data, context, true);
+    if (gone.length === 0) return void console.error("No expired items here.");
+    return void process.stdout.write(`Expired: ${gone.length}. ${RENEW_HINT}
+${fence(PROPOSALS_LABEL, renderExpiring(gone))}`);
+  }
   const items = visibleItems(data, context, cwd, [], void 0, null, reachOf(values, config, context));
   if (items.length === 0) return void console.error(`No memory items here (${context.tenant === null ? `the person file only: ${context.reason}` : `tenant ${context.tenant} and the person file`}).`);
   process.stdout.write(renderAll(items));
@@ -8554,13 +8624,63 @@ function review(args, data, cwd) {
     process.stdout.write(`Accepted in SCF, but the evidence was purged here, so they stay proposed until you decide (memory purge --item <id> removes one): ${held2.length}.
 ${fence(PROPOSALS_LABEL, held2.join(""))}`);
   }
-  if (all.length === 0) return waiting.length > 0 || held2.length > 0 ? void 0 : void console.error("No proposals to review here.");
-  const quarantined = all.filter((p) => p.quarantine !== null).length;
-  const stale = all.filter((p) => p.status !== "proposed").length;
-  process.stdout.write(
-    `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.
+  const soon = expiringHere(data, context);
+  if (all.length === 0 && waiting.length === 0 && held2.length === 0 && soon.length === 0) return void console.error("No proposals to review here.");
+  if (all.length > 0) {
+    const quarantined = all.filter((p) => p.quarantine !== null).length;
+    const stale = all.filter((p) => p.status !== "proposed").length;
+    process.stdout.write(
+      `Memory proposals: ${all.length}, ${quarantined} quarantined as text that reads as an instruction, ${stale} reported stale by an agent. Decide with memory approve <id> (approving a reported item clears its reports) or memory reject <id>.
 ` + fence(PROPOSALS_LABEL, renderProposals(all))
-  );
+    );
+  }
+  if (soon.length > 0) process.stdout.write(`Expiring soon: ${soon.length}. ${RENEW_HINT}
+${fence(PROPOSALS_LABEL, renderExpiring(soon))}`);
+}
+var RENEW_HINT = "An item expires 90 days after its last approval, remember or helped report; memory renew <id> starts its 90 days again, memory pin <id> keeps it from expiring.";
+function expiringHere(data, context, expired = false) {
+  const out = [];
+  for (const { file, tenant } of proposalStores(data, context)) {
+    const db = openStore(file, false);
+    if (db === null) continue;
+    try {
+      out.push(...expiring(db, tenant, expired));
+    } finally {
+      db.close();
+    }
+  }
+  return out;
+}
+function pinSaid(id, done) {
+  if (done === "missing") throw new Refusal(`no active item ${id} here to pin`);
+  if (typeof done === "object") throw new Refusal(`not pinned: ${id} has ${done.trust} trust; only an item you stated or approved can be pinned, so approve or remember it first`);
+  return done === "already" ? `${id} is already pinned` : `pinned ${id}: it does not expire until memory unpin ${id}`;
+}
+function expiryCommand(args, data, cwd, verb) {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  if (positionals.length === 0 || verb !== "renew" && positionals.length !== 1) throw new Refusal(verb === "renew" ? "give one or more item ids" : "give one item id", 2);
+  const stores2 = proposalStores(data, resolveContext(cwd, setUp(data), currentConfigDir()));
+  for (const id of positionals) {
+    let said2 = null;
+    for (const { file } of stores2) {
+      const db = openStore(file, false);
+      if (db === null) continue;
+      try {
+        if (verb === "renew") {
+          const audit = renew(db, id);
+          if (audit !== null) said2 = `renewed ${id}: its 90 days start again; undo with memory undo ${audit}`;
+        } else {
+          const done = setPin(db, id, verb === "pin");
+          if (done !== "missing") said2 = verb === "pin" ? pinSaid(id, done) : done === "already" ? `${id} is not pinned` : `unpinned ${id}: it expires 90 days after its last reinforcement again`;
+        }
+      } finally {
+        db.close();
+      }
+      if (said2 !== null) break;
+    }
+    if (said2 === null) throw new Refusal(`no active item ${id} here; memory list and memory review list them`);
+    console.log(said2);
+  }
 }
 function conflictsCommand(args, data, cwd) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { confirm: { type: "boolean" }, "yes-non-interactive": { type: "boolean" } } });
@@ -8762,7 +8882,7 @@ function undoCommand(args, data, cwd) {
       db.close();
     }
   }
-  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge or supersession here, or it was already undone`);
+  throw new Refusal(`nothing to undo for ${positionals[0]}: it is not a merge, supersession or renew here, or it was already undone`);
 }
 function recheckCommand(args, data, cwd) {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
@@ -9069,8 +9189,8 @@ function purge(args, data, cwd) {
   const chosen = [values.tenant, values.repo, values.item, values.source, values["older-than"], values.all].filter((v) => v !== void 0);
   if (chosen.length !== 1) throw new Refusal("give exactly one of --tenant, --repo, --item, --source, --older-than or --all", 2);
   if (values["with-derived"] === true && values.source === void 0) throw new Refusal("--with-derived goes with --source", 2);
-  const days = values["older-than"];
-  if (days !== void 0 && !/^\d+$/.test(days)) throw new Refusal("--older-than takes a whole number of days", 2);
+  const days2 = values["older-than"];
+  if (days2 !== void 0 && !/^\d+$/.test(days2)) throw new Refusal("--older-than takes a whole number of days", 2);
   if (values.tenant !== void 0 && !TENANT_NAME.test(values.tenant)) throw new Refusal(`no tenant named "${values.tenant}"`, 2);
   if (values.item !== void 0 && !/^m-[0-9a-f]+$/.test(values.item)) throw new Refusal(`"${values.item}" is not an item id`, 2);
   if (values.source !== void 0 && values.source.trim() === "") throw new Refusal("--source takes a source reference", 2);
@@ -9084,7 +9204,7 @@ function purge(args, data, cwd) {
     item: values.item,
     source: values.source?.trim(),
     withDerived: values["with-derived"],
-    before: days === void 0 ? void 0 : new Date(Date.now() - Number(days) * 864e5).toISOString(),
+    before: days2 === void 0 ? void 0 : new Date(Date.now() - Number(days2) * 864e5).toISOString(),
     all: values.all
   };
   const tenantsDir = join20(data, "tenants");
@@ -9097,7 +9217,7 @@ function purge(args, data, cwd) {
     if (tenants.length === 0) console.error(`--source reaches only the person file here: ${context?.reason ?? "memory is not set up"}`);
   }
   const files = tenants.map((t) => tenantFile(data, t));
-  if (values.all === true || days !== void 0 || values.item !== void 0 || values.source !== void 0 || repository !== void 0) files.push(personFile(data));
+  if (values.all === true || days2 !== void 0 || values.item !== void 0 || values.source !== void 0 || repository !== void 0) files.push(personFile(data));
   const report = {};
   const total = { items: 0, evidence: 0, returnedToProposed: 0, returnedToProposedIds: [], checks: [], episodes: 0, episodesByRepository: {}, episodesNotAttributable: 0 };
   const keptNotAttributable = [];
@@ -9244,6 +9364,10 @@ async function main(argv) {
       return review(rest, data, process.cwd());
     case "undo":
       return undoCommand(rest, data, process.cwd());
+    case "renew":
+    case "pin":
+    case "unpin":
+      return expiryCommand(rest, data, process.cwd(), command);
     case "approve":
     case "reject":
       return decideCommand(rest, data, process.cwd(), command);

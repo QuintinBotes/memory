@@ -11,7 +11,7 @@ import { SCOPES, type Anchor, type NewItem, type Scope } from '../items.ts';
 import { itemDetail, searchHits, stores } from '../mcp/server.ts';
 import { visibleItems } from '../recall/visible.ts';
 import { safeJson } from '../render/rows.ts';
-import { decideById, proposalStores, proposals, shadow } from '../review/review.ts';
+import { decideById, expiring, proposalStores, proposals, shadow } from '../review/review.ts';
 import { recordAudit } from '../store/audit.ts';
 import { openStore } from '../store/db.ts';
 import { PAGE } from './page.ts';
@@ -134,16 +134,20 @@ async function edit(input: Record<string, unknown>, data: string, config: Config
   throw new HttpError(404, `no active item ${id} here`);
 }
 
-/** The proposals and open instruction-file edits this repository may review: the page's data and memory review --json's (#104). */
-export function reviewData(data: string, context: Context, cwd: string): { proposals: unknown[]; edits: unknown[] } {
+/**
+ * The proposals, open instruction-file edits and items near expiry (#142) this repository may review: the page's data and
+ * memory review --json's (#104).
+ */
+export function reviewData(data: string, context: Context, cwd: string): { proposals: unknown[]; edits: unknown[]; expiring: unknown[] } {
   const ins = loadInstructions(cwd, currentConfigDir());
-  const out = { proposals: [] as unknown[], edits: [] as unknown[] };
+  const out = { proposals: [] as unknown[], edits: [] as unknown[], expiring: [] as unknown[] };
   for (const { file, tenant } of proposalStores(data, context)) {
     const db = openStore(file, false);
     if (db === null) continue;
     try {
       out.proposals.push(...proposals(db, tenant).map((p) => ({ ...p, shadow: shadow(p).decision })));
       out.edits.push(...edits(db).filter((e) => e.status === 'open').map((e) => ({ ...e, file: displayPath(ins, e.file) })));
+      out.expiring.push(...expiring(db, tenant));
     } finally {
       db.close();
     }

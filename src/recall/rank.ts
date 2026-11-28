@@ -11,8 +11,8 @@ export const CONFIDENCE = { base: 1, halfLifeDays: 90, low: 0.4, high: 0.7 } as 
 /** An item with no reinforcement for this many days reads as expired. */
 export const EXPIRY_DAYS = 90;
 
-/** True, as SQL on `items`, when an item has gone 90 days without reinforcement. */
-export const READS_EXPIRED = `coalesce(reinforced_at, valid_from) < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${EXPIRY_DAYS} days')`;
+/** True, as SQL on `items`, when an item has gone 90 days without reinforcement and the owner has not pinned it. */
+export const READS_EXPIRED = `(pinned_at IS NULL AND coalesce(reinforced_at, valid_from) < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${EXPIRY_DAYS} days'))`;
 
 /** `min(1, c × 0.5^(age/half_life) × 1.1^reinforced × 0.8^weakened)`, age in days since the last reinforcement. */
 export function confidence(item: Pick<Visible, 'reinforced' | 'helped' | 'wrong'>, now = Date.now()): number {
