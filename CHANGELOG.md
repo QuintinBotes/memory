@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-28
+
+The consent plan is now version 16. It adds the `shared`, `codex` and `seed` categories, which stay off until you run `memory init --confirm`; everything else keeps working on your current consent.
+
 ### Fixed
 
+- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
 - Capture no longer skips the first transcript record written after each run: the saved position counted the empty piece after the last newline. A record still being written is now read once it is finished (#147).
 - A Review Voice finding the owner turned down by replying on the pull request is imported as the owner's decision, not a team member's (#132).
 - The session lab times memory's Stop hooks again: current Claude Code records them in a `stop_hook_summary` record, not as `hook_success` attachments, so `hook_ms` came back empty with real Claude Code. Hooks that print nothing (such as session start with no recall) are not timed anywhere in the transcript, so `hook_ms` still omits them (#153).
@@ -28,10 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory seed --git [--since <date>] [--dry-run]` proposes items from this repository's commit history, so a new repository does not start empty (#145). A revert with a body, or a commit whose message says *because* or *so that*, or states a rule with *must* or *never* (not a bug story), gives one sentence as an agent-trusted proposal, with the commit as its source and date and the commit's source files that still exist as anchors (docs and changelogs only when nothing else changed). At most 20 per run, newest first; reruns add nothing and rejected statements stay rejected. A sentence naming a committer, an email or a handle is dropped. With `transcriptModel` on this machine, a model may reword a sentence with the message's own words. Reading history is a new consent category, `seed` (plan version 16). A proposal whose evidence is older than a waiting proposal on the same subject now arrives superseded by it.
 
 ## [0.9.2] - 2026-11-27
-
-### Fixed
-
-- `memory import` puts a checkout's auto memory at that repository's scope, not person scope, when the text names no repository. Repo-specific notes no longer follow you into every repository (#134).
 
 ### Fixed
 
