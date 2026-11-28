@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
+import { inside } from './import/silos.ts';
 
 /**
  * Memory's one configuration file, machine-wide, in the data directory.
@@ -24,6 +25,8 @@ export interface Config {
   /** Subagent types, beyond general-purpose, that get the slice at their start. */
   subagentTypes?: string[];
   imports?: Record<string, RepositorySilos>;
+  /** Further instruction files or directories, relative to the repository root (#144), matched like CLAUDE.md and never stored. */
+  instructionFiles?: string[];
   /**
    * The semantic leg's embedder (#28), off when absent: a local Ollama at `url` (http://127.0.0.1:11434 unless set)
    * with an embedding model the owner installs, Voyage, or the offline test provider.
@@ -182,6 +185,10 @@ export function loadConfig(data: string): Config | null {
   ) {
     throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(', ')}`);
   }
+  const ins = c.instructionFiles;
+  if (ins !== undefined && !(isList(ins) && ins.every((p) => p !== '' && inside(p)))) {
+    throw new ConfigError('instructionFiles must be a list of paths relative to the repository root, none absolute or climbing out with ..');
+  }
   const emb = c.embeddings;
   if (
     emb !== undefined &&
@@ -268,6 +275,7 @@ export function loadConfig(data: string): Config | null {
     ...(budget !== undefined ? { sessionBudget: budget } : {}),
     ...(types !== undefined ? { subagentTypes: types } : {}),
     ...(imports !== undefined ? { imports } : {}),
+    ...(ins !== undefined ? { instructionFiles: ins } : {}),
     ...(emb !== undefined ? { embeddings: emb } : {}),
     ...(rr !== undefined ? { rerank: rr } : {}),
     ...(c.consent !== undefined ? { consent: c.consent } : {}),

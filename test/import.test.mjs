@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setup, run, remember, sessionStart, storeBytes, assemble } from './helpers.mjs';
 
@@ -533,4 +533,126 @@ test('#134 SC1-SC3 auto memory of a checkout is that repository\'s, even when th
   assert.equal(item.scope_key, 'acme/api', 'acme-api has a dash in its folder name, and still resolves');
   // SC3: a folder that is no checkout keeps today's rule.
   assert.equal(byStatement(items(s.data, 'person.sqlite'), 'Prefer short pull request descriptions').scope, 'person');
+});
+
+// #144: Codex's own memories, in the layout codex-cli's consolidation prompt writes.
+const SQUASH = 'Squash commits before tagging a release';
+const FLAKY = 'Skip the flaky tests before a release';
+/** A Codex home whose memories hold one task group applying to `cwd`, and a summary. */
+function codexHome(s, cwd) {
+  const home = join(s.base, 'codex-home');
+  write(join(home, 'memories', 'MEMORY.md'), [
+    '# Task Group: releases',
+    'scope: cutting releases',
+    `applies_to: cwd=${cwd}; reuse_rule=checkout-specific`,
+    '',
+    '## Task 1: cut a release, done',
+    '',
+    '### rollout_summary_files',
+    '',
+    `- rollout_summaries/r1.md (cwd=${cwd}, rollout_path=/x, updated_at=2026-11-01, thread_id=t1)`,
+    '',
+    '### keywords',
+    '',
+    '- release, tag, changelog',
+    '',
+    '## User preferences',
+    '',
+    `- ${SQUASH} [Task 1]`,
+    '',
+    '## Failures and how to do differently',
+    '',
+    `- ${FLAKY} [Task 1][Task 2]`,
+    '',
+  ].join('\n'));
+  write(join(home, 'memories', 'memory_summary.md'), [
+    'v1',
+    '',
+    '## User Profile',
+    '',
+    'Works on several services.',
+    '',
+    '## User preferences',
+    '',
+    '- Prefer short pull request descriptions',
+    '',
+    '## General Tips',
+    '',
+    '- Releases of acme/api are cut from the main branch only',
+    '',
+    "## What's in Memory",
+    '',
+    '- rollout_summaries/r1.md - a release; thread_id=t1',
+    '',
+  ].join('\n'));
+  return home;
+}
+const codexImport = (s, home, config, ...flags) => {
+  const r = run(['import', ...flags], { cwd: s.base, data: s.data, config, env: { CODEX_HOME: home } });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+
+test('#144 SC6 Codex memories: a dry run lists each file and its count; import stores agent-trust proposals naming Codex; a second run adds nothing', () => {
+  const s = setup();
+  const home = codexHome(s, s.acmeApi);
+  const before = storeBytes(s.data);
+  const dry = codexImport(s, home, s.configA, '--dry-run');
+  assert.deepEqual(dry.files, [{ path: join(home, 'memories', 'MEMORY.md'), statements: 2 }, { path: join(home, 'memories', 'memory_summary.md'), statements: 2 }]);
+  assert.equal(storeBytes(s.data).equals(before), true, 'a dry run writes nothing');
+  const report = codexImport(s, home, s.configA);
+  assert.equal(report.proposed, 4);
+  const squash = byStatement(items(s.data, 'tenants/acme.sqlite'), SQUASH);
+  assert.equal(squash.status, 'proposed');
+  assert.equal(squash.origin_trust, 'agent');
+  assert.deepEqual([squash.scope, squash.scope_key], ['repository', 'acme/api'], 'the task group applies to the acme/api checkout');
+  assert.match(squash.evidence[0].source_ref, /^codex memory memories\/MEMORY\.md:\d+$/);
+  const pr = byStatement(items(s.data, 'person.sqlite'), 'Prefer short pull request descriptions');
+  assert.deepEqual([pr.scope, pr.origin_trust], ['person', 'agent']);
+  const again = codexImport(s, home, s.configA);
+  assert.equal(again.proposed, 0);
+});
+
+test('#144 SC7 a Codex statement of an unbound tenant\'s repository is reported and not stored; an imperative one arrives quarantined', () => {
+  const s = setup();
+  const home = codexHome(s, s.acmeApi);
+  // Config B is bound to beta only, so the acme/api task group cannot be stored from it.
+  const unbound = codexImport(s, home, s.configB);
+  // Two of the task group, whose checkout is acme/api, and the summary line that names acme/api.
+  assert.equal(unbound.refused.filter((r) => /tenant acme, and this config is not bound to it/.test(r.reason)).length, 3);
+  assert.equal(items(s.data, 'person.sqlite').length, 1, 'only the organisation-free preference is personal');
+  assert.equal(existsSync(join(s.data, 'tenants/acme.sqlite')), false, 'nothing reached the acme store');
+  const bound = codexImport(s, home, s.configA);
+  assert.equal(bound.quarantined, 1);
+  assert.equal(byStatement(items(s.data, 'tenants/acme.sqlite'), FLAKY).quarantine, 'weaken-tests');
+});
+
+test('#144 SC8 without the codex consent category the Codex folder is not opened and import says why; an unknown layout is skipped', () => {
+  const s = setup();
+  const home = codexHome(s, s.acmeApi);
+  const path = join(s.data, 'config.json');
+  const config = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(path, JSON.stringify({ ...config, consent: { ...config.consent, version: 14 } }));
+  chmodSync(join(home, 'memories'), 0o000);
+  try {
+    const report = codexImport(s, home, s.configA);
+    assert.deepEqual(report.skippedFiles, [{ path: join(home, 'memories'), reason: "your consent does not cover reading Codex's memories yet; run memory init and confirm" }]);
+    assert.deepEqual(report.files, []);
+  } finally {
+    chmodSync(join(home, 'memories'), 0o755);
+  }
+  writeFileSync(path, JSON.stringify(config));
+  write(join(home, 'memories_v2', 'memory_summary.md'), '## User preferences\n\n- Prefer tabs\n');
+  const report = codexImport(s, home, s.configA, '--dry-run');
+  assert.deepEqual(report.skippedFiles, [{ path: join(home, 'memories_v2', 'memory_summary.md'), reason: 'not a layout of Codex memories that memory knows; not read' }]);
+});
+
+test('#144 SC9 with no Codex memories folder the import report is byte-identical to one without a Codex home', () => {
+  const s = silos();
+  const empty = join(s.base, 'codex-empty');
+  mkdirSync(empty);
+  const a = run(['import', '--dry-run'], { cwd: s.base, data: s.data, config: s.configA });
+  const b = run(['import', '--dry-run'], { cwd: s.base, data: s.data, config: s.configA, env: { CODEX_HOME: empty } });
+  assert.equal(b.stdout, a.stdout);
+  assert.equal(b.stderr, a.stderr);
 });

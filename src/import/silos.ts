@@ -14,6 +14,8 @@ export interface Statement {
   symbol?: string;
   /** Rejections: when it was rejected. Notes: when the evidence happened. */
   at?: string;
+  /** Codex's MEMORY.md: the working directory its task group applies to. */
+  cwd?: string;
 }
 
 export interface Parsed {
@@ -150,6 +152,36 @@ export function notes(text: string): Parsed {
     return true;
   });
   return parsed(statements, { unreadable, skippedNotes });
+}
+
+/** The sections of Codex's memory files that hold lessons; the others are task lists, keywords, a profile or pointers. */
+const CODEX_SECTIONS = new Set(['user preferences', 'reusable knowledge', 'failures and how to do differently', 'general tips']);
+
+/**
+ * One of Codex's memory files, in the layout its consolidation prompt writes (codex-rs/memories/write/templates): MEMORY.md
+ * is `# Task Group:` blocks, each with `applies_to: cwd=<path>`, and memory_summary.md starts with the line `v1`. Each `-`
+ * item under a lesson section is a statement, without its `[Task n]` references. Any other layout is a string saying so:
+ * the reader does not guess.
+ */
+export function codexMemory(name: string, text: string): Parsed | string {
+  const all = lines(text);
+  const summary = name === 'memory_summary.md';
+  if (summary ? all[0] !== 'v1' : !all.some((l) => /^# Task Group:/.test(l))) return 'not a layout of Codex memories that memory knows; not read';
+  const statements: Statement[] = [];
+  let section = '';
+  let cwd: string | undefined;
+  all.forEach((line, i) => {
+    if (/^# Task Group:/.test(line)) [section, cwd] = ['', undefined];
+    const applies = /^applies_to:\s*cwd=([^;]+)/.exec(line);
+    if (applies !== null && !summary) cwd = applies[1]!.trim();
+    const heading = /^#{1,6}\s+(.*?)\s*$/.exec(line);
+    if (heading !== null) section = heading[1]!.toLowerCase();
+    const item = /^\s*-\s+(.*\S)\s*$/.exec(line);
+    if (heading !== null || item === null || !CODEX_SECTIONS.has(section)) return;
+    const body = item[1]!.replace(/(?:\s*\[Task \d+\])+$/, '').trim();
+    if (body !== '') statements.push({ line: i + 1, text: body, ...(cwd !== undefined ? { cwd } : {}) });
+  });
+  return parsed(statements);
 }
 
 export const symbolPath = (symbol: string): string => SYMBOL_KEY.exec(symbol)![1]!;

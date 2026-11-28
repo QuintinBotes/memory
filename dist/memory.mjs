@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync15, readFileSync as readFileSync18, readdirSync as readdirSync3, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync18, readdirSync as readdirSync4, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync7, writeFileSync as writeFileSync8 } from "node:fs";
 import { basename as basename4, isAbsolute as isAbsolute9, join as join20, normalize as normalize4 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { parseArgs } from "node:util";
@@ -37,7 +37,135 @@ function pluginVersion() {
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join as join2, resolve } from "node:path";
+import { isAbsolute as isAbsolute2, join as join2, resolve } from "node:path";
+
+// src/import/silos.ts
+import { isAbsolute, normalize } from "node:path";
+var parsed = (statements, rest = {}) => ({ statements, links: [], unreadable: [], skippedNotes: 0, ...rest });
+function unquote(v) {
+  if (/^'.*'$/.test(v)) return v.slice(1, -1).replace(/''/g, "'");
+  if (!/^".*"$/.test(v)) return v;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v.slice(1, -1);
+  }
+}
+var lines = (text5) => text5.split(/\r?\n/);
+function markdown(text5) {
+  const all = lines(text5);
+  if (all[0]?.trim() === "---") {
+    const end = all.findIndex((l, i) => i > 0 && l.trim() === "---");
+    for (let i = 1; i < end; i++) {
+      const m = /^description:\s*(.*?)\s*$/.exec(all[i]);
+      if (m && m[1] !== "" && !/^[>|]/.test(m[1])) return parsed([{ line: i + 1, text: unquote(m[1]) }]);
+    }
+    return parsed([]);
+  }
+  const statements = [];
+  const links = [];
+  let fenced = false;
+  all.forEach((line2, i) => {
+    if (/^\s*(?:```|~~~)/.test(line2)) fenced = !fenced;
+    const item = fenced ? null : /^\s*[-*+]\s+(.*\S)\s*$/.exec(line2);
+    if (!item) return;
+    const link2 = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(item[1]);
+    if (link2 === null) statements.push({ line: i + 1, text: item[1] });
+    else if (!/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(link2[1])) links.push(link2[1]);
+  });
+  return parsed(statements, { links });
+}
+var POLICY_KEYS = /* @__PURE__ */ new Set(["suppressed_patterns", "required_checks"]);
+function policy(text5) {
+  const statements = [];
+  let key2 = "";
+  lines(text5).forEach((line2, i) => {
+    const top = /^([A-Za-z_][\w-]*):/.exec(line2);
+    if (top) key2 = top[1];
+    const item = /^\s*-\s+(.*\S)\s*$/.exec(line2);
+    if (!top && item && POLICY_KEYS.has(key2)) statements.push({ line: i + 1, text: unquote(item[1]) });
+  });
+  return parsed(statements);
+}
+function ownerReviewer(text5) {
+  let key2 = "";
+  for (const line2 of lines(text5)) {
+    const top = /^([A-Za-z_][\w-]*):/.exec(line2);
+    if (top) key2 = top[1];
+    const m = key2 === "identity" ? /^\s+owner_reviewer:\s*(\S.*?)\s*(?:#.*)?$/.exec(line2) : null;
+    if (m) return unquote(m[1]) || null;
+  }
+  return null;
+}
+function jsonLines(text5, each) {
+  const unreadable = [];
+  lines(text5).forEach((raw, i) => {
+    if (raw.trim() === "") return;
+    let entry;
+    try {
+      entry = JSON.parse(raw);
+    } catch {
+    }
+    const ok2 = typeof entry === "object" && entry !== null && !Array.isArray(entry) && each(entry, i + 1);
+    if (!ok2) unreadable.push(i + 1);
+  });
+  return unreadable;
+}
+function rejections(text5) {
+  const statements = [];
+  const unreadable = jsonLines(text5, (e, line2) => {
+    if (typeof e["text"] !== "string" || e["text"].trim() === "") return false;
+    const at3 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? e["at"] : void 0;
+    statements.push({ line: line2, text: e["text"].trim(), ...at3 !== void 0 ? { at: new Date(at3).toISOString() } : {} });
+    return true;
+  });
+  return parsed(statements, { unreadable });
+}
+var NOTE_TYPES = { gotcha: "hazard", invariant: "convention", decision: "decision" };
+var SYMBOL_KEY = /^([^#\s]+)#[^#\n]+#[^#\s]+$/;
+function notes(text5) {
+  const statements = [];
+  let skippedNotes = 0;
+  const unreadable = jsonLines(text5, (e, line2) => {
+    const { kind, text: body2, symbol } = e;
+    if (typeof kind !== "string" || typeof body2 !== "string" || body2.trim() === "") return false;
+    if (symbol !== void 0 && (typeof symbol !== "string" || !SYMBOL_KEY.test(symbol) || !inside(symbolPath(symbol)))) return false;
+    const type = Object.hasOwn(NOTE_TYPES, kind) ? NOTE_TYPES[kind] : void 0;
+    if (type === void 0) {
+      skippedNotes++;
+      return true;
+    }
+    const at3 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? new Date(e["at"]).toISOString() : void 0;
+    statements.push({ line: line2, text: body2.trim(), type, ...symbol !== void 0 ? { symbol } : {}, ...at3 !== void 0 ? { at: at3 } : {} });
+    return true;
+  });
+  return parsed(statements, { unreadable, skippedNotes });
+}
+var CODEX_SECTIONS = /* @__PURE__ */ new Set(["user preferences", "reusable knowledge", "failures and how to do differently", "general tips"]);
+function codexMemory(name, text5) {
+  const all = lines(text5);
+  const summary = name === "memory_summary.md";
+  if (summary ? all[0] !== "v1" : !all.some((l) => /^# Task Group:/.test(l))) return "not a layout of Codex memories that memory knows; not read";
+  const statements = [];
+  let section = "";
+  let cwd;
+  all.forEach((line2, i) => {
+    if (/^# Task Group:/.test(line2)) [section, cwd] = ["", void 0];
+    const applies = /^applies_to:\s*cwd=([^;]+)/.exec(line2);
+    if (applies !== null && !summary) cwd = applies[1].trim();
+    const heading = /^#{1,6}\s+(.*?)\s*$/.exec(line2);
+    if (heading !== null) section = heading[1].toLowerCase();
+    const item = /^\s*-\s+(.*\S)\s*$/.exec(line2);
+    if (heading !== null || item === null || !CODEX_SECTIONS.has(section)) return;
+    const body2 = item[1].replace(/(?:\s*\[Task \d+\])+$/, "").trim();
+    if (body2 !== "") statements.push({ line: i + 1, text: body2, ...cwd !== void 0 ? { cwd } : {} });
+  });
+  return parsed(statements);
+}
+var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
+var inside = (path) => !isAbsolute(path) && !normalize(path).split(/[\\/]/).includes("..");
+
+// src/config.ts
 var EMBEDDING_PROVIDERS = ["ollama", "voyage", "fake"];
 var DEFAULT_CAPTURE = { enabled: true, model: "haiku", maxCandidates: 5, apiModel: "claude-haiku-5-5", maxCallsPerDay: 100, maxTokensPerDay: 2e6, skipTainted: false };
 var captureSettings = (config) => ({ ...DEFAULT_CAPTURE, ...config.capture });
@@ -114,6 +242,10 @@ function loadConfig(data) {
   ))) {
     throw new ConfigError(`imports must map a checkout path to file paths named ${SILOS.join(", ")}`);
   }
+  const ins = c.instructionFiles;
+  if (ins !== void 0 && !(isList(ins) && ins.every((p) => p !== "" && inside(p)))) {
+    throw new ConfigError("instructionFiles must be a list of paths relative to the repository root, none absolute or climbing out with ..");
+  }
   const emb = c.embeddings;
   if (emb !== void 0 && !(typeof emb === "object" && emb !== null && !Array.isArray(emb) && EMBEDDING_PROVIDERS.includes(emb.provider) && (emb.model === void 0 || typeof emb.model === "string" && emb.model !== "") && (emb.url === void 0 || emb.provider === "ollama" && typeof emb.url === "string" && plainHttp(emb.url)))) {
     throw new ConfigError(`embeddings must be {"provider": ${EMBEDDING_PROVIDERS.map((p) => `"${p}"`).join(" or ")}, "model"?: a name, "url"?: Ollama's http(s) address without credentials}`);
@@ -138,7 +270,7 @@ function loadConfig(data) {
   if (impact2 !== void 0 && !(typeof impact2 === "object" && impact2 !== null && !Array.isArray(impact2) && isList(impact2.command) && impact2.command.length > 0 && impact2.command.every((a) => a !== ""))) {
     throw new ConfigError('impactProvider must be {"command": [absolute program path, arguments...]}');
   }
-  if (impact2 !== void 0 && !isAbsolute(impact2.command[0])) {
+  if (impact2 !== void 0 && !isAbsolute2(impact2.command[0])) {
     throw new ConfigError("impactProvider.command[0] must be an absolute path");
   }
   const scf = c.scf;
@@ -152,7 +284,7 @@ function loadConfig(data) {
     const ok2 = typeof tm === "object" && tm !== null && !Array.isArray(tm);
     const { url, model, command } = ok2 ? tm : {};
     const http = (u) => URL.canParse(u) && ["http:", "https:"].includes(new URL(u).protocol) && new URL(u).username === "" && new URL(u).password === "";
-    if (!ok2 || url !== void 0 && !(typeof url === "string" && http(url)) || model !== void 0 && !(typeof model === "string" && model !== "") || command !== void 0 && !(isList(command) && command.length > 0 && isAbsolute(command[0]))) {
+    if (!ok2 || url !== void 0 && !(typeof url === "string" && http(url)) || model !== void 0 && !(typeof model === "string" && model !== "") || command !== void 0 && !(isList(command) && command.length > 0 && isAbsolute2(command[0]))) {
       throw new ConfigError('transcriptModel must be {"url"?: an http(s) address without credentials, "model"?: a name, "command"?: [absolute program path, arguments...]}');
     }
   }
@@ -167,6 +299,7 @@ function loadConfig(data) {
     ...budget !== void 0 ? { sessionBudget: budget } : {},
     ...types !== void 0 ? { subagentTypes: types } : {},
     ...imports !== void 0 ? { imports } : {},
+    ...ins !== void 0 ? { instructionFiles: ins } : {},
     ...emb !== void 0 ? { embeddings: emb } : {},
     ...rr !== void 0 ? { rerank: rr } : {},
     ...c.consent !== void 0 ? { consent: c.consent } : {},
@@ -979,11 +1112,11 @@ function recordAudit(db, action, subject2, metadata = {}) {
 }
 
 // src/store/transaction.ts
-var inside = /* @__PURE__ */ new WeakSet();
+var inside2 = /* @__PURE__ */ new WeakSet();
 function inTransaction(db, work) {
-  if (inside.has(db)) return work();
+  if (inside2.has(db)) return work();
   db.exec("BEGIN IMMEDIATE");
-  inside.add(db);
+  inside2.add(db);
   try {
     const result = work();
     db.exec("COMMIT");
@@ -992,7 +1125,7 @@ function inTransaction(db, work) {
     db.exec("ROLLBACK");
     throw error;
   } finally {
-    inside.delete(db);
+    inside2.delete(db);
   }
 }
 
@@ -1469,7 +1602,8 @@ var DATA_CATEGORIES = [
   { id: "scf", since: 11, text: "When you run memory export --to scf, or memory import --scf, for a tenant that has an SCF address in config.json (memory init --scf <tenant>=<url>, https only, or http to this machine), with the key in SCF_API_KEY: that tenant's proposed repository and organisation items are sent to that address as proposals: the statement, type, scope, repository name, rationale, anchored paths and symbols, and each evidence's source reference, role and time, with credentials replaced; an item that holds one is not sent. The tenant's person-file items and every other tenant's items are never sent. memory import --scf asks the same address for the decisions on those proposals and for the run outcomes on accepted ones, and applies them to the items it sent. Nothing is sent for a tenant without an address, or before you agree to this plan" },
   { id: "personTranscripts", since: 12, text: "With the transcripts opt-in on, a session whose working directory matches no tenant is recorded the same way in the person file: the transcript's path, the session id, the repository if there is one and the time, deleted after 30 days. At the next session start or sweep memory reads your own messages in it on this machine, as above, and keeps each correction about your own habits as a person proposal quoting you verbatim; a correction that names a path, code, a tenant or a repository is not kept" },
   { id: "transcriptModel", since: 12, text: "When transcriptModel is set in config.json and you run memory corrections (never in a hook): your own messages of each transcript recorded above, read and redacted as above, are sent to the model it names (Inkling 2 Mini by default, which you install; memory never downloads a model) at its address (a local Ollama at http://127.0.0.1:11434 by default), through the provider runner, so it can find corrections the rules miss. Only a quote found verbatim in your messages is kept, as a proposal. A tenant's messages are sent only to a model on this machine (an address of 127.0.0.1, localhost or [::1]); an address elsewhere is used for the person file only. Without transcriptModel, or before you agree to this plan, nothing is sent" },
-  { id: "shared", since: 14, text: "When you run memory import --shared in a repository that matches a tenant: the file .memory/shared.jsonl as committed at HEAD (never your uncommitted copy) is read through git. Each line's statement, type, anchors and the id it supersedes are kept as a proposal in that tenant, with team trust and the taint shared:<owner/repo>, waiting for your approval; text that reads as an instruction is quarantined. memory share, which you run in a terminal, writes that file from this repository's active repository items, and never commits or pushes it. Before you agree to this plan, the file is not read" }
+  { id: "shared", since: 14, text: "When you run memory import --shared in a repository that matches a tenant: the file .memory/shared.jsonl as committed at HEAD (never your uncommitted copy) is read through git. Each line's statement, type, anchors and the id it supersedes are kept as a proposal in that tenant, with team trust and the taint shared:<owner/repo>, waiting for your approval; text that reads as an instruction is quarantined. memory share, which you run in a terminal, writes that file from this repository's active repository items, and never commits or pushes it. Before you agree to this plan, the file is not read" },
+  { id: "codex", since: 15, text: "When you run memory import: Codex's own memories, the MEMORY.md and memory_summary.md files in memories and memories_v2 under its home directory (~/.codex unless CODEX_HOME is set). A model wrote them from past Codex chats, so each list item is stored as an agent-trusted proposal that waits for your approval: in the tenant of the repository it names or the checkout its block applies to, when this config is bound to that tenant, else as a person item when it names no organisation, else reported and not kept. Other files there are not read" }
 ];
 var PLAN_VERSION = Math.max(...DATA_CATEGORIES.map((c) => c.since));
 var uncovered = (config) => DATA_CATEGORIES.filter((c) => c.since > (config.consent?.version ?? 1));
@@ -1927,7 +2061,7 @@ async function withFileLockAsync(lock, work, waitMs = 0, staleMs = STALE_MS) {
 var withRefreshLock = (storeFile, work) => withFileLock(`${storeFile}.refresh.lock`, work);
 
 // src/mcp/server.ts
-import { isAbsolute as isAbsolute4, relative as relative3 } from "node:path";
+import { isAbsolute as isAbsolute5, relative as relative3 } from "node:path";
 import { createInterface } from "node:readline";
 
 // src/automation.ts
@@ -2146,20 +2280,22 @@ function sweepIfDue(db, now = Date.now()) {
 
 // src/instructions.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
-import { chmodSync, existsSync as existsSync3, lstatSync, readFileSync as readFileSync6, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { chmodSync, existsSync as existsSync3, lstatSync, readFileSync as readFileSync6, readdirSync, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync2, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname5, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3, sep as sep2 } from "node:path";
+import { basename, dirname as dirname5, isAbsolute as isAbsolute3, join as join4, relative, resolve as resolve3, sep as sep2 } from "node:path";
 var ROOT_FILES = ["AGENTS.md", "GEMINI.md", ".github/copilot-instructions.md"];
 var DIR_FILES = ["CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md"];
+var RULES_DIR = ".claude/rules";
+var MAX_RULE_FILES = 200;
 var MAX_BYTES = 256 * 1024;
 var MAX_IMPORT_DEPTH = 5;
 var PROMOTE_SUPPORT = 3;
 var PROMOTABLE = /* @__PURE__ */ new Set(["convention", "preference", "decision"]);
-var inside2 = (root2, path) => path === root2 || path.startsWith(root2.endsWith(sep2) ? root2 : root2 + sep2);
+var inside3 = (root2, path) => path === root2 || path.startsWith(root2.endsWith(sep2) ? root2 : root2 + sep2);
 function readInside(path, root2) {
   try {
     const real = realpathSync2(path);
-    if (!inside2(realpathSync2(root2), real) || !statSync2(real).isFile()) return null;
+    if (!inside3(realpathSync2(root2), real) || !statSync2(real).isFile()) return null;
     return readFileSync6(real).subarray(0, MAX_BYTES).toString("utf8");
   } catch {
     return null;
@@ -2204,33 +2340,84 @@ function linesOf(file, text5) {
   }
   return out;
 }
-function loadInstructions(cwd, configDir) {
+function frontmatter(text5) {
+  const all = text5.split("\n");
+  const end = all[0]?.trim() === "---" ? all.findIndex((l, i) => i > 0 && l.trim() === "---") : -1;
+  if (end < 0) return { body: 0 };
+  const globs = [];
+  let key2 = "";
+  for (const l of all.slice(1, end)) {
+    const m = /^(\w+):\s*(.*?)\s*$/.exec(l);
+    if (m !== null) key2 = m[1];
+    const value = m !== null ? m[2].replace(/^\[|\]$/g, "") : /^\s*-\s*(.*?)\s*$/.exec(l)?.[1];
+    if ((key2 === "paths" || key2 === "globs") && value) globs.push(...value.split(/,(?![^{]*\})/));
+  }
+  const paths = globs.map((g) => g.trim().replace(/^["']|["']$/g, "").replace(/^\.\//, "")).filter((g) => g !== "");
+  return { body: end + 1, ...paths.length > 0 ? { paths } : {} };
+}
+var escape = (s) => s.replace(/[.+^$()|[\]\\{}]/g, "\\$&");
+function matchesGlob(glob, path) {
+  const re = glob.split(/(\*\*\/?|\*|\?|\{[^}]*\})/).map((p) => p === "**/" ? "(?:.*/)?" : p === "**" ? ".*" : p === "*" ? "[^/]*" : p === "?" ? "[^/]" : /^\{.*\}$/.test(p) ? `(?:${p.slice(1, -1).split(",").map(escape).join("|")})` : escape(p)).join("");
+  return new RegExp(`^${re}$`).test(path);
+}
+function filesUnder(dir, ext) {
+  const out = [];
+  const walk = (d) => {
+    let names;
+    try {
+      names = readdirSync(d).sort();
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (out.length >= MAX_RULE_FILES) return;
+      const path = join4(d, name);
+      if (lstatSync(path).isDirectory()) walk(path);
+      else if (ext.some((e) => name.endsWith(e))) out.push(path);
+    }
+  };
+  walk(dir);
+  return out;
+}
+function loadInstructions(cwd, configDir, extra = []) {
   const top = git(cwd, "rev-parse", "--show-toplevel")?.trim() ?? null;
   const lines2 = [];
   const allowed = /* @__PURE__ */ new Set();
   const seen = /* @__PURE__ */ new Set();
-  const read2 = (path, root2, depth) => {
+  const read2 = (path, root2, depth, rule = false) => {
     const abs = resolve3(path);
     if (seen.has(abs)) return;
     seen.add(abs);
     const text5 = readInside(abs, root2);
     if (text5 === null) return;
     allowed.add(abs);
-    lines2.push(...linesOf(abs, text5));
+    const { body: body2, paths } = rule ? frontmatter(text5) : { body: 0, paths: void 0 };
+    lines2.push(...linesOf(abs, text5).filter((l) => l.line > body2).map((l) => paths === void 0 ? l : { ...l, paths }));
     if (depth >= MAX_IMPORT_DEPTH) return;
     for (const target of importsOf(text5)) {
-      const to = target.startsWith("~/") ? join4(homedir2(), target.slice(2)) : isAbsolute2(target) ? target : resolve3(dirname5(abs), target);
+      const to = target.startsWith("~/") ? join4(homedir2(), target.slice(2)) : isAbsolute3(target) ? target : resolve3(dirname5(abs), target);
       read2(to, root2, depth + 1);
     }
   };
   const userTarget = join4(configDir, "CLAUDE.md");
   if (top !== null) {
     const start = resolve3(cwd);
-    for (let dir = inside2(top, start) ? start : top; ; dir = dirname5(dir)) {
+    for (let dir = inside3(top, start) ? start : top; ; dir = dirname5(dir)) {
       for (const f of DIR_FILES) read2(join4(dir, f), top, 1);
       if (dir === top || dirname5(dir) === dir) break;
     }
     for (const f of ROOT_FILES) read2(join4(top, f), top, 1);
+    for (const f of filesUnder(join4(top, RULES_DIR), [".md"])) read2(f, top, 1, true);
+    for (const entry of extra.filter(inside)) {
+      const path = join4(top, entry);
+      let dir;
+      try {
+        dir = statSync2(path).isDirectory() && inside3(realpathSync2(top), realpathSync2(path));
+      } catch {
+        continue;
+      }
+      for (const f of dir ? filesUnder(path, [".md", ".mdc"]) : [path]) read2(f, top, 1, true);
+    }
   }
   read2(userTarget, homedir2(), 1);
   const repositoryTarget = top === null ? null : [join4(top, "CLAUDE.md"), join4(top, "AGENTS.md")].find((p) => existsSync3(p)) ?? join4(top, "CLAUDE.md");
@@ -2239,16 +2426,17 @@ function loadInstructions(cwd, configDir) {
   return { top, lines: lines2, allowed, repositoryTarget, userTarget };
 }
 var displayPath = (ins, file) => {
-  if (ins.top !== null && inside2(ins.top, file)) return relative(ins.top, file);
+  if (ins.top !== null && inside3(ins.top, file)) return relative(ins.top, file);
   const home = homedir2();
-  return inside2(home, file) ? `~${sep2}${relative(home, file)}` : file;
+  return inside3(home, file) ? `~${sep2}${relative(home, file)}` : file;
 };
-function judge(ins, statement) {
+function judge(ins, statement, anchors = []) {
   const polarity = negative(statement);
   const flat = !scoped(statement);
-  const same = ins.lines.find((l) => negative(l.text) === polarity && repeats(statement, l.text));
+  const lines2 = ins.lines.filter((l) => l.paths === void 0 || anchors.some((a) => l.paths.some((g) => matchesGlob(g, a))));
+  const same = lines2.find((l) => negative(l.text) === polarity && repeats(statement, l.text));
   if (same !== void 0) return { kind: "repeats", line: same };
-  const against = ins.lines.find((l) => flat && negative(l.text) !== polarity && !scoped(l.text) && sameSubject(statement, l.text));
+  const against = lines2.find((l) => flat && negative(l.text) !== polarity && !scoped(l.text) && sameSubject(statement, l.text));
   return against === void 0 ? null : { kind: "contradicts", line: against };
 }
 var marker = (raw) => /^\s*(?:[-*+]|\d+[.)])?\s*/.exec(raw)[0];
@@ -2264,7 +2452,7 @@ function propose(db, kind, item, file, line2, oldLine, newLine) {
 function screen(db, items, ins, personal, withheld) {
   const kept = [];
   for (const item of items) {
-    const verdict2 = judge(ins, item.statement);
+    const verdict2 = judge(ins, item.statement, item.anchors.map((a) => a.path));
     if (verdict2 === null) {
       kept.push(item);
       try {
@@ -2315,7 +2503,7 @@ function writableTarget(ins, file) {
   }
   if (ins.top === null) throw new Error(`${name} is not inside a repository; nothing was written`);
   const real = existsSync3(file) ? realpathSync2(file) : join4(realpathSync2(dirname5(file)), basename(file));
-  if (!inside2(realpathSync2(ins.top), real)) throw new Error(`${name} resolves outside the repository; nothing was written`);
+  if (!inside3(realpathSync2(ins.top), real)) throw new Error(`${name} resolves outside the repository; nothing was written`);
   return real;
 }
 function readWhole(path, name) {
@@ -3658,11 +3846,11 @@ async function similarities(data, context, config, query, items) {
 }
 
 // src/recall/related.ts
-import { isAbsolute as isAbsolute3, normalize, relative as relative2 } from "node:path";
+import { isAbsolute as isAbsolute4, normalize as normalize2, relative as relative2 } from "node:path";
 function relatedTarget(cwd, target) {
-  const top = isAbsolute3(target) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
-  const clean = normalize(isAbsolute3(target) && top !== void 0 ? relative2(top, target) : target).replace(/\/+$/, "");
-  return clean === "" || clean === "." || isAbsolute3(clean) || clean.split(/[\\/]/).includes("..") ? null : clean;
+  const top = isAbsolute4(target) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
+  const clean = normalize2(isAbsolute4(target) && top !== void 0 ? relative2(top, target) : target).replace(/\/+$/, "");
+  return clean === "" || clean === "." || isAbsolute4(clean) || clean.split(/[\\/]/).includes("..") ? null : clean;
 }
 function related(data, config, context, cwd, target, depth) {
   if (context.tenant === null || context.repository === null || context.owner === null) return "";
@@ -3672,7 +3860,7 @@ function related(data, config, context, cwd, target, depth) {
   try {
     withRefreshLock(file, () => recheck(db, context.tenant, context.repository, cwd, { managed: managedBy(data, context.repository) }));
     const found = anchoredUnder(db, context.tenant, context.repository, context.owner, target, depth);
-    const items = screen(db, found, loadInstructions(cwd, currentConfigDir()), false, []);
+    const items = screen(db, found, loadInstructions(cwd, currentConfigDir(), config.instructionFiles), false, []);
     return chooseSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text;
   } finally {
     db.close();
@@ -3690,7 +3878,7 @@ function withTextRatio(items, matches2) {
 function visibleItems(data, context, cwd, terms = [], busyMs = WRITE_BUSY_MS, withheld = [], reach, asOf) {
   const out = [];
   const other = reach !== void 0 && reach !== "all" && reach.repository !== context.repository;
-  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir());
+  const instructions = withheld === null || other ? null : loadInstructions(cwd, currentConfigDir(), loadConfig(data)?.instructionFiles);
   const add = (items, matches2) => void out.push(...withTextRatio(items, matches2));
   if (context.tenant !== null && context.repository !== null && context.owner !== null) {
     const file = tenantFile(data, context.tenant);
@@ -3846,8 +4034,8 @@ async function search(args, data, config, context, cwd) {
   const query = text2(args, "query");
   const paths = args["paths"] ?? [];
   if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string")) throw new ToolError("paths is a list of strings");
-  const top = paths.some((p) => isAbsolute4(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
-  const relativePaths = paths.map((p) => isAbsolute4(p) && top !== void 0 ? relative3(top, p) : p);
+  const top = paths.some((p) => isAbsolute5(p)) ? git(cwd, "rev-parse", "--show-toplevel")?.trim() : void 0;
+  const relativePaths = paths.map((p) => isAbsolute5(p) && top !== void 0 ? relative3(top, p) : p);
   const asked = args["repository"];
   if (asked !== void 0 && typeof asked !== "string") throw new ToolError("repository is a string, owner/repo or host/group/repo");
   let reach;
@@ -3969,7 +4157,7 @@ function propose3(args, data, config, context, cwd, agent) {
     const why = refusal(value, terms);
     if (why !== null) throw new ToolError(`not proposed: ${what} is refused because ${why}`);
   }
-  const ins = loadInstructions(cwd, currentConfigDir());
+  const ins = loadInstructions(cwd, currentConfigDir(), config.instructionFiles);
   const said2 = judge(ins, statement);
   if (said2?.kind === "repeats") return `not proposed: duplicates ${displayPath(ins, said2.line.file)}:${said2.line.line}, which the agent already loads`;
   const tenant = personal ? "" : context.tenant;
@@ -4691,7 +4879,7 @@ function conflict(input2, data, context, cwd) {
           return { message: `resolved ${e.id}; no file was written` };
         }
         if (e.status !== "open") throw new Error(`${e.id} is already ${e.status}`);
-        return { message: applyEdit(db, loadInstructions(cwd, currentConfigDir()), e) };
+        return { message: applyEdit(db, loadInstructions(cwd, currentConfigDir(), loadConfig(data)?.instructionFiles), e) };
       } catch (error) {
         throw new Refusal(error.message);
       }
@@ -4797,7 +4985,7 @@ function serveUi(data, cwd, port) {
 // src/promote/promote.ts
 import { randomBytes as randomBytes6 } from "node:crypto";
 import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync10, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute5, join as join8, normalize as normalize2, relative as relative4, resolve as resolve4 } from "node:path";
+import { dirname as dirname9, isAbsolute as isAbsolute6, join as join8, normalize as normalize3, relative as relative4, resolve as resolve4 } from "node:path";
 var DEFAULT_STANDARDS = "docs/review-standards.md";
 var BAR = `tenant = ? AND scope = 'repository' AND scope_key = ? AND status = 'active' AND valid_to IS NULL AND NOT ${READS_EXPIRED}
   AND origin_trust = 'owner' AND quarantine IS NULL AND support >= ${PROMOTE_SUPPORT} AND contradictions = 0
@@ -4806,8 +4994,8 @@ var eligible = (db, tenant, repository, id) => db.prepare(`SELECT id, type, stat
 var untested = (item) => JSON.parse(item.anchors_json).find((a) => a.symbol !== void 0 && a.testsAt !== void 0 && a.test === void 0)?.symbol ?? null;
 var FORBIDDEN_FILES = /* @__PURE__ */ new Set(["claude.md", "claude.local.md", "agents.md", "gemini.md", "copilot-instructions.md"]);
 var insidePath = (rel) => {
-  const clean = normalize2(rel);
-  if (isAbsolute5(rel) || clean === ".." || clean.startsWith("../") || clean.startsWith("..\\")) return null;
+  const clean = normalize3(rel);
+  if (isAbsolute6(rel) || clean === ".." || clean.startsWith("../") || clean.startsWith("..\\")) return null;
   const path = clean.replace(/\\/g, "/");
   const parts2 = path.toLowerCase().split("/");
   const forbidden = parts2[0] === ".git" || parts2[0] === ".claude" || parts2[0] === ".github" && parts2[1] === "workflows" || FORBIDDEN_FILES.has(parts2[parts2.length - 1]);
@@ -4871,7 +5059,7 @@ function writable(top, rel) {
   } catch {
     throw new Error(`${clean} resolves outside the repository; nothing was written`);
   }
-  if (!inside2(realpathSync3(top), real)) throw new Error(`${clean} resolves outside the repository; nothing was written`);
+  if (!inside3(realpathSync3(top), real)) throw new Error(`${clean} resolves outside the repository; nothing was written`);
   return real;
 }
 function readPlain(path, name) {
@@ -5051,119 +5239,13 @@ function truncateLog(db) {
 }
 
 // src/import/import.ts
-import { existsSync as existsSync10, lstatSync as lstatSync3, readFileSync as readFileSync13, readdirSync, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync10, lstatSync as lstatSync3, readFileSync as readFileSync13, readdirSync as readdirSync2, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
 import { isAbsolute as isAbsolute7, join as join11, sep as sep3 } from "node:path";
 
 // src/import/review-voice.ts
 import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 import { posix as posix2 } from "node:path";
-
-// src/import/silos.ts
-import { isAbsolute as isAbsolute6, normalize as normalize3 } from "node:path";
-var parsed = (statements, rest = {}) => ({ statements, links: [], unreadable: [], skippedNotes: 0, ...rest });
-function unquote(v) {
-  if (/^'.*'$/.test(v)) return v.slice(1, -1).replace(/''/g, "'");
-  if (!/^".*"$/.test(v)) return v;
-  try {
-    return JSON.parse(v);
-  } catch {
-    return v.slice(1, -1);
-  }
-}
-var lines = (text5) => text5.split(/\r?\n/);
-function markdown(text5) {
-  const all = lines(text5);
-  if (all[0]?.trim() === "---") {
-    const end = all.findIndex((l, i) => i > 0 && l.trim() === "---");
-    for (let i = 1; i < end; i++) {
-      const m = /^description:\s*(.*?)\s*$/.exec(all[i]);
-      if (m && m[1] !== "" && !/^[>|]/.test(m[1])) return parsed([{ line: i + 1, text: unquote(m[1]) }]);
-    }
-    return parsed([]);
-  }
-  const statements = [];
-  const links = [];
-  let fenced = false;
-  all.forEach((line2, i) => {
-    if (/^\s*(?:```|~~~)/.test(line2)) fenced = !fenced;
-    const item = fenced ? null : /^\s*[-*+]\s+(.*\S)\s*$/.exec(line2);
-    if (!item) return;
-    const link2 = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(item[1]);
-    if (link2 === null) statements.push({ line: i + 1, text: item[1] });
-    else if (!/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(link2[1])) links.push(link2[1]);
-  });
-  return parsed(statements, { links });
-}
-var POLICY_KEYS = /* @__PURE__ */ new Set(["suppressed_patterns", "required_checks"]);
-function policy(text5) {
-  const statements = [];
-  let key2 = "";
-  lines(text5).forEach((line2, i) => {
-    const top = /^([A-Za-z_][\w-]*):/.exec(line2);
-    if (top) key2 = top[1];
-    const item = /^\s*-\s+(.*\S)\s*$/.exec(line2);
-    if (!top && item && POLICY_KEYS.has(key2)) statements.push({ line: i + 1, text: unquote(item[1]) });
-  });
-  return parsed(statements);
-}
-function ownerReviewer(text5) {
-  let key2 = "";
-  for (const line2 of lines(text5)) {
-    const top = /^([A-Za-z_][\w-]*):/.exec(line2);
-    if (top) key2 = top[1];
-    const m = key2 === "identity" ? /^\s+owner_reviewer:\s*(\S.*?)\s*(?:#.*)?$/.exec(line2) : null;
-    if (m) return unquote(m[1]) || null;
-  }
-  return null;
-}
-function jsonLines(text5, each) {
-  const unreadable = [];
-  lines(text5).forEach((raw, i) => {
-    if (raw.trim() === "") return;
-    let entry;
-    try {
-      entry = JSON.parse(raw);
-    } catch {
-    }
-    const ok2 = typeof entry === "object" && entry !== null && !Array.isArray(entry) && each(entry, i + 1);
-    if (!ok2) unreadable.push(i + 1);
-  });
-  return unreadable;
-}
-function rejections(text5) {
-  const statements = [];
-  const unreadable = jsonLines(text5, (e, line2) => {
-    if (typeof e["text"] !== "string" || e["text"].trim() === "") return false;
-    const at3 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? e["at"] : void 0;
-    statements.push({ line: line2, text: e["text"].trim(), ...at3 !== void 0 ? { at: new Date(at3).toISOString() } : {} });
-    return true;
-  });
-  return parsed(statements, { unreadable });
-}
-var NOTE_TYPES = { gotcha: "hazard", invariant: "convention", decision: "decision" };
-var SYMBOL_KEY = /^([^#\s]+)#[^#\n]+#[^#\s]+$/;
-function notes(text5) {
-  const statements = [];
-  let skippedNotes = 0;
-  const unreadable = jsonLines(text5, (e, line2) => {
-    const { kind, text: body2, symbol } = e;
-    if (typeof kind !== "string" || typeof body2 !== "string" || body2.trim() === "") return false;
-    if (symbol !== void 0 && (typeof symbol !== "string" || !SYMBOL_KEY.test(symbol) || !inside3(symbolPath(symbol)))) return false;
-    const type = Object.hasOwn(NOTE_TYPES, kind) ? NOTE_TYPES[kind] : void 0;
-    if (type === void 0) {
-      skippedNotes++;
-      return true;
-    }
-    const at3 = typeof e["at"] === "string" && /^\d{4}-\d{2}-\d{2}/.test(e["at"]) && !Number.isNaN(Date.parse(e["at"])) ? new Date(e["at"]).toISOString() : void 0;
-    statements.push({ line: line2, text: body2.trim(), type, ...symbol !== void 0 ? { symbol } : {}, ...at3 !== void 0 ? { at: at3 } : {} });
-    return true;
-  });
-  return parsed(statements, { unreadable, skippedNotes });
-}
-var symbolPath = (symbol) => SYMBOL_KEY.exec(symbol)[1];
-var inside3 = (path) => !isAbsolute6(path) && !normalize3(path).split(/[\\/]/).includes("..");
-
-// src/import/review-voice.ts
 function fit(statement) {
   if (statement.length <= MAX_STATEMENT) return statement;
   const room = statement.slice(0, MAX_STATEMENT - 1);
@@ -5209,7 +5291,7 @@ function reviewVoiceDecisions(path, owner = null) {
       const found = known?.findings.get(findingId);
       const { repository, pull_number: pull } = known?.run ?? {};
       if (found === void 0 || repository == null || !REPOSITORY.test(repository)) return;
-      if (!inside3(found.path) || found.path.includes("\\")) return;
+      if (!inside(found.path) || found.path.includes("\\")) return;
       const said2 = say(found.text);
       if (said2 === null) return;
       const statement = fit(said2);
@@ -5289,7 +5371,7 @@ function orbitFindings(path) {
           run,
           // Orbit's own last support: the newest supporting run, or the lesson's creation.
           at: new Date(Math.max(n.created_at, support?.created_at ?? 0)).toISOString(),
-          anchorPath: typeof cited === "string" && inside3(cited) && !cited.includes("\\") ? cited : null,
+          anchorPath: typeof cited === "string" && inside(cited) && !cited.includes("\\") ? cited : null,
           fingerprints: strings(lesson.applicability?.fingerprints),
           checks: strings(lesson.applicability?.check_ids),
           contradictions: new Set(mine.filter((e) => e.type === "CONTRADICTED_BY").map((e) => e.run_id)).size
@@ -5516,7 +5598,7 @@ var line = (v) => Number.isInteger(v) && v > 0;
 function anchorOf(v) {
   if (typeof v !== "object" || v === null) return null;
   const a = v;
-  if (!str2(a["path"]) || a["path"] === "" || !inside3(a["path"])) return null;
+  if (!str2(a["path"]) || a["path"] === "" || !inside(a["path"])) return null;
   for (const k of ["commit", "citedHash", "symbol"]) if (a[k] !== void 0 && !str2(a[k])) return null;
   for (const k of ["start", "end"]) if (a[k] !== void 0 && !line(a[k])) return null;
   return {
@@ -5628,6 +5710,10 @@ function importSilos(config, data, configDir, dryRun, orbit = false, shared) {
       return null;
     }
     const parsed2 = parse(file.text);
+    if (typeof parsed2 === "string") {
+      report.skippedFiles.push({ path, reason: parsed2 });
+      return null;
+    }
     report.files.push({ path, statements: parsed2.statements.length });
     report.skippedNotes += parsed2.skippedNotes;
     for (const line2 of parsed2.unreadable) report.refused.push({ source: `${path}:${line2}`, reason: "the line is not what this file format holds" });
@@ -5637,48 +5723,75 @@ function importSilos(config, data, configDir, dryRun, orbit = false, shared) {
     if (why !== null) report.refused.push({ source, reason: why });
     return why !== null;
   };
+  const homeOf = (checkout, dir) => {
+    const context = checkout === null ? null : resolveContext(checkout, config, dir);
+    return context?.tenant != null && context.repository !== null ? { repository: context.repository, tenant: context.tenant } : null;
+  };
+  const route = (source, stored, text5, name, dir, home, unbound) => {
+    if (refused(source, refusal(text5))) return;
+    const named = namedRepositories(config, text5);
+    const base2 = { statement: text5, rationale: null, anchors: [], status: "proposed", trust: "agent" };
+    if (named.size > 1) {
+      refused(source, "it names more than one repository");
+    } else if (named.size === 1 || home !== null) {
+      const [repository, tenant] = named.size === 1 ? [...named][0] : [home.repository, home.tenant];
+      if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and ${unbound}`)) return;
+      const groups = (p) => p.toLowerCase().split("/").slice(p.split("/").length > 2 ? 1 : 0, -1);
+      const own = new Set((config.tenants[tenant] ?? []).flatMap(groups));
+      const others = Object.entries(config.tenants).filter(([t]) => t !== tenant).flatMap(([, patterns]) => patterns.flatMap(groups)).filter((o) => !own.has(o));
+      if (refused(source, namesOrganisation(text5, others) ? "it also names an owner of another tenant" : null)) return;
+      candidates.push({ ...base2, tenant, scope: "repository", scopeKey: repository, type: "convention", source: stored });
+    } else {
+      if (refused(source, refusal(text5, terms))) return;
+      if (refused(source, namesOrganisation(name, terms) ? "its file name names an organisation" : null)) return;
+      candidates.push({ ...base2, tenant: "", scope: "person", scopeKey: "", type: "preference", source: stored });
+    }
+  };
   for (const dir of orbit || shared !== void 0 ? [] : Object.keys(config.configs).sort()) {
     const projects = join11(dir, "projects");
     if (!existsSync10(projects)) continue;
-    for (const project of readdirSync(projects).sort()) {
+    for (const project of readdirSync2(projects).sort()) {
       const folder = join11(projects, project, "memory");
       if (!existsSync10(folder) || !statSync4(folder).isDirectory()) continue;
-      const checkout = checkoutOf(project);
-      const context = checkout === null ? null : resolveContext(checkout, config, dir);
-      const home = context?.tenant != null && context.repository !== null ? { repository: context.repository, tenant: context.tenant } : null;
-      for (const name of readdirSync(folder).filter((f) => f.endsWith(".md")).sort()) {
+      const home = homeOf(checkoutOf(project), dir);
+      for (const name of readdirSync2(folder).filter((f) => f.endsWith(".md")).sort()) {
         const path = join11(folder, name);
         const parsed2 = read2(path, folder, markdown);
         if (parsed2 === null) continue;
         for (const link2 of parsed2.links) if (!existsSync10(join11(folder, link2))) report.danglingLinks.push({ file: path, link: link2 });
         for (const { line: line2, text: text5 } of parsed2.statements) {
-          const source = `${path}:${line2}`;
-          const stored = `auto memory ${name}:${line2}`;
-          if (refused(source, refusal(text5))) continue;
-          const named = namedRepositories(config, text5);
-          const base2 = { statement: text5, rationale: null, anchors: [], status: "proposed", trust: "agent" };
-          if (named.size > 1) {
-            refused(source, "it names more than one repository");
-          } else if (named.size === 1 || home !== null) {
-            const [repository, tenant] = named.size === 1 ? [...named][0] : [home.repository, home.tenant];
-            if (refused(source, (config.configs[dir] ?? []).includes(tenant) ? null : `it names a repository of tenant ${tenant}, and the config it came from is not bound to it`)) continue;
-            const groups = (p) => p.toLowerCase().split("/").slice(p.split("/").length > 2 ? 1 : 0, -1);
-            const own = new Set((config.tenants[tenant] ?? []).flatMap(groups));
-            const others = Object.entries(config.tenants).filter(([t]) => t !== tenant).flatMap(([, patterns]) => patterns.flatMap(groups)).filter((o) => !own.has(o));
-            if (refused(source, namesOrganisation(text5, others) ? "it also names an owner of another tenant" : null)) continue;
-            candidates.push({ ...base2, tenant, scope: "repository", scopeKey: repository, type: "convention", source: stored });
-          } else {
-            if (refused(source, refusal(text5, terms))) continue;
-            if (refused(source, namesOrganisation(name, terms) ? "its file name names an organisation" : null)) continue;
-            candidates.push({ ...base2, tenant: "", scope: "person", scopeKey: "", type: "preference", source: stored });
-          }
+          route(`${path}:${line2}`, `auto memory ${name}:${line2}`, text5, name, dir, home, "the config it came from is not bound to it");
         }
+      }
+    }
+  }
+  const codexHome = process.env["CODEX_HOME"] || join11(homedir4(), ".codex");
+  for (const store of orbit ? [] : ["memories", "memories_v2"]) {
+    const folder = join11(codexHome, store);
+    if (!existsSync10(folder)) continue;
+    if (!covers(config, "codex")) {
+      report.skippedFiles.push({ path: folder, reason: "your consent does not cover reading Codex's memories yet; run memory init and confirm" });
+      continue;
+    }
+    const homes = /* @__PURE__ */ new Map();
+    const checkoutHome = (cwd) => {
+      const context = isAbsolute7(cwd) && existsSync10(cwd) ? resolveContext(cwd, config, configDir) : null;
+      const tenants = context?.repository == null ? [] : matchingTenants(config, context.repository);
+      return tenants.length === 1 ? { repository: context.repository, tenant: tenants[0] } : null;
+    };
+    for (const name of ["MEMORY.md", "memory_summary.md"]) {
+      const path = join11(folder, name);
+      if (!existsSync10(path)) continue;
+      const parsed2 = read2(path, folder, (text5) => codexMemory(name, text5));
+      for (const { line: line2, text: text5, cwd } of parsed2?.statements ?? []) {
+        if (cwd !== void 0 && !homes.has(cwd)) homes.set(cwd, checkoutHome(cwd));
+        route(`${path}:${line2}`, `codex memory ${store}/${name}:${line2}`, text5, name, configDir, cwd === void 0 ? null : homes.get(cwd), "this config is not bound to it");
       }
     }
   }
   const readOrbit = (checkout, rel, context) => {
     const path = join11(checkout, rel);
-    if (!inside3(rel)) {
+    if (!inside(rel)) {
       report.skippedFiles.push({ path: rel, reason: "not a path inside the repository" });
       return;
     }
@@ -5732,7 +5845,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false, shared) {
       const rel = silos[silo];
       if (rel === void 0 || silo === "orbit") continue;
       const path = silo === "decisions" && isAbsolute7(rel) ? rel : join11(checkout, rel);
-      if (silo !== "decisions" && !inside3(rel)) {
+      if (silo !== "decisions" && !inside(rel)) {
         report.skippedFiles.push({ path, reason: "not a path inside the repository" });
         continue;
       }
@@ -5833,7 +5946,7 @@ function importSilos(config, data, configDir, dryRun, orbit = false, shared) {
           continue;
         }
         if (shared !== void 0) {
-          const held2 = db.prepare("SELECT statement FROM items WHERE tenant = ? AND status IN ('active', 'proposed') AND statement != '' AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))").all(c.tenant, c.scopeKey, c.scopeKey.split("/")[0]);
+          const held2 = db.prepare("SELECT statement FROM items WHERE tenant = ? AND status IN ('active', 'proposed') AND statement != '' AND ((scope = 'repository' AND scope_key = ?) OR (scope = 'organisation' AND scope_key = ?))").all(c.tenant, c.scopeKey, ownerOf(c.scopeKey));
           if (held2.some((r) => repeats(r.statement, c.statement))) {
             counts2.alreadyKnown++;
             continue;
@@ -7603,7 +7716,7 @@ function poison(version) {
 
 // src/eval/lab.ts
 import { spawnSync as spawnSync5 } from "node:child_process";
-import { cpSync, existsSync as existsSync14, mkdirSync as mkdirSync10, mkdtempSync as mkdtempSync4, readFileSync as readFileSync17, readdirSync as readdirSync2, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
+import { cpSync, existsSync as existsSync14, mkdirSync as mkdirSync10, mkdtempSync as mkdtempSync4, readFileSync as readFileSync17, readdirSync as readdirSync3, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { dirname as dirname14, join as join17 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -7615,7 +7728,7 @@ var BUNDLE = join17(ROOT, "dist", "memory.mjs");
 var PLUGIN_PARTS = [".claude-plugin", "hooks", "dist", "skills", "types"];
 var RUN_TIMEOUT_MS = 30 * 6e4;
 var GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "lab", GIT_AUTHOR_EMAIL: "lab@example.com", GIT_COMMITTER_NAME: "lab", GIT_COMMITTER_EMAIL: "lab@example.com" };
-var labTasks = () => readdirSync2(TASKS).filter((t) => existsSync14(join17(TASKS, t, "task.json"))).sort();
+var labTasks = () => readdirSync3(TASKS).filter((t) => existsSync14(join17(TASKS, t, "task.json"))).sort();
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
   for (const k of REPOSITORY_VARIABLES) delete env[k];
@@ -7691,7 +7804,7 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
   });
   const agentFailed = r.error !== void 0 && r.error.code !== "EPIPE" || r.status !== 0;
   const hidden = join17(TASKS, task, "hidden");
-  const tests = readdirSync2(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join17(hidden, f));
+  const tests = readdirSync3(hidden).filter((f) => f.endsWith(".test.mjs")).map((f) => join17(hidden, f));
   const grade2 = agentFailed ? null : spawnSync5(process.execPath, ["--test", ...tests], { cwd: repo, env: { PATH: process.env["PATH"] ?? "", LAB_REPO: repo }, stdio: "ignore", timeout: 12e4 });
   const injected = readLines(injectionLog(data)).filter((e) => e.event === "injected");
   return {
@@ -8293,8 +8406,8 @@ var USAGE = `usage: memory <command>
       rank each bound tenant's active items by helped minus wrong minus stale, then confidence, then id; items with
       no feedback are listed apart. Each tenant is read from its own store only; read only
   import [--dry-run] [--orbit | --shared]
-      read the silos (each bound config's auto memory, and the files under "imports" in config.json)
-      and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
+      read the silos (each bound config's auto memory, Codex's memories under $CODEX_HOME or ~/.codex, and
+      the files under "imports" in config.json) and store each statement as a proposal; with --dry-run, list the files and write nothing. With --orbit,
       read only each listed checkout's Orbit knowledge store (.orbit/knowledge.sqlite, or imports' "orbit" path),
       read-only: validated lessons, their contradictions and run-end failure fingerprints, as proposals. With
       --shared, read only this repository's .memory/shared.jsonl as committed at HEAD (never the working copy), each
@@ -9002,8 +9115,9 @@ function conflictsCommand(args, data, cwd) {
     throw new Refusal("usage: memory conflicts [apply <id> [--confirm [--yes-non-interactive]] | reject <id>]", 2);
   }
   if ((values.confirm === true || values["yes-non-interactive"] === true) && verb !== "apply") throw new Refusal("--confirm and --yes-non-interactive go with apply", 2);
-  const context = resolveContext(cwd, setUp(data), currentConfigDir());
-  const ins = loadInstructions(cwd, currentConfigDir());
+  const config = setUp(data);
+  const context = resolveContext(cwd, config, currentConfigDir());
+  const ins = loadInstructions(cwd, currentConfigDir(), config.instructionFiles);
   let listed = 0;
   for (const { file } of proposalStores(data, context)) {
     const db = openStore(file, false);
@@ -9575,7 +9689,7 @@ function purge(args, data, cwd) {
     all: values.all
   };
   const tenantsDir = join20(data, "tenants");
-  const every = existsSync15(tenantsDir) ? readdirSync3(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
+  const every = existsSync15(tenantsDir) ? readdirSync4(tenantsDir).filter((f) => f.endsWith(".sqlite")).map((f) => f.slice(0, -".sqlite".length)).filter((t) => TENANT_NAME.test(t)) : [];
   let tenants = values.tenant !== void 0 ? [values.tenant] : every;
   if (values.source !== void 0) {
     const config = loadConfig(data);

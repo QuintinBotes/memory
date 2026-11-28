@@ -30,7 +30,7 @@ export function related(data: string, config: Config, context: Context, cwd: str
   try {
     withRefreshLock(file, () => recheck(db, context.tenant!, context.repository!, cwd, { managed: managedBy(data, context.repository) }));
     const found = anchoredUnder(db, context.tenant, context.repository, context.owner, target, depth);
-    const items = screen(db, found, loadInstructions(cwd, currentConfigDir()), false, [] as Withheld[]);
+    const items = screen(db, found, loadInstructions(cwd, currentConfigDir(), config.instructionFiles), false, [] as Withheld[]);
     return chooseSlice(items, config.sessionBudget ?? DEFAULT_SESSION_BUDGET).text;
   } finally {
     db.close();

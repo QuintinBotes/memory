@@ -172,7 +172,7 @@ function conflict(input: Record<string, unknown>, data: string, context: Context
           return { message: `resolved ${e.id}; no file was written` };
         }
         if (e.status !== 'open') throw new Error(`${e.id} is already ${e.status}`);
-        return { message: applyEdit(db, loadInstructions(cwd, currentConfigDir()), e) };
+        return { message: applyEdit(db, loadInstructions(cwd, currentConfigDir(), loadConfig(data)?.instructionFiles), e) };
       } catch (error) {
         throw new Refusal((error as Error).message);
       }
