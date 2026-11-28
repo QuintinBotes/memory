@@ -73,7 +73,7 @@ test('the seeded-hazard task runs three times per arm, and each row reports pass
   assert.equal(on.turns, 3);
   // Only memory's own hooks are timed; the transcript's other hook is not memory's.
   assert.deepEqual(off.hook_ms, {});
-  assert.deepEqual(on.hook_ms, { SessionStart: { count: 3, p95: 96 } });
+  assert.deepEqual(on.hook_ms, { SessionStart: { count: 3, p95: 96 }, Stop: { count: 3, p95: 140 } });
   assert.deepEqual(off.injected, { items: 0, tokens: 0 });
   assert.deepEqual(on.injected, { items: 3, tokens: 126 });
   assert.equal(r.called, false, 'the lab ran gh, claude or curl');

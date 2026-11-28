@@ -7490,9 +7490,12 @@ function runOnce(task, t, arm, n, agent, model, plugin, base2) {
     passed: grade2?.status === 0,
     usage: agentFailed ? null : usage(jsonLines2(r.stdout ?? "")),
     // Memory's own hooks only: Claude Code times every hook the session ran.
+    // Claude Code writes `hook_success` attachments for hooks that print something, and one `stop_hook_summary` record
+    // per Stop with every Stop hook's command and duration; a hook that prints nothing is not timed anywhere.
     hooks: readLines(join17(out, "session.jsonl")).flatMap((e) => {
       const a = e.attachment;
-      return typeof a?.hookEvent === "string" && typeof a.durationMs === "number" && String(a.command ?? "").includes("memory.mjs") ? [{ event: a.hookEvent, ms: a.durationMs }] : [];
+      const timed = e.subtype === "stop_hook_summary" ? (Array.isArray(e.hookInfos) ? e.hookInfos : []).map((h) => ({ ...h, hookEvent: "Stop" })) : a ? [a] : [];
+      return timed.flatMap((h) => typeof h.hookEvent === "string" && typeof h.durationMs === "number" && String(h.command ?? "").includes("memory.mjs") ? [{ event: h.hookEvent, ms: h.durationMs }] : []);
     }),
     injected: { items: injected.length, tokens: injected.reduce((s, e) => s + num2(e.tokens), 0) }
   };
